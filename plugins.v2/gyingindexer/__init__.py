@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.14"
+    plugin_version = "1.0.15"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -43,7 +43,6 @@ class GyingIndexer(_PluginBase):
         "gyg.la",
         "gyg.si",
     }
-    _target_quality_codes: Tuple[str, ...] = ("i5", "i9")
     _max_search_pages: int = 8
     _resolved_original_codes: Set[str] = set()
     _subtitle_tokens: Tuple[str, ...] = (
@@ -307,6 +306,7 @@ class GyingIndexer(_PluginBase):
                 return []
 
             results: List[TorrentInfo] = []
+            parent_tag_cache: Dict[str, Tuple[Dict[str, str], Dict[str, str]]] = {}
             for entry in search_entries:
                 res_id = str(entry.get("id") or "").strip()
                 if not res_id:
@@ -326,6 +326,31 @@ class GyingIndexer(_PluginBase):
                     _detail_data = self._extract_js_object(detail_html, "_obj.d")
                     if isinstance(_detail_data, dict):
                         detail_data = _detail_data
+
+                tag_code = ""
+                tag_label = ""
+                parent_dir, parent_id = self._parse_parent_route(detail_data.get("du"))
+                if parent_dir and parent_id:
+                    cache_key = f"{parent_dir}/{parent_id}"
+                    if cache_key not in parent_tag_cache:
+                        parent_tag_cache[cache_key] = self._fetch_parent_tag_index(
+                            client=client,
+                            base_url=base_url,
+                            parent_dir=parent_dir,
+                            parent_id=parent_id
+                        )
+                    tag_by_bt, label_by_code = parent_tag_cache[cache_key]
+                    tag_code = str(tag_by_bt.get(res_id) or "").strip().lower()
+                    tag_label = str(label_by_code.get(tag_code) or "").strip()
+
+                filter_title = str(detail_data.get("title") or title or "").strip()
+                if not self._should_keep_entry(
+                    title=filter_title,
+                    quality_code=tag_code,
+                    quality_label=tag_label
+                ):
+                    continue
+
                 download_candidates = self._extract_download_candidates_from_node(
                     node=detail_data,
                     base_url=base_url
@@ -408,89 +433,43 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _build_search_url(base_url: str, keyword: str,
                           page_no: int = 1, quality_code: Optional[str] = None) -> str:
-        quality = quality_code or ""
-        return urljoin(base_url, f"s/{page_no}-4-{quality}-1/{quote(keyword)}")
+        # 站点新版搜索路由不再支持 i5/i9 分类码，固定使用 s/{page}-4--1
+        return urljoin(base_url, f"s/{page_no}-4--1/{quote(keyword)}")
 
     def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str) -> List[Dict[str, Any]]:
         entry_map: Dict[str, Dict[str, Any]] = {}
         discovered_original_codes: Set[str] = set()
 
-        quality_plan: List[Optional[str]]
-        quality_plan: List[Optional[str]] = []
-        if self._enable_zh1080:
-            quality_plan.append("i5")
-        if self._enable_zh4k:
-            quality_plan.append("i9")
+        for page_no in range(1, self._max_search_pages + 1):
+            search_url = self._build_search_url(
+                base_url=base_url,
+                keyword=keyword,
+                page_no=page_no,
+                quality_code=None
+            )
+            html = client.get(search_url)
+            if not html:
+                break
+            search_data = self._extract_js_object(html, "_obj.search")
+            if not isinstance(search_data, dict):
+                break
+            discovered_original_codes.update(self._extract_original_codes(search_data))
+            page_entries = self._extract_entries_from_search(
+                search_data=search_data,
+                forced_quality=None
+            )
+            if not page_entries:
+                break
 
-        for quality_code in quality_plan:
-            for page_no in range(1, self._max_search_pages + 1):
-                search_url = self._build_search_url(
-                    base_url=base_url,
-                    keyword=keyword,
-                    page_no=page_no,
-                    quality_code=quality_code
-                )
-                html = client.get(search_url)
-                if not html:
-                    break
-                search_data = self._extract_js_object(html, "_obj.search")
-                if not isinstance(search_data, dict):
-                    break
-                discovered_original_codes.update(self._extract_original_codes(search_data))
+            new_count = 0
+            for item in page_entries:
+                key = str(item.get("id") or "").strip()
+                if key and key not in entry_map:
+                    entry_map[key] = item
+                    new_count += 1
 
-                page_entries = self._extract_entries_from_search(
-                    search_data=search_data,
-                    forced_quality=quality_code
-                )
-                if not page_entries:
-                    break
-
-                new_count = 0
-                for item in page_entries:
-                    key = str(item.get("id") or "").strip()
-                    if not key:
-                        continue
-                    if key not in entry_map:
-                        entry_map[key] = item
-                        new_count += 1
-
-                if page_no > 1 and new_count == 0:
-                    break
-
-        # 严格模式下，补抓全量页：
-        # 1) 分类页为空时兜底；
-        # 2) 启用“原盘”时，合并全量页中的原盘资源。
-        need_full_scan = (
-            self._enable_1080 or
-            self._enable_4k or
-            self._include_original or
-            not quality_plan
-        )
-        if need_full_scan:
-            for page_no in range(1, self._max_search_pages + 1):
-                search_url = self._build_search_url(
-                    base_url=base_url,
-                    keyword=keyword,
-                    page_no=page_no,
-                    quality_code=None
-                )
-                html = client.get(search_url)
-                if not html:
-                    break
-                search_data = self._extract_js_object(html, "_obj.search")
-                if not isinstance(search_data, dict):
-                    break
-                discovered_original_codes.update(self._extract_original_codes(search_data))
-                page_entries = self._extract_entries_from_search(
-                    search_data=search_data,
-                    forced_quality=None
-                )
-                if not page_entries:
-                    break
-                for item in page_entries:
-                    key = str(item.get("id") or "").strip()
-                    if key and key not in entry_map:
-                        entry_map[key] = item
+            if page_no > 1 and new_count == 0:
+                break
 
         self._resolved_original_codes = {str(x).lower() for x in discovered_original_codes if x}
         if self._resolved_original_codes:
@@ -523,8 +502,6 @@ class GyingIndexer(_PluginBase):
                 continue
 
             row_quality = str(self._safe_at(qualities, idx) or forced_quality or "").strip().lower()
-            if not self._should_keep_entry(title=title, quality_code=(row_quality or forced_quality)):
-                continue
 
             entries.append({
                 "id": btid,
@@ -652,26 +629,53 @@ class GyingIndexer(_PluginBase):
         # 同时出现 2160/4k 时优先认为是 4k
         return not GyingIndexer._is_4k(title_norm)
 
-    def _has_chinese_subtitle(self, title_norm: str, quality_code: str = "") -> bool:
-        q = str(quality_code or "").strip().lower()
-        if q in self._target_quality_codes:
-            return True
+    @staticmethod
+    def _normalize_text(text: Any) -> str:
+        return re.sub(r"\s+", "", str(text or "")).lower()
+
+    def _has_chinese_subtitle(self, title_norm: str, quality_label: str = "") -> bool:
+        label_norm = self._normalize_text(quality_label)
+        if label_norm:
+            if "中字" in label_norm or "中文" in label_norm:
+                return True
+            return any(token in title_norm for token in self._subtitle_tokens)
         return any(token in title_norm for token in self._subtitle_tokens)
 
-    def _should_keep_entry(self, title: str, quality_code: str = "") -> bool:
-        title_norm = re.sub(r"\s+", "", str(title or "")).lower()
+    def _should_keep_entry(self, title: str, quality_code: str = "", quality_label: str = "") -> bool:
+        title_norm = self._normalize_text(title)
         if not title_norm:
             return False
 
         q = str(quality_code or "").strip().lower()
-        is_original = (q in self._resolved_original_codes) or self._match_original(title)
-        is_4k = (q == "i9") or self._is_4k(title_norm)
-        is_1080 = (q == "i5") or self._is_1080(title_norm)
-        if q == "i9":
-            is_1080 = False
-        elif q == "i5":
-            is_4k = False
-        has_zh_sub = self._has_chinese_subtitle(title_norm=title_norm, quality_code=quality_code)
+        label_norm = self._normalize_text(quality_label)
+
+        is_original = False
+        is_4k = False
+        is_1080 = False
+        if label_norm:
+            is_original = ("原盘" in label_norm) or self._match_original(title)
+            has_res_hint = any(token in label_norm for token in ("720", "1080", "4k", "2160"))
+            if has_res_hint:
+                is_4k = ("4k" in label_norm) or ("2160" in label_norm)
+                is_1080 = ("1080" in label_norm) and not is_4k
+            else:
+                is_4k = self._is_4k(title_norm)
+                is_1080 = self._is_1080(title_norm)
+        else:
+            is_original = (q in self._resolved_original_codes) or self._match_original(title)
+            is_4k = self._is_4k(title_norm)
+            is_1080 = self._is_1080(title_norm)
+            # 兼容旧版站点分类码（i5/i9）
+            if q == "i9":
+                is_4k = True
+                is_1080 = False
+            elif q == "i5":
+                is_1080 = True
+                is_4k = False
+
+        if not is_original and q in self._resolved_original_codes:
+            is_original = True
+        has_zh_sub = self._has_chinese_subtitle(title_norm=title_norm, quality_label=quality_label)
 
         keep = False
         if self._include_original and is_original:
@@ -685,6 +689,58 @@ class GyingIndexer(_PluginBase):
         if self._enable_1080 and is_1080 and not has_zh_sub:
             keep = True
         return keep
+
+    @staticmethod
+    def _parse_parent_route(raw: Any) -> Tuple[str, str]:
+        text = str(raw or "").strip()
+        if not text:
+            return "", ""
+        parsed = urlparse(text)
+        path = parsed.path or text
+        m = re.match(r"^/?([a-zA-Z0-9_]+)/([a-zA-Z0-9]+)$", path)
+        if not m:
+            return "", ""
+        return m.group(1).lower(), m.group(2)
+
+    def _fetch_parent_tag_index(self, client: RequestUtils, base_url: str,
+                                parent_dir: str, parent_id: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+        url = urljoin(base_url, f"res/downurl/{parent_dir}/{parent_id}")
+        text = client.get(url)
+        if not text:
+            return {}, {}
+
+        try:
+            obj = json.loads(text)
+        except Exception:
+            return {}, {}
+
+        downlist = obj.get("downlist") if isinstance(obj, dict) else None
+        if not isinstance(downlist, dict):
+            return {}, {}
+
+        label_by_code: Dict[str, str] = {}
+        type_obj = downlist.get("type") or {}
+        if isinstance(type_obj, dict):
+            names = self._as_list(type_obj.get("a"))
+            codes = self._as_list(type_obj.get("b"))
+            for idx, code in enumerate(codes):
+                code_key = str(code or "").strip().lower()
+                if not code_key:
+                    continue
+                label_by_code[code_key] = str(self._safe_at(names, idx) or "").strip()
+
+        tag_by_bt: Dict[str, str] = {}
+        list_obj = downlist.get("list") or {}
+        if isinstance(list_obj, dict):
+            bt_ids = self._as_list(list_obj.get("u"))
+            tag_codes = self._as_list(list_obj.get("p"))
+            for idx, bt_id in enumerate(bt_ids):
+                bt_key = str(bt_id or "").strip()
+                if not bt_key:
+                    continue
+                tag_by_bt[bt_key] = str(self._safe_at(tag_codes, idx) or "").strip().lower()
+
+        return tag_by_bt, label_by_code
 
     def _match_original(self, title: str) -> bool:
         title_norm = re.sub(r"\s+", "", title).lower()
