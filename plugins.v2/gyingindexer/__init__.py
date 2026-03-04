@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影索引（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -29,6 +29,7 @@ class GyingIndexer(_PluginBase):
 
     _enabled = False
     _strict_quality = True
+    _include_original = True
     _extra_hosts = ""
 
     _default_hosts: Set[str] = {
@@ -39,7 +40,7 @@ class GyingIndexer(_PluginBase):
         "gyg.si",
     }
     _target_quality_codes: Tuple[str, ...] = ("i5", "i9")
-    _max_search_pages: int = 5
+    _max_search_pages: int = 8
     _subtitle_tokens: Tuple[str, ...] = (
         "\u4e2d\u5b57",
         "\u4e2d\u6587\u5b57\u5e55",
@@ -51,11 +52,25 @@ class GyingIndexer(_PluginBase):
         "cht",
         "chi",
     )
+    _original_tokens: Tuple[str, ...] = (
+        "原盘",
+        "原盘源",
+        "blu-ray",
+        "bluray",
+        "bdremux",
+        "remux",
+        "uhd",
+        "bdmv",
+        "m2ts",
+        "fullblu",
+        "full bluray",
+    )
 
     def init_plugin(self, config: dict = None):
         if config:
             self._enabled = bool(config.get("enabled"))
             self._strict_quality = bool(config.get("strict_quality", True))
+            self._include_original = bool(config.get("include_original", True))
             self._extra_hosts = (config.get("extra_hosts") or "").strip()
         if self._enabled:
             self._register_builtin_indexer()
@@ -104,6 +119,19 @@ class GyingIndexer(_PluginBase):
                                     }
                                 ],
                             },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "include_original",
+                                            "label": "包含原盘",
+                                        },
+                                    }
+                                ],
+                            },
                         ],
                     },
                     {
@@ -131,6 +159,7 @@ class GyingIndexer(_PluginBase):
         ], {
             "enabled": False,
             "strict_quality": True,
+            "include_original": True,
             "extra_hosts": "",
         }
 
@@ -327,8 +356,14 @@ class GyingIndexer(_PluginBase):
                 if page_no > 1 and new_count == 0:
                     break
 
-        # 部分情况下分类页可能拿不到，回退到全量页并用标题规则过滤。
-        if self._strict_quality and not entry_map:
+        # 严格模式下，补抓全量页：
+        # 1) 分类页为空时兜底；
+        # 2) 需要包含“原盘”时，合并全量页中的原盘资源。
+        need_full_scan = (
+            (self._strict_quality and not entry_map) or
+            (self._strict_quality and self._include_original)
+        )
+        if need_full_scan:
             for page_no in range(1, self._max_search_pages + 1):
                 search_url = self._build_search_url(
                     base_url=base_url,
@@ -381,11 +416,17 @@ class GyingIndexer(_PluginBase):
 
             row_quality = str(self._safe_at(qualities, idx) or forced_quality or "").strip().lower()
             if self._strict_quality:
+                keep = False
                 if row_quality in self._target_quality_codes:
-                    pass
+                    keep = True
                 elif forced_quality in self._target_quality_codes:
-                    pass
-                elif not self._match_quality(title):
+                    keep = True
+                elif self._match_quality(title):
+                    keep = True
+                elif self._include_original and self._match_original(title):
+                    keep = True
+
+                if not keep:
                     continue
 
             entries.append({
@@ -505,6 +546,10 @@ class GyingIndexer(_PluginBase):
         is_1080p = "1080p" in title_norm
         is_4k = "2160p" in title_norm or bool(re.search(r"(?<!\d)4k(?!\d)", title_norm))
         return has_subtitle and (is_1080p or is_4k)
+
+    def _match_original(self, title: str) -> bool:
+        title_norm = re.sub(r"\s+", "", title).lower()
+        return any(token.replace(" ", "") in title_norm for token in self._original_tokens)
 
     @staticmethod
     def _extract_js_object(html: str, marker: str) -> Optional[Dict[str, Any]]:
