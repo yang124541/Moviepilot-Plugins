@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.20"
+    plugin_version = "1.0.21"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -45,6 +45,7 @@ class GyingIndexer(_PluginBase):
     }
     _max_search_pages: int = 8
     _resolved_original_codes: Set[str] = set()
+    _quality_label_by_code: Dict[str, str] = {}
     _subtitle_tokens: Tuple[str, ...] = (
         "\u4e2d\u5b57",
         "\u4e2d\u6587\u5b57\u5e55",
@@ -115,6 +116,7 @@ class GyingIndexer(_PluginBase):
         if self._enabled:
             self._register_builtin_indexer()
         self._resolved_original_codes = set()
+        self._quality_label_by_code = {}
 
     def get_state(self) -> bool:
         return self._enabled
@@ -319,6 +321,8 @@ class GyingIndexer(_PluginBase):
                 title = str(entry.get("title") or "").strip()
                 if not title:
                     continue
+                search_quality_code = str(entry.get("quality") or "").strip().lower()
+                search_tag_label = str(entry.get("tag") or "").strip()
 
                 detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
                 detail_html = client.get(detail_url)
@@ -342,6 +346,11 @@ class GyingIndexer(_PluginBase):
                             parent_id=parent_id
                         )
                     tag_by_bt, label_by_code = parent_tag_cache[cache_key]
+                    for code, label in (label_by_code or {}).items():
+                        code_key = str(code or "").strip().lower()
+                        label_text = str(label or "").strip()
+                        if code_key and label_text:
+                            self._quality_label_by_code[code_key] = label_text
                     tag_code = str(tag_by_bt.get(res_id) or "").strip().lower()
                     tag_label = str(label_by_code.get(tag_code) or "").strip()
                     if cache_key not in parent_meta_cache:
@@ -354,10 +363,16 @@ class GyingIndexer(_PluginBase):
                     parent_meta = parent_meta_cache[cache_key] or {}
 
                 filter_title = str(detail_data.get("title") or title or "").strip()
+                quality_code_for_filter = tag_code or search_quality_code
+                quality_label_for_filter = (
+                    tag_label
+                    or str(self._quality_label_by_code.get(quality_code_for_filter) or "").strip()
+                    or search_tag_label
+                )
                 if not self._should_keep_entry(
                     title=filter_title,
-                    quality_code=tag_code,
-                    quality_label=tag_label
+                    quality_code=quality_code_for_filter,
+                    quality_label=quality_label_for_filter
                 ):
                     continue
 
@@ -381,7 +396,7 @@ class GyingIndexer(_PluginBase):
                 size_bytes = self._parse_size_bytes(detail_size_text, search_size_text)
                 seeds_text = entry.get("seeds")
                 elapsed_text = str(entry.get("time") or "").strip()
-                tag_text = str(entry.get("tag") or "").strip()
+                tag_text = search_tag_label
                 detail_title = str(detail_data.get("title") or "").strip()
                 parent_year = str(parent_meta.get("year") or "").strip()
                 title_for_match = self._build_match_title(
