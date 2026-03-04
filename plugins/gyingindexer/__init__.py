@@ -17,11 +17,11 @@ from app.utils.string import StringUtils
 
 
 class GyingIndexer(_PluginBase):
-    plugin_name = "GYing Indexer"
-    plugin_desc = "Add gying magnet search support with quality filter."
+    plugin_name = "观影索引（GYing）"
+    plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
     plugin_version = "1.0.0"
-    plugin_author = "codex"
+    plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
     plugin_order = 30
@@ -84,7 +84,7 @@ class GyingIndexer(_PluginBase):
                                         "component": "VSwitch",
                                         "props": {
                                             "model": "enabled",
-                                            "label": "Enable plugin",
+                                            "label": "启用插件",
                                         },
                                     }
                                 ],
@@ -97,7 +97,7 @@ class GyingIndexer(_PluginBase):
                                         "component": "VSwitch",
                                         "props": {
                                             "model": "strict_quality",
-                                            "label": "Only zh 1080p/4K",
+                                            "label": "仅保留中字1080P/4K",
                                         },
                                     }
                                 ],
@@ -116,7 +116,7 @@ class GyingIndexer(_PluginBase):
                                         "props": {
                                             "model": "extra_hosts",
                                             "rows": 3,
-                                            "label": "Extra hosts (one per line)",
+                                            "label": "额外域名（每行一个）",
                                             "placeholder": "www.example.com",
                                         },
                                     }
