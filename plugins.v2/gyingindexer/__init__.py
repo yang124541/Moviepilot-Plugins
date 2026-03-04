@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影索引（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -38,6 +38,8 @@ class GyingIndexer(_PluginBase):
         "gyg.la",
         "gyg.si",
     }
+    _target_quality_codes: Tuple[str, ...] = ("i5", "i9")
+    _max_search_pages: int = 5
     _subtitle_tokens: Tuple[str, ...] = (
         "\u4e2d\u5b57",
         "\u4e2d\u6587\u5b57\u5e55",
@@ -172,8 +174,7 @@ class GyingIndexer(_PluginBase):
         proxies = settings.PROXY if site.get("proxy") else None
         referer = base_url
 
-        search_url = self._build_search_url(base_url=base_url, keyword=keyword)
-        logger.info(f"GYing search start: {search_url}")
+        logger.info(f"GYing search start: {keyword}")
 
         try:
             client = RequestUtils(
@@ -183,37 +184,23 @@ class GyingIndexer(_PluginBase):
                 timeout=timeout,
                 referer=referer
             )
-            html = client.get(search_url)
-            if not html:
-                logger.warn(f"GYing search empty: {search_url}")
+            search_entries = self._collect_search_entries(
+                client=client,
+                base_url=base_url,
+                keyword=keyword
+            )
+            if not search_entries:
+                logger.warn("GYing search empty after paging")
                 return []
-
-            search_data = self._extract_js_object(html, "_obj.search")
-            if not isinstance(search_data, dict):
-                logger.warn("GYing search parse failed: _obj.search not found")
-                return []
-
-            list_obj = search_data.get("l") or {}
-            ids = self._as_list(list_obj.get("i"))
-            dirs = self._as_list(list_obj.get("d"))
-            titles = self._as_list(list_obj.get("title"))
-            sizes = self._as_list(list_obj.get("size"))
-            seeds = self._as_list(list_obj.get("seeds"))
-            times = self._as_list(list_obj.get("time"))
-            tags = self._as_list(list_obj.get("k"))
 
             results: List[TorrentInfo] = []
-            for idx, btid in enumerate(ids):
-                if str(self._safe_at(dirs, idx) or "").lower() != "bt":
-                    continue
-                btid = str(btid or "").strip()
+            for entry in search_entries:
+                btid = str(entry.get("id") or "").strip()
                 if not btid:
                     continue
 
-                title = str(self._safe_at(titles, idx) or "").strip()
+                title = str(entry.get("title") or "").strip()
                 if not title:
-                    continue
-                if self._strict_quality and not self._match_quality(title):
                     continue
 
                 detail_url = urljoin(base_url, f"bt/{btid}")
@@ -227,12 +214,12 @@ class GyingIndexer(_PluginBase):
                 if not magnet.startswith("magnet:?"):
                     continue
 
-                search_size_text = str(self._safe_at(sizes, idx) or "").strip()
+                search_size_text = str(entry.get("size") or "").strip()
                 detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
                 size_bytes = self._parse_size_bytes(detail_size_text, search_size_text)
-                seeds_text = self._safe_at(seeds, idx)
-                elapsed_text = str(self._safe_at(times, idx) or "").strip()
-                tag_text = str(self._safe_at(tags, idx) or "").strip()
+                seeds_text = entry.get("seeds")
+                elapsed_text = str(entry.get("time") or "").strip()
+                tag_text = str(entry.get("tag") or "").strip()
                 detail_title = str(detail_data.get("title") or "").strip()
 
                 results.append(TorrentInfo(
@@ -292,8 +279,125 @@ class GyingIndexer(_PluginBase):
         return f"{parsed.scheme}://{parsed.netloc}/"
 
     @staticmethod
-    def _build_search_url(base_url: str, keyword: str) -> str:
-        return urljoin(base_url, f"s/1-4--1/{quote(keyword)}")
+    def _build_search_url(base_url: str, keyword: str,
+                          page_no: int = 1, quality_code: Optional[str] = None) -> str:
+        quality = quality_code or ""
+        return urljoin(base_url, f"s/{page_no}-4-{quality}-1/{quote(keyword)}")
+
+    def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str) -> List[Dict[str, Any]]:
+        entry_map: Dict[str, Dict[str, Any]] = {}
+
+        quality_plan: List[Optional[str]]
+        if self._strict_quality:
+            quality_plan = list(self._target_quality_codes)
+        else:
+            quality_plan = [None]
+
+        for quality_code in quality_plan:
+            for page_no in range(1, self._max_search_pages + 1):
+                search_url = self._build_search_url(
+                    base_url=base_url,
+                    keyword=keyword,
+                    page_no=page_no,
+                    quality_code=quality_code
+                )
+                html = client.get(search_url)
+                if not html:
+                    break
+                search_data = self._extract_js_object(html, "_obj.search")
+                if not isinstance(search_data, dict):
+                    break
+
+                page_entries = self._extract_entries_from_search(
+                    search_data=search_data,
+                    forced_quality=quality_code
+                )
+                if not page_entries:
+                    break
+
+                new_count = 0
+                for item in page_entries:
+                    key = str(item.get("id") or "").strip()
+                    if not key:
+                        continue
+                    if key not in entry_map:
+                        entry_map[key] = item
+                        new_count += 1
+
+                if page_no > 1 and new_count == 0:
+                    break
+
+        # 部分情况下分类页可能拿不到，回退到全量页并用标题规则过滤。
+        if self._strict_quality and not entry_map:
+            for page_no in range(1, self._max_search_pages + 1):
+                search_url = self._build_search_url(
+                    base_url=base_url,
+                    keyword=keyword,
+                    page_no=page_no,
+                    quality_code=None
+                )
+                html = client.get(search_url)
+                if not html:
+                    break
+                search_data = self._extract_js_object(html, "_obj.search")
+                if not isinstance(search_data, dict):
+                    break
+                page_entries = self._extract_entries_from_search(
+                    search_data=search_data,
+                    forced_quality=None
+                )
+                if not page_entries:
+                    break
+                for item in page_entries:
+                    key = str(item.get("id") or "").strip()
+                    if key and key not in entry_map:
+                        entry_map[key] = item
+
+        logger.info(f"GYing entries collected: {len(entry_map)}")
+        return list(entry_map.values())
+
+    def _extract_entries_from_search(self, search_data: Dict[str, Any],
+                                     forced_quality: Optional[str]) -> List[Dict[str, Any]]:
+        list_obj = search_data.get("l") or {}
+        if not isinstance(list_obj, dict):
+            return []
+
+        ids = self._as_list(list_obj.get("i"))
+        dirs = self._as_list(list_obj.get("d"))
+        titles = self._as_list(list_obj.get("title"))
+        sizes = self._as_list(list_obj.get("size"))
+        seeds = self._as_list(list_obj.get("seeds"))
+        times = self._as_list(list_obj.get("time"))
+        tags = self._as_list(list_obj.get("k"))
+        qualities = self._as_list(list_obj.get("p"))
+
+        entries: List[Dict[str, Any]] = []
+        for idx, btid in enumerate(ids):
+            if str(self._safe_at(dirs, idx) or "").lower() != "bt":
+                continue
+            title = str(self._safe_at(titles, idx) or "").strip()
+            if not title:
+                continue
+
+            row_quality = str(self._safe_at(qualities, idx) or forced_quality or "").strip().lower()
+            if self._strict_quality:
+                if row_quality in self._target_quality_codes:
+                    pass
+                elif forced_quality in self._target_quality_codes:
+                    pass
+                elif not self._match_quality(title):
+                    continue
+
+            entries.append({
+                "id": btid,
+                "title": title,
+                "size": self._safe_at(sizes, idx),
+                "seeds": self._safe_at(seeds, idx),
+                "time": self._safe_at(times, idx),
+                "tag": self._safe_at(tags, idx),
+                "quality": row_quality
+            })
+        return entries
 
     def _all_hosts(self) -> Set[str]:
         hosts = set(self._default_hosts)
