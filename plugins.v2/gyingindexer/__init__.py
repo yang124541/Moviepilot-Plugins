@@ -2,7 +2,7 @@ import html
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 from fastapi.concurrency import run_in_threadpool
@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.3.4"
+    plugin_version = "1.3.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -302,10 +302,18 @@ class GyingIndexer(_PluginBase):
                 timeout=timeout,
                 referer=referer
             )
+            request_state: Dict[str, int] = {"http": 0, "cache_hit": 0}
+            url_cache: Dict[str, str] = {}
+            guarded_get = self._make_cached_get(
+                client=client,
+                url_cache=url_cache,
+                request_state=request_state
+            )
             search_entries = self._collect_search_entries(
                 client=client,
                 base_url=base_url,
-                keyword=keyword
+                keyword=keyword,
+                fetcher=guarded_get
             )
             if not search_entries:
                 logger.warn("GYing search empty after paging")
@@ -341,7 +349,6 @@ class GyingIndexer(_PluginBase):
                 down_item: Dict[str, Any] = {}
                 cache_key = str(bt_parent_cache.get(res_id) or "").strip()
                 if cache_key:
-                    parent_meta = parent_meta_cache.get(cache_key) or {}
                     down_item = parent_down_entry_map_cache.get(cache_key, {}).get(res_id) or {}
                     if down_item:
                         res_dir = str(down_item.get("dir") or res_dir).strip().lower() or res_dir
@@ -350,7 +357,7 @@ class GyingIndexer(_PluginBase):
                         tag_code = str(down_item.get("quality") or "").strip().lower()
                         tag_label = str(down_item.get("quality_label") or "").strip()
                 else:
-                    detail_html = client.get(detail_url)
+                    detail_html = guarded_get(detail_url)
                     if detail_html:
                         _detail_data = self._extract_js_object(detail_html, "_obj.d")
                         if isinstance(_detail_data, dict):
@@ -361,21 +368,13 @@ class GyingIndexer(_PluginBase):
                         cache_key = f"{parent_dir}/{parent_id}"
                         parent_default_dir.setdefault(cache_key, res_dir)
 
-                        if cache_key not in parent_meta_cache:
-                            parent_meta_cache[cache_key] = self._fetch_parent_meta(
-                                client=client,
-                                base_url=base_url,
-                                parent_dir=parent_dir,
-                                parent_id=parent_id
-                            )
-                        parent_meta = parent_meta_cache.get(cache_key) or {}
-
                         if cache_key not in parent_down_entries_cache:
                             _down_entries = self._fetch_parent_down_entries(
                                 client=client,
                                 base_url=base_url,
                                 parent_dir=parent_dir,
-                                parent_id=parent_id
+                                parent_id=parent_id,
+                                fetcher=guarded_get
                             )
                             parent_down_entries_cache[cache_key] = _down_entries
                             _id_map: Dict[str, Dict[str, Any]] = {}
@@ -415,33 +414,38 @@ class GyingIndexer(_PluginBase):
                     continue
 
                 entry_hash = str(down_item.get("hash") or "").strip()
-                enclosure = self._build_magnet_from_hash(info_hash=entry_hash, title=title)
-                if not enclosure:
-                    if not detail_data:
-                        detail_html = client.get(detail_url)
-                        if detail_html:
-                            _detail_data = self._extract_js_object(detail_html, "_obj.d")
-                            if isinstance(_detail_data, dict):
-                                detail_data = _detail_data
-
-                    download_candidates = self._extract_download_candidates_from_node(
-                        node=detail_data,
-                        base_url=base_url
-                    )
-                    if not download_candidates:
-                        download_candidates = self._fetch_download_candidates_from_downurl(
-                            client=client,
-                            base_url=base_url,
-                            resource_dir=res_dir,
-                            resource_id=res_id
-                        )
-                    enclosure = self._pick_preferred_enclosure(download_candidates)
+                enclosure, detail_data = self._resolve_enclosure(
+                    client=client,
+                    base_url=base_url,
+                    resource_dir=res_dir,
+                    resource_id=res_id,
+                    title=title,
+                    info_hash=entry_hash,
+                    detail_data=detail_data,
+                    fetcher=guarded_get
+                )
                 if not enclosure:
                     continue
 
-                search_size_text = str(down_item.get("size") or entry.get("size") or "").strip()
+                if cache_key and cache_key not in parent_meta_cache:
+                    try:
+                        parent_dir, parent_id = cache_key.split("/", 1)
+                    except Exception:
+                        parent_dir, parent_id = "", ""
+                    if parent_dir and parent_id:
+                        parent_meta_cache[cache_key] = self._fetch_parent_meta(
+                            client=client,
+                            base_url=base_url,
+                            parent_dir=parent_dir,
+                            parent_id=parent_id,
+                            fetcher=guarded_get
+                        )
+                parent_meta = parent_meta_cache.get(cache_key) or {}
+
+                down_size_text = str(down_item.get("size") or "").strip()
                 detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
-                size_bytes = self._parse_size_bytes(detail_size_text, search_size_text)
+                search_size_text = str(entry.get("size") or "").strip()
+                size_bytes = self._parse_size_bytes(down_size_text, detail_size_text, search_size_text)
                 seeds_text = down_item.get("seeds") or entry.get("seeds")
                 elapsed_text = str(down_item.get("time") or entry.get("time") or "").strip()
                 tag_text = tag_label or search_tag_label
@@ -486,23 +490,17 @@ class GyingIndexer(_PluginBase):
                 result_ids.add(res_id)
 
             # 站点搜索页可能漏掉同父级下的部分条目，补充抓取父级 downlist 全量条目。
-            for cache_key, parent_meta in parent_meta_cache.items():
+            for cache_key, down_entries in parent_down_entries_cache.items():
                 try:
                     parent_dir, parent_id = cache_key.split("/", 1)
                 except Exception:
                     continue
                 default_dir = str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt"
-                down_entries = parent_down_entries_cache.get(cache_key)
-                if down_entries is None:
-                    down_entries = self._fetch_parent_down_entries(
-                        client=client,
-                        base_url=base_url,
-                        parent_dir=parent_dir,
-                        parent_id=parent_id
-                    )
-                    parent_down_entries_cache[cache_key] = down_entries
                 if not down_entries:
                     continue
+
+                parent_meta = parent_meta_cache.get(cache_key) or {}
+                parent_meta_loaded = bool(parent_meta)
 
                 for down_item in down_entries:
                     child_id = str(down_item.get("id") or "").strip()
@@ -528,33 +526,34 @@ class GyingIndexer(_PluginBase):
                     child_dir = str(down_item.get("dir") or default_dir).strip().lower() or "bt"
                     child_detail_url = urljoin(base_url, f"{child_dir}/{child_id}")
                     child_hash = str(down_item.get("hash") or "").strip()
-                    enclosure = self._build_magnet_from_hash(info_hash=child_hash, title=child_title)
                     child_detail_data: Dict[str, Any] = {}
-                    if not enclosure:
-                        child_detail_html = client.get(child_detail_url)
-                        if child_detail_html:
-                            _child_detail_data = self._extract_js_object(child_detail_html, "_obj.d")
-                            if isinstance(_child_detail_data, dict):
-                                child_detail_data = _child_detail_data
-
-                        download_candidates = self._extract_download_candidates_from_node(
-                            node=child_detail_data,
-                            base_url=base_url
-                        )
-                        if not download_candidates:
-                            download_candidates = self._fetch_download_candidates_from_downurl(
-                                client=client,
-                                base_url=base_url,
-                                resource_dir=child_dir,
-                                resource_id=child_id
-                            )
-                        enclosure = self._pick_preferred_enclosure(download_candidates)
+                    enclosure, child_detail_data = self._resolve_enclosure(
+                        client=client,
+                        base_url=base_url,
+                        resource_dir=child_dir,
+                        resource_id=child_id,
+                        title=child_title,
+                        info_hash=child_hash,
+                        detail_data=child_detail_data,
+                        fetcher=guarded_get
+                    )
                     if not enclosure:
                         continue
 
-                    search_size_text = str(down_item.get("size") or "").strip()
+                    if not parent_meta_loaded:
+                        parent_meta = self._fetch_parent_meta(
+                            client=client,
+                            base_url=base_url,
+                            parent_dir=parent_dir,
+                            parent_id=parent_id,
+                            fetcher=guarded_get
+                        )
+                        parent_meta_cache[cache_key] = parent_meta
+                        parent_meta_loaded = True
+
+                    down_size_text = str(down_item.get("size") or "").strip()
                     detail_size_text = str(child_detail_data.get("s") or child_detail_data.get("size") or "").strip()
-                    size_bytes = self._parse_size_bytes(detail_size_text, search_size_text)
+                    size_bytes = self._parse_size_bytes(down_size_text, detail_size_text)
                     seeds_text = down_item.get("seeds")
                     elapsed_text = str(down_item.get("time") or "").strip()
                     tag_text = child_quality_label
@@ -599,11 +598,34 @@ class GyingIndexer(_PluginBase):
                     result_ids.add(child_id)
 
             cost = (datetime.now() - start_at).seconds
-            logger.info(f"GYing search done: {len(results)} result(s), cost={cost}s")
+            logger.info(
+                f"GYing search done: {len(results)} result(s), cost={cost}s, "
+                f"http={request_state.get('http')}, cache_hit={request_state.get('cache_hit')}"
+            )
             return results
         except Exception as err:
             logger.error(f"GYing search error: {err}")
             return []
+
+    @staticmethod
+    def _make_cached_get(client: RequestUtils,
+                         url_cache: Dict[str, str],
+                         request_state: Dict[str, int]) -> Callable[[str], str]:
+        def _getter(url: str) -> str:
+            target = str(url or "").strip()
+            if not target:
+                return ""
+            if target in url_cache:
+                request_state["cache_hit"] = int(request_state.get("cache_hit") or 0) + 1
+                return url_cache[target]
+
+            request_state["http"] = int(request_state.get("http") or 0) + 1
+            text = client.get(target)
+            payload = text or ""
+            url_cache[target] = payload
+            return payload
+
+        return _getter
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
@@ -638,10 +660,12 @@ class GyingIndexer(_PluginBase):
         # 站点新版搜索路由不再支持 i5/i9 分类码，固定使用 s/{page}-4--1
         return urljoin(base_url, f"s/{page_no}-4--1/{quote(keyword)}")
 
-    def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str) -> List[Dict[str, Any]]:
+    def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str,
+                                fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
         entry_map: Dict[str, Dict[str, Any]] = {}
         keyword_plan = self._expand_search_keywords(client=client, base_url=base_url, keyword=keyword)
         logger.info(f"GYing keyword plan: {keyword_plan}")
+        getter = fetcher or client.get
 
         for query_keyword in keyword_plan:
             for page_no in range(1, self._max_search_pages + 1):
@@ -651,7 +675,7 @@ class GyingIndexer(_PluginBase):
                     page_no=page_no,
                     quality_code=None
                 )
-                html = client.get(search_url)
+                html = getter(search_url)
                 if not html:
                     break
                 search_data = self._extract_js_object(html, "_obj.search")
@@ -859,20 +883,27 @@ class GyingIndexer(_PluginBase):
     def _should_keep_entry(self, title: str, quality_code: str = "", quality_label: str = "") -> bool:
         label_norm = self._normalize_text(quality_label)
         title_norm = self._normalize_text(title)
+        is_original = False
+        is_4k = False
+        is_1080 = False
+        has_zh_sub = False
 
-        is_original = "原盘" in label_norm
-        is_4k = ("4k" in label_norm) or ("2160" in label_norm)
-        is_1080 = ("1080" in label_norm) and not is_4k
-        has_zh_sub = self._has_chinese_subtitle(quality_label=quality_label, title=title)
-
-        # 标签缺失/异常时，回退到标题判断，减少误过滤。
-        if not (is_original or is_4k or is_1080):
+        # 有站点标签时，严格按站点标签分类（1080/中字1080/4K/中字4K/原盘）。
+        if label_norm:
+            is_original = "原盘" in label_norm
+            is_4k = ("4k" in label_norm) or ("2160" in label_norm)
+            is_1080 = ("1080" in label_norm) and not is_4k
+            has_zh_sub = ("中字" in label_norm) or ("中文" in label_norm)
+            if not (is_original or is_4k or is_1080):
+                return False
+        else:
+            # 标签缺失时再回退标题判断，避免误判覆盖站点标签。
             is_original = self._match_original(title)
             is_4k = self._is_4k(title_norm)
             is_1080 = self._is_1080(title_norm)
-
-        if not (is_original or is_4k or is_1080):
-            return False
+            has_zh_sub = self._has_chinese_subtitle(quality_label=quality_label, title=title)
+            if not (is_original or is_4k or is_1080):
+                return False
 
         keep = False
         if self._include_original and is_original:
@@ -940,9 +971,11 @@ class GyingIndexer(_PluginBase):
         return tag_by_bt, label_by_code
 
     def _fetch_parent_meta(self, client: RequestUtils, base_url: str,
-                           parent_dir: str, parent_id: str) -> Dict[str, Any]:
+                           parent_dir: str, parent_id: str,
+                           fetcher: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
+        getter = fetcher or client.get
         detail_url = urljoin(base_url, f"{parent_dir}/{parent_id}")
-        html = client.get(detail_url)
+        html = getter(detail_url)
         if not html:
             return {}
         detail_data = self._extract_js_object(html, "_obj.d")
@@ -954,9 +987,11 @@ class GyingIndexer(_PluginBase):
         }
 
     def _fetch_parent_down_entries(self, client: RequestUtils, base_url: str,
-                                   parent_dir: str, parent_id: str) -> List[Dict[str, Any]]:
+                                   parent_dir: str, parent_id: str,
+                                   fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
+        getter = fetcher or client.get
         url = urljoin(base_url, f"res/downurl/{parent_dir}/{parent_id}")
-        text = client.get(url)
+        text = getter(url)
         if not text:
             return []
 
@@ -1095,6 +1130,56 @@ class GyingIndexer(_PluginBase):
             return f"magnet:?xt=urn:btih:{token}&dn={quote(str(title))}"
         return f"magnet:?xt=urn:btih:{token}"
 
+    def _load_detail_data(self, client: RequestUtils, base_url: str,
+                          resource_dir: str, resource_id: str,
+                          detail_data: Optional[Dict[str, Any]] = None,
+                          fetcher: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
+        cached = detail_data or {}
+        if cached:
+            return cached
+        getter = fetcher or client.get
+        detail_url = urljoin(base_url, f"{resource_dir}/{resource_id}")
+        detail_html = getter(detail_url)
+        if not detail_html:
+            return {}
+        _detail_data = self._extract_js_object(detail_html, "_obj.d")
+        if isinstance(_detail_data, dict):
+            return _detail_data
+        return {}
+
+    def _resolve_enclosure(self, client: RequestUtils, base_url: str,
+                           resource_dir: str, resource_id: str,
+                           title: str, info_hash: str = "",
+                           detail_data: Optional[Dict[str, Any]] = None,
+                           fetcher: Optional[Callable[[str], str]] = None) -> Tuple[str, Dict[str, Any]]:
+        payload = detail_data or {}
+        enclosure = self._build_magnet_from_hash(info_hash=info_hash, title=title)
+        if enclosure:
+            return enclosure, payload
+
+        payload = self._load_detail_data(
+            client=client,
+            base_url=base_url,
+            resource_dir=resource_dir,
+            resource_id=resource_id,
+            detail_data=payload,
+            fetcher=fetcher
+        )
+        download_candidates = self._extract_download_candidates_from_node(
+            node=payload,
+            base_url=base_url
+        )
+        if not download_candidates:
+            download_candidates = self._fetch_download_candidates_from_downurl(
+                client=client,
+                base_url=base_url,
+                resource_dir=resource_dir,
+                resource_id=resource_id,
+                fetcher=fetcher
+            )
+        enclosure = self._pick_preferred_enclosure(download_candidates)
+        return enclosure, payload
+
     def _match_original(self, title: str) -> bool:
         title_norm = re.sub(r"\s+", "", title).lower()
         has_negative = any(token.replace(" ", "") in title_norm for token in self._non_original_tokens)
@@ -1139,13 +1224,15 @@ class GyingIndexer(_PluginBase):
         return result
 
     def _fetch_download_candidates_from_downurl(self, client: RequestUtils, base_url: str,
-                                                resource_dir: str, resource_id: str) -> List[str]:
+                                                resource_dir: str, resource_id: str,
+                                                fetcher: Optional[Callable[[str], str]] = None) -> List[str]:
         """
         回退接口：部分条目详情页不直接包含 magnet，需要从 downurl 接口读取。
         返回磁力与可下载链接候选（优先磁力，其次 torrent/媒体直链）。
         """
+        getter = fetcher or client.get
         url = urljoin(base_url, f"res/downurl/{resource_dir}/{resource_id}")
-        text = client.get(url)
+        text = getter(url)
         if not text:
             return []
         try:
