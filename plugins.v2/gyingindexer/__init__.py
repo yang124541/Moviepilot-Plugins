@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.3.3"
+    plugin_version = "1.3.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -681,38 +681,8 @@ class GyingIndexer(_PluginBase):
         primary = str(keyword or "").strip()
         if not primary:
             return []
-
-        keywords: List[str] = [primary]
-        seen: Set[str] = {self._normalize_text(primary)}
-
-        suggest_url = urljoin(base_url, f"res/s/{quote(primary)}")
-        text = client.get(suggest_url)
-        if not text:
-            return keywords
-
-        try:
-            suggest_list = json.loads(text)
-        except Exception:
-            return keywords
-
-        if not isinstance(suggest_list, list):
-            return keywords
-
-        for item in suggest_list[:3]:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or "").strip()
-            if not title:
-                continue
-            norm = self._normalize_text(title)
-            if not norm or norm in seen:
-                continue
-            seen.add(norm)
-            keywords.append(title)
-            if len(keywords) >= 3:
-                break
-
-        return keywords
+        # 极速模式：仅使用 MoviePilot 传入的关键词，不再请求站内联想词接口。
+        return [primary]
 
     def _extract_entries_from_search(self, search_data: Dict[str, Any],
                                      forced_quality: Optional[str]) -> List[Dict[str, Any]]:
