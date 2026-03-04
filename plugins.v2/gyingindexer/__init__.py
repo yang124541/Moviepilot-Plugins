@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影索引（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -133,7 +133,7 @@ class GyingIndexer(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
-        return []
+        pass
 
     def get_module(self) -> Dict[str, Any]:
         return {
