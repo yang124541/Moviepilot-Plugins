@@ -3,11 +3,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.0.13",
+    "version": "1.0.14",
     "icon": "spider.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.14": "将开关文案“包含原盘”简化为“原盘”，并统一相关提示描述。",
       "v1.0.13": "修复 d 为空条目被丢弃问题，并增强 downurl 回退提取（磁力/.torrent/.mkv/.mp4），补齐缺失结果。",
       "v1.0.12": "补充非 bt 路由资源的磁力回退抓取（res/downurl），减少遗漏条目。",
       "v1.0.11": "原盘优先按站点分类码识别，并收紧关键词兜底规则，减少 Blu-ray 误归类。",

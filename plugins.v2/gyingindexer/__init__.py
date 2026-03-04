@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.13"
+    plugin_version = "1.0.14"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -208,7 +208,7 @@ class GyingIndexer(_PluginBase):
                                         "component": "VSwitch",
                                         "props": {
                                             "model": "include_original",
-                                            "label": "包含原盘",
+                                            "label": "原盘",
                                         },
                                     }
                                 ],
@@ -459,7 +459,7 @@ class GyingIndexer(_PluginBase):
 
         # 严格模式下，补抓全量页：
         # 1) 分类页为空时兜底；
-        # 2) 需要包含“原盘”时，合并全量页中的原盘资源。
+        # 2) 启用“原盘”时，合并全量页中的原盘资源。
         need_full_scan = (
             self._enable_1080 or
             self._enable_4k or
