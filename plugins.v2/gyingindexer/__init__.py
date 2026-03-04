@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影索引（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -227,7 +227,9 @@ class GyingIndexer(_PluginBase):
                 if not magnet.startswith("magnet:?"):
                     continue
 
-                size_text = str(self._safe_at(sizes, idx) or "").strip()
+                search_size_text = str(self._safe_at(sizes, idx) or "").strip()
+                detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
+                size_bytes = self._parse_size_bytes(detail_size_text, search_size_text)
                 seeds_text = self._safe_at(seeds, idx)
                 elapsed_text = str(self._safe_at(times, idx) or "").strip()
                 tag_text = str(self._safe_at(tags, idx) or "").strip()
@@ -245,7 +247,7 @@ class GyingIndexer(_PluginBase):
                     description=tag_text or detail_title,
                     enclosure=magnet,
                     page_url=detail_url,
-                    size=StringUtils.num_filesize(size_text),
+                    size=size_bytes,
                     seeders=self._to_int(seeds_text),
                     peers=0,
                     grabs=0,
@@ -497,3 +499,32 @@ class GyingIndexer(_PluginBase):
             return int(match.group(0))
         except Exception:
             return 0
+
+    @staticmethod
+    def _parse_size_bytes(*size_texts: str) -> int:
+        """
+        解析体积字符串。
+        优先使用带单位的大小（如 7.84GB）。
+        若仅有纯数字（如 8），按 GB 处理，避免被识别为字节。
+        """
+        numeric_value: Optional[float] = None
+        for raw in size_texts:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+
+            has_unit = bool(re.search(r"[a-zA-Z]", text))
+            if has_unit:
+                size = StringUtils.num_filesize(text)
+                if size > 0:
+                    return size
+
+            if re.match(r"^\d+(?:\.\d+)?$", text):
+                try:
+                    numeric_value = float(text)
+                except Exception:
+                    continue
+
+        if numeric_value and numeric_value > 0:
+            return int(numeric_value * 1024 ** 3)
+        return 0
