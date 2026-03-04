@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.19"
+    plugin_version = "1.0.20"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -393,6 +393,11 @@ class GyingIndexer(_PluginBase):
                 description = " | ".join(desc_parts[:3])
                 if parent_year and not re.search(r"(19|20)\d{2}", description):
                     description = f"{description} {parent_year}".strip()
+                description = self._append_unique_marker(
+                    description=description or detail_title or title,
+                    resource_id=res_id,
+                    enclosure=enclosure
+                )
 
                 results.append(TorrentInfo(
                     site=site.get("id"),
@@ -403,7 +408,7 @@ class GyingIndexer(_PluginBase):
                     site_order=site.get("pri"),
                     site_downloader=site.get("downloader"),
                     title=title_for_match or title,
-                    description=description or detail_title or title,
+                    description=description,
                     enclosure=enclosure,
                     page_url=detail_url,
                     size=size_bytes,
@@ -799,6 +804,30 @@ class GyingIndexer(_PluginBase):
         if parent_title and parent_title not in base:
             return f"{parent_title}.{base}"
         return base
+
+    @staticmethod
+    def _append_unique_marker(description: str, resource_id: str, enclosure: str = "") -> str:
+        """
+        MoviePilot 在搜索链路中按 site_name + title + description 去重。
+        追加资源唯一标识，避免同标题同描述条目被误合并。
+        """
+        base = str(description or "").strip()
+        rid = str(resource_id or "").strip()
+        if not rid:
+            return base
+
+        ext = ""
+        lower_enclosure = str(enclosure or "").strip().lower()
+        ext_match = re.search(r"\.(mkv|mp4|torrent)(?:$|[?#])", lower_enclosure)
+        if ext_match:
+            ext = ext_match.group(1).lower()
+
+        marker = f"GY[{rid}{('/' + ext) if ext else ''}]"
+        if marker in base:
+            return base
+        if not base:
+            return marker
+        return f"{base} | {marker}"
 
     def _match_original(self, title: str) -> bool:
         title_norm = re.sub(r"\s+", "", title).lower()
