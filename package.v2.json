@@ -1,13 +1,14 @@
 {
   "GyingIndexer": {
-    "name": "观影索引（GYing）",
+    "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "icon": "spider.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.7": "插件名缩短为“观影（GYing）”，避免卡片遮挡版本号。",
       "v1.0.6": "新增 5 个独立筛选开关（1080P/中字1080P/4K/中字4K/原盘），并优化中字识别。",
       "v1.0.5": "新增原盘支持（Blu-ray/Remux/UHD 等），并在严格模式下合并全量分页结果。",
       "v1.0.4": "改为按中字1080P/中字4K分类分页抓取并去重，减少结果漏抓。",

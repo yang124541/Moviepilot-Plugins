@@ -17,10 +17,10 @@ from app.utils.string import StringUtils
 
 
 class GyingIndexer(_PluginBase):
-    plugin_name = "观影索引（GYing）"
+    plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
