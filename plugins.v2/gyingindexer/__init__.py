@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.18"
+    plugin_version = "1.0.19"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -791,6 +791,10 @@ class GyingIndexer(_PluginBase):
             return base
         year = str(parent_year or "").strip()
         if re.match(r"^(19|20)\d{2}$", year):
+            if parent_title:
+                parent = str(parent_title).strip()
+                if parent and parent not in base:
+                    return f"{parent}.{year}.{base}"
             return f"{base}.{year}"
         if parent_title and parent_title not in base:
             return f"{parent_title}.{base}"
