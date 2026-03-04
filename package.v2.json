@@ -1,0 +1,14 @@
+{
+  "GyingIndexer": {
+    "name": "GYing Indexer",
+    "description": "为 MoviePilot 增加 gying 站点搜索支持，并抓取磁力链接（仅中字1080P/中字4K）。",
+    "labels": "站点,索引",
+    "version": "1.0.0",
+    "icon": "spider.png",
+    "author": "yang124541",
+    "level": 2,
+    "history": {
+      "v1.0.0": "初始版本：自动注册 gying 索引器并接管搜索，提取磁力链接。"
+    }
+  }
+}
