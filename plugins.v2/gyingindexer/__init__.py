@@ -2,7 +2,7 @@ import html
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 from fastapi.concurrency import run_in_threadpool
@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.2.6"
+    plugin_version = "1.2.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -44,6 +44,7 @@ class GyingIndexer(_PluginBase):
         "gyg.si",
     }
     _max_search_pages: int = 8
+    _max_http_requests_per_search: int = 80
     _resolved_original_codes: Set[str] = set()
     _quality_label_by_code: Dict[str, str] = {}
     _subtitle_tokens: Tuple[str, ...] = (
@@ -298,10 +299,22 @@ class GyingIndexer(_PluginBase):
                 timeout=timeout,
                 referer=referer
             )
+            request_state: Dict[str, Any] = {
+                "count": 0,
+                "limit": int(self._max_http_requests_per_search),
+                "blocked": False,
+            }
+            url_cache: Dict[str, str] = {}
+            guarded_get = self._make_guarded_get(
+                client=client,
+                url_cache=url_cache,
+                request_state=request_state
+            )
             search_entries = self._collect_search_entries(
                 client=client,
                 base_url=base_url,
-                keyword=keyword
+                keyword=keyword,
+                fetcher=guarded_get
             )
             if not search_entries:
                 logger.warn("GYing search empty after paging")
@@ -346,7 +359,7 @@ class GyingIndexer(_PluginBase):
                         tag_code = str(down_item.get("quality") or "").strip().lower()
                         tag_label = str(down_item.get("quality_label") or "").strip()
                 else:
-                    detail_html = client.get(detail_url)
+                    detail_html = guarded_get(detail_url)
                     if detail_html:
                         _detail_data = self._extract_js_object(detail_html, "_obj.d")
                         if isinstance(_detail_data, dict):
@@ -362,7 +375,8 @@ class GyingIndexer(_PluginBase):
                                 client=client,
                                 base_url=base_url,
                                 parent_dir=parent_dir,
-                                parent_id=parent_id
+                                parent_id=parent_id,
+                                fetcher=guarded_get
                             )
                         parent_meta = parent_meta_cache.get(cache_key) or {}
 
@@ -371,7 +385,8 @@ class GyingIndexer(_PluginBase):
                                 client=client,
                                 base_url=base_url,
                                 parent_dir=parent_dir,
-                                parent_id=parent_id
+                                parent_id=parent_id,
+                                fetcher=guarded_get
                             )
                             parent_down_entries_cache[cache_key] = _down_entries
                             _id_map: Dict[str, Dict[str, Any]] = {}
@@ -414,7 +429,7 @@ class GyingIndexer(_PluginBase):
                 enclosure = self._build_magnet_from_hash(info_hash=entry_hash, title=title)
                 if not enclosure:
                     if not detail_data:
-                        detail_html = client.get(detail_url)
+                        detail_html = guarded_get(detail_url)
                         if detail_html:
                             _detail_data = self._extract_js_object(detail_html, "_obj.d")
                             if isinstance(_detail_data, dict):
@@ -429,7 +444,8 @@ class GyingIndexer(_PluginBase):
                             client=client,
                             base_url=base_url,
                             resource_dir=res_dir,
-                            resource_id=res_id
+                            resource_id=res_id,
+                            fetcher=guarded_get
                         )
                     enclosure = self._pick_preferred_enclosure(download_candidates)
                 if not enclosure:
@@ -494,7 +510,8 @@ class GyingIndexer(_PluginBase):
                         client=client,
                         base_url=base_url,
                         parent_dir=parent_dir,
-                        parent_id=parent_id
+                        parent_id=parent_id,
+                        fetcher=guarded_get
                     )
                     parent_down_entries_cache[cache_key] = down_entries
                 if not down_entries:
@@ -527,7 +544,7 @@ class GyingIndexer(_PluginBase):
                     enclosure = self._build_magnet_from_hash(info_hash=child_hash, title=child_title)
                     child_detail_data: Dict[str, Any] = {}
                     if not enclosure:
-                        child_detail_html = client.get(child_detail_url)
+                        child_detail_html = guarded_get(child_detail_url)
                         if child_detail_html:
                             _child_detail_data = self._extract_js_object(child_detail_html, "_obj.d")
                             if isinstance(_child_detail_data, dict):
@@ -542,7 +559,8 @@ class GyingIndexer(_PluginBase):
                                 client=client,
                                 base_url=base_url,
                                 resource_dir=child_dir,
-                                resource_id=child_id
+                                resource_id=child_id,
+                                fetcher=guarded_get
                             )
                         enclosure = self._pick_preferred_enclosure(download_candidates)
                     if not enclosure:
@@ -595,7 +613,9 @@ class GyingIndexer(_PluginBase):
                     result_ids.add(child_id)
 
             cost = (datetime.now() - start_at).seconds
-            logger.info(f"GYing search done: {len(results)} result(s), cost={cost}s")
+            if request_state.get("blocked"):
+                logger.warn(f"GYing search hit request limit: {request_state.get('limit')}")
+            logger.info(f"GYing search done: {len(results)} result(s), cost={cost}s, req={request_state.get('count')}")
             return results
         except Exception as err:
             logger.error(f"GYing search error: {err}")
@@ -629,14 +649,46 @@ class GyingIndexer(_PluginBase):
         return f"{parsed.scheme}://{parsed.netloc}/"
 
     @staticmethod
+    def _make_guarded_get(client: RequestUtils,
+                          url_cache: Dict[str, str],
+                          request_state: Dict[str, Any]) -> Callable[[str], str]:
+        def _getter(url: str) -> str:
+            target = str(url or "").strip()
+            if not target:
+                return ""
+            if target in url_cache:
+                return url_cache[target]
+
+            limit = int(request_state.get("limit") or 0)
+            count = int(request_state.get("count") or 0)
+            if limit > 0 and count >= limit:
+                request_state["blocked"] = True
+                return ""
+
+            request_state["count"] = count + 1
+            text = client.get(target)
+            payload = text or ""
+            url_cache[target] = payload
+            return payload
+
+        return _getter
+
+    @staticmethod
     def _build_search_url(base_url: str, keyword: str,
                           page_no: int = 1, quality_code: Optional[str] = None) -> str:
         # 站点新版搜索路由不再支持 i5/i9 分类码，固定使用 s/{page}-4--1
         return urljoin(base_url, f"s/{page_no}-4--1/{quote(keyword)}")
 
-    def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str) -> List[Dict[str, Any]]:
+    def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str,
+                                fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
         entry_map: Dict[str, Dict[str, Any]] = {}
-        keyword_plan = self._expand_search_keywords(client=client, base_url=base_url, keyword=keyword)
+        getter = fetcher or client.get
+        keyword_plan = self._expand_search_keywords(
+            client=client,
+            base_url=base_url,
+            keyword=keyword,
+            fetcher=getter
+        )
         logger.info(f"GYing keyword plan: {keyword_plan}")
 
         for query_keyword in keyword_plan:
@@ -647,7 +699,7 @@ class GyingIndexer(_PluginBase):
                     page_no=page_no,
                     quality_code=None
                 )
-                html = client.get(search_url)
+                html = getter(search_url)
                 if not html:
                     break
                 search_data = self._extract_js_object(html, "_obj.search")
@@ -673,16 +725,18 @@ class GyingIndexer(_PluginBase):
         logger.info(f"GYing entries collected: {len(entry_map)}")
         return list(entry_map.values())
 
-    def _expand_search_keywords(self, client: RequestUtils, base_url: str, keyword: str) -> List[str]:
+    def _expand_search_keywords(self, client: RequestUtils, base_url: str, keyword: str,
+                                fetcher: Optional[Callable[[str], str]] = None) -> List[str]:
         primary = str(keyword or "").strip()
         if not primary:
             return []
 
+        getter = fetcher or client.get
         keywords: List[str] = [primary]
         seen: Set[str] = {self._normalize_text(primary)}
 
         suggest_url = urljoin(base_url, f"res/s/{quote(primary)}")
-        text = client.get(suggest_url)
+        text = getter(suggest_url)
         if not text:
             return keywords
 
@@ -947,9 +1001,11 @@ class GyingIndexer(_PluginBase):
         return tag_by_bt, label_by_code
 
     def _fetch_parent_meta(self, client: RequestUtils, base_url: str,
-                           parent_dir: str, parent_id: str) -> Dict[str, Any]:
+                           parent_dir: str, parent_id: str,
+                           fetcher: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
+        getter = fetcher or client.get
         detail_url = urljoin(base_url, f"{parent_dir}/{parent_id}")
-        html = client.get(detail_url)
+        html = getter(detail_url)
         if not html:
             return {}
         detail_data = self._extract_js_object(html, "_obj.d")
@@ -961,9 +1017,11 @@ class GyingIndexer(_PluginBase):
         }
 
     def _fetch_parent_down_entries(self, client: RequestUtils, base_url: str,
-                                   parent_dir: str, parent_id: str) -> List[Dict[str, Any]]:
+                                   parent_dir: str, parent_id: str,
+                                   fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
+        getter = fetcher or client.get
         url = urljoin(base_url, f"res/downurl/{parent_dir}/{parent_id}")
-        text = client.get(url)
+        text = getter(url)
         if not text:
             return []
 
@@ -1120,13 +1178,15 @@ class GyingIndexer(_PluginBase):
         return result
 
     def _fetch_download_candidates_from_downurl(self, client: RequestUtils, base_url: str,
-                                                resource_dir: str, resource_id: str) -> List[str]:
+                                                resource_dir: str, resource_id: str,
+                                                fetcher: Optional[Callable[[str], str]] = None) -> List[str]:
         """
         回退接口：部分条目详情页不直接包含 magnet，需要从 downurl 接口读取。
         返回磁力与可下载链接候选（优先磁力，其次 torrent/媒体直链）。
         """
+        getter = fetcher or client.get
         url = urljoin(base_url, f"res/downurl/{resource_dir}/{resource_id}")
-        text = client.get(url)
+        text = getter(url)
         if not text:
             return []
         try:
