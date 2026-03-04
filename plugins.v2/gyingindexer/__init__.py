@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.9"
+    plugin_version = "1.0.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -117,7 +117,7 @@ class GyingIndexer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "sm": 6, "md": 2},
                                 "content": [
                                     {
                                         "component": "VSwitch",
@@ -130,7 +130,7 @@ class GyingIndexer(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "sm": 6, "md": 2},
                                 "content": [
                                     {
                                         "component": "VSwitch",
@@ -143,7 +143,7 @@ class GyingIndexer(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "sm": 6, "md": 2},
                                 "content": [
                                     {
                                         "component": "VSwitch",
@@ -154,14 +154,9 @@ class GyingIndexer(_PluginBase):
                                     }
                                 ],
                             },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "sm": 6, "md": 2},
                                 "content": [
                                     {
                                         "component": "VSwitch",
@@ -174,7 +169,7 @@ class GyingIndexer(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "sm": 6, "md": 2},
                                 "content": [
                                     {
                                         "component": "VSwitch",
@@ -185,14 +180,9 @@ class GyingIndexer(_PluginBase):
                                     }
                                 ],
                             },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "sm": 6, "md": 2},
                                 "content": [
                                     {
                                         "component": "VSwitch",
@@ -202,7 +192,7 @@ class GyingIndexer(_PluginBase):
                                         },
                                     }
                                 ],
-                            },
+                            }
                         ],
                     },
                     {
