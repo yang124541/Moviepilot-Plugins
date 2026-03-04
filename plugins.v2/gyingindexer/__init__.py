@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影索引（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -28,7 +28,10 @@ class GyingIndexer(_PluginBase):
     auth_level = 2
 
     _enabled = False
-    _strict_quality = True
+    _enable_1080 = False
+    _enable_zh1080 = True
+    _enable_4k = False
+    _enable_zh4k = True
     _include_original = True
     _extra_hosts = ""
 
@@ -69,9 +72,28 @@ class GyingIndexer(_PluginBase):
     def init_plugin(self, config: dict = None):
         if config:
             self._enabled = bool(config.get("enabled"))
-            self._strict_quality = bool(config.get("strict_quality", True))
             self._include_original = bool(config.get("include_original", True))
             self._extra_hosts = (config.get("extra_hosts") or "").strip()
+
+            # 新版 5 开关
+            if any(k in config for k in ("enable_1080", "enable_zh1080", "enable_4k", "enable_zh4k")):
+                self._enable_1080 = bool(config.get("enable_1080", False))
+                self._enable_zh1080 = bool(config.get("enable_zh1080", True))
+                self._enable_4k = bool(config.get("enable_4k", False))
+                self._enable_zh4k = bool(config.get("enable_zh4k", True))
+            else:
+                # 兼容旧配置：strict_quality + include_original
+                strict_quality = bool(config.get("strict_quality", True))
+                if strict_quality:
+                    self._enable_1080 = False
+                    self._enable_zh1080 = True
+                    self._enable_4k = False
+                    self._enable_zh4k = True
+                else:
+                    self._enable_1080 = True
+                    self._enable_zh1080 = True
+                    self._enable_4k = True
+                    self._enable_zh4k = True
         if self._enabled:
             self._register_builtin_indexer()
 
@@ -113,12 +135,61 @@ class GyingIndexer(_PluginBase):
                                     {
                                         "component": "VSwitch",
                                         "props": {
-                                            "model": "strict_quality",
-                                            "label": "仅保留中字1080P/4K",
+                                            "model": "enable_1080",
+                                            "label": "1080P",
                                         },
                                     }
                                 ],
                             },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enable_zh1080",
+                                            "label": "中字1080P",
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enable_4k",
+                                            "label": "4K",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enable_zh4k",
+                                            "label": "中字4K",
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
                             {
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 6},
@@ -158,7 +229,10 @@ class GyingIndexer(_PluginBase):
             }
         ], {
             "enabled": False,
-            "strict_quality": True,
+            "enable_1080": False,
+            "enable_zh1080": True,
+            "enable_4k": False,
+            "enable_zh4k": True,
             "include_original": True,
             "extra_hosts": "",
         }
@@ -317,10 +391,11 @@ class GyingIndexer(_PluginBase):
         entry_map: Dict[str, Dict[str, Any]] = {}
 
         quality_plan: List[Optional[str]]
-        if self._strict_quality:
-            quality_plan = list(self._target_quality_codes)
-        else:
-            quality_plan = [None]
+        quality_plan: List[Optional[str]] = []
+        if self._enable_zh1080:
+            quality_plan.append("i5")
+        if self._enable_zh4k:
+            quality_plan.append("i9")
 
         for quality_code in quality_plan:
             for page_no in range(1, self._max_search_pages + 1):
@@ -360,8 +435,10 @@ class GyingIndexer(_PluginBase):
         # 1) 分类页为空时兜底；
         # 2) 需要包含“原盘”时，合并全量页中的原盘资源。
         need_full_scan = (
-            (self._strict_quality and not entry_map) or
-            (self._strict_quality and self._include_original)
+            self._enable_1080 or
+            self._enable_4k or
+            self._include_original or
+            not quality_plan
         )
         if need_full_scan:
             for page_no in range(1, self._max_search_pages + 1):
@@ -415,19 +492,8 @@ class GyingIndexer(_PluginBase):
                 continue
 
             row_quality = str(self._safe_at(qualities, idx) or forced_quality or "").strip().lower()
-            if self._strict_quality:
-                keep = False
-                if row_quality in self._target_quality_codes:
-                    keep = True
-                elif forced_quality in self._target_quality_codes:
-                    keep = True
-                elif self._match_quality(title):
-                    keep = True
-                elif self._include_original and self._match_original(title):
-                    keep = True
-
-                if not keep:
-                    continue
+            if not self._should_keep_entry(title=title, quality_code=(row_quality or forced_quality)):
+                continue
 
             entries.append({
                 "id": btid,
@@ -540,12 +606,45 @@ class GyingIndexer(_PluginBase):
                 return True
         return False
 
-    def _match_quality(self, title: str) -> bool:
-        title_norm = re.sub(r"\s+", "", title).lower()
-        has_subtitle = any(token in title_norm for token in self._subtitle_tokens)
-        is_1080p = "1080p" in title_norm
-        is_4k = "2160p" in title_norm or bool(re.search(r"(?<!\d)4k(?!\d)", title_norm))
-        return has_subtitle and (is_1080p or is_4k)
+    @staticmethod
+    def _is_4k(title_norm: str) -> bool:
+        return "2160p" in title_norm or bool(re.search(r"(?<!\d)4k(?!\d)", title_norm))
+
+    @staticmethod
+    def _is_1080(title_norm: str) -> bool:
+        if "1080p" not in title_norm:
+            return False
+        # 同时出现 2160/4k 时优先认为是 4k
+        return not GyingIndexer._is_4k(title_norm)
+
+    def _has_chinese_subtitle(self, title_norm: str, quality_code: str = "") -> bool:
+        q = str(quality_code or "").strip().lower()
+        if q in self._target_quality_codes:
+            return True
+        return any(token in title_norm for token in self._subtitle_tokens)
+
+    def _should_keep_entry(self, title: str, quality_code: str = "") -> bool:
+        title_norm = re.sub(r"\s+", "", str(title or "")).lower()
+        if not title_norm:
+            return False
+
+        is_original = self._match_original(title)
+        is_4k = self._is_4k(title_norm)
+        is_1080 = self._is_1080(title_norm)
+        has_zh_sub = self._has_chinese_subtitle(title_norm=title_norm, quality_code=quality_code)
+
+        keep = False
+        if self._include_original and is_original:
+            keep = True
+        if self._enable_zh4k and is_4k and has_zh_sub:
+            keep = True
+        if self._enable_4k and is_4k and not has_zh_sub:
+            keep = True
+        if self._enable_zh1080 and is_1080 and has_zh_sub:
+            keep = True
+        if self._enable_1080 and is_1080 and not has_zh_sub:
+            keep = True
+        return keep
 
     def _match_original(self, title: str) -> bool:
         title_norm = re.sub(r"\s+", "", title).lower()
