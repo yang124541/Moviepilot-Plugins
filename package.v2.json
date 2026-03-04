@@ -3,11 +3,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.2.4",
+    "version": "1.2.5",
     "icon": "gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.2.5": "进一步提速：同父级资源复用 downlist 缓存，避免重复请求详情页与重复拉取父级数据。",
       "v1.2.4": "提速优化：补全阶段优先用 downlist 哈希直接构造 magnet，避免逐条请求详情页导致搜索变慢。",
       "v1.2.3": "插件头像改为观影站点图标（gying.png），并更新版本触发客户端刷新。",
       "v1.2.2": "新增父级 downlist 补全：搜索命中父级后补抓同父级 bt 条目，修复站内可见但搜索页未返回的资源漏抓。",

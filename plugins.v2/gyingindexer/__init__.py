@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.2.4"
+    plugin_version = "1.2.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -308,9 +308,11 @@ class GyingIndexer(_PluginBase):
                 return []
 
             results: List[TorrentInfo] = []
-            parent_tag_cache: Dict[str, Tuple[Dict[str, str], Dict[str, str]]] = {}
             parent_meta_cache: Dict[str, Dict[str, Any]] = {}
             parent_default_dir: Dict[str, str] = {}
+            parent_down_entries_cache: Dict[str, List[Dict[str, Any]]] = {}
+            parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            bt_parent_cache: Dict[str, str] = {}
             result_ids: Set[str] = set()
             for entry in search_entries:
                 res_id = str(entry.get("id") or "").strip()
@@ -327,45 +329,74 @@ class GyingIndexer(_PluginBase):
                 search_tag_label = str(entry.get("tag") or "").strip()
 
                 detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
-                detail_html = client.get(detail_url)
                 detail_data: Dict[str, Any] = {}
-                if detail_html:
-                    _detail_data = self._extract_js_object(detail_html, "_obj.d")
-                    if isinstance(_detail_data, dict):
-                        detail_data = _detail_data
 
                 tag_code = ""
                 tag_label = ""
                 parent_meta: Dict[str, Any] = {}
-                parent_dir, parent_id = self._parse_parent_route(detail_data.get("du"))
-                if parent_dir and parent_id:
-                    cache_key = f"{parent_dir}/{parent_id}"
-                    parent_default_dir.setdefault(cache_key, res_dir)
-                    if cache_key not in parent_tag_cache:
-                        parent_tag_cache[cache_key] = self._fetch_parent_tag_index(
-                            client=client,
-                            base_url=base_url,
-                            parent_dir=parent_dir,
-                            parent_id=parent_id
-                        )
-                    tag_by_bt, label_by_code = parent_tag_cache[cache_key]
-                    for code, label in (label_by_code or {}).items():
-                        code_key = str(code or "").strip().lower()
-                        label_text = str(label or "").strip()
-                        if code_key and label_text:
-                            self._quality_label_by_code[code_key] = label_text
-                    tag_code = str(tag_by_bt.get(res_id) or "").strip().lower()
-                    tag_label = str(label_by_code.get(tag_code) or "").strip()
-                    if cache_key not in parent_meta_cache:
-                        parent_meta_cache[cache_key] = self._fetch_parent_meta(
-                            client=client,
-                            base_url=base_url,
-                            parent_dir=parent_dir,
-                            parent_id=parent_id
-                        )
-                    parent_meta = parent_meta_cache[cache_key] or {}
+                down_item: Dict[str, Any] = {}
+                cache_key = str(bt_parent_cache.get(res_id) or "").strip()
+                if cache_key:
+                    parent_meta = parent_meta_cache.get(cache_key) or {}
+                    down_item = parent_down_entry_map_cache.get(cache_key, {}).get(res_id) or {}
+                    if down_item:
+                        res_dir = str(down_item.get("dir") or res_dir).strip().lower() or res_dir
+                        title = str(down_item.get("title") or title).strip() or title
+                        detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
+                        tag_code = str(down_item.get("quality") or "").strip().lower()
+                        tag_label = str(down_item.get("quality_label") or "").strip()
+                else:
+                    detail_html = client.get(detail_url)
+                    if detail_html:
+                        _detail_data = self._extract_js_object(detail_html, "_obj.d")
+                        if isinstance(_detail_data, dict):
+                            detail_data = _detail_data
 
-                filter_title = str(detail_data.get("title") or title or "").strip()
+                    parent_dir, parent_id = self._parse_parent_route(detail_data.get("du"))
+                    if parent_dir and parent_id:
+                        cache_key = f"{parent_dir}/{parent_id}"
+                        parent_default_dir.setdefault(cache_key, res_dir)
+
+                        if cache_key not in parent_meta_cache:
+                            parent_meta_cache[cache_key] = self._fetch_parent_meta(
+                                client=client,
+                                base_url=base_url,
+                                parent_dir=parent_dir,
+                                parent_id=parent_id
+                            )
+                        parent_meta = parent_meta_cache.get(cache_key) or {}
+
+                        if cache_key not in parent_down_entries_cache:
+                            _down_entries = self._fetch_parent_down_entries(
+                                client=client,
+                                base_url=base_url,
+                                parent_dir=parent_dir,
+                                parent_id=parent_id
+                            )
+                            parent_down_entries_cache[cache_key] = _down_entries
+                            _id_map: Dict[str, Dict[str, Any]] = {}
+                            for _item in _down_entries:
+                                _cid = str(_item.get("id") or "").strip()
+                                if not _cid:
+                                    continue
+                                _id_map[_cid] = _item
+                                bt_parent_cache[_cid] = cache_key
+                            parent_down_entry_map_cache[cache_key] = _id_map
+
+                        down_item = parent_down_entry_map_cache.get(cache_key, {}).get(res_id) or {}
+                        if down_item:
+                            res_dir = str(down_item.get("dir") or res_dir).strip().lower() or res_dir
+                            title = str(down_item.get("title") or title).strip() or title
+                            detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
+                            tag_code = str(down_item.get("quality") or "").strip().lower()
+                            tag_label = str(down_item.get("quality_label") or "").strip()
+
+                filter_title = str(
+                    detail_data.get("title")
+                    or down_item.get("title")
+                    or title
+                    or ""
+                ).strip()
                 quality_code_for_filter = tag_code or search_quality_code
                 quality_label_for_filter = (
                     tag_label
@@ -379,27 +410,37 @@ class GyingIndexer(_PluginBase):
                 ):
                     continue
 
-                download_candidates = self._extract_download_candidates_from_node(
-                    node=detail_data,
-                    base_url=base_url
-                )
-                if not download_candidates:
-                    download_candidates = self._fetch_download_candidates_from_downurl(
-                        client=client,
-                        base_url=base_url,
-                        resource_dir=res_dir,
-                        resource_id=res_id
+                entry_hash = str(down_item.get("hash") or "").strip()
+                enclosure = self._build_magnet_from_hash(info_hash=entry_hash, title=title)
+                if not enclosure:
+                    if not detail_data:
+                        detail_html = client.get(detail_url)
+                        if detail_html:
+                            _detail_data = self._extract_js_object(detail_html, "_obj.d")
+                            if isinstance(_detail_data, dict):
+                                detail_data = _detail_data
+
+                    download_candidates = self._extract_download_candidates_from_node(
+                        node=detail_data,
+                        base_url=base_url
                     )
-                enclosure = self._pick_preferred_enclosure(download_candidates)
+                    if not download_candidates:
+                        download_candidates = self._fetch_download_candidates_from_downurl(
+                            client=client,
+                            base_url=base_url,
+                            resource_dir=res_dir,
+                            resource_id=res_id
+                        )
+                    enclosure = self._pick_preferred_enclosure(download_candidates)
                 if not enclosure:
                     continue
 
-                search_size_text = str(entry.get("size") or "").strip()
+                search_size_text = str(down_item.get("size") or entry.get("size") or "").strip()
                 detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
                 size_bytes = self._parse_size_bytes(detail_size_text, search_size_text)
-                seeds_text = entry.get("seeds")
-                elapsed_text = str(entry.get("time") or "").strip()
-                tag_text = search_tag_label
+                seeds_text = down_item.get("seeds") or entry.get("seeds")
+                elapsed_text = str(down_item.get("time") or entry.get("time") or "").strip()
+                tag_text = tag_label or search_tag_label
                 detail_title = str(detail_data.get("title") or "").strip()
                 parent_year = str(parent_meta.get("year") or "").strip()
                 title_for_match = self._build_match_title(
@@ -447,12 +488,15 @@ class GyingIndexer(_PluginBase):
                 except Exception:
                     continue
                 default_dir = str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt"
-                down_entries = self._fetch_parent_down_entries(
-                    client=client,
-                    base_url=base_url,
-                    parent_dir=parent_dir,
-                    parent_id=parent_id
-                )
+                down_entries = parent_down_entries_cache.get(cache_key)
+                if down_entries is None:
+                    down_entries = self._fetch_parent_down_entries(
+                        client=client,
+                        base_url=base_url,
+                        parent_dir=parent_dir,
+                        parent_id=parent_id
+                    )
+                    parent_down_entries_cache[cache_key] = down_entries
                 if not down_entries:
                     continue
 
