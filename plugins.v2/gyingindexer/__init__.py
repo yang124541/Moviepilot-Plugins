@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -608,11 +608,15 @@ class GyingIndexer(_PluginBase):
 
     @staticmethod
     def _is_4k(title_norm: str) -> bool:
-        return "2160p" in title_norm or bool(re.search(r"(?<!\d)4k(?!\d)", title_norm))
+        return (
+            "2160p" in title_norm or
+            bool(re.search(r"(?<!\d)2160(?!\d)", title_norm)) or
+            bool(re.search(r"(?<!\d)4k(?!\d)", title_norm))
+        )
 
     @staticmethod
     def _is_1080(title_norm: str) -> bool:
-        if "1080p" not in title_norm:
+        if "1080p" not in title_norm and not bool(re.search(r"(?<!\d)1080(?!\d)", title_norm)):
             return False
         # 同时出现 2160/4k 时优先认为是 4k
         return not GyingIndexer._is_4k(title_norm)
@@ -628,9 +632,14 @@ class GyingIndexer(_PluginBase):
         if not title_norm:
             return False
 
+        q = str(quality_code or "").strip().lower()
         is_original = self._match_original(title)
-        is_4k = self._is_4k(title_norm)
-        is_1080 = self._is_1080(title_norm)
+        is_4k = (q == "i9") or self._is_4k(title_norm)
+        is_1080 = (q == "i5") or self._is_1080(title_norm)
+        if q == "i9":
+            is_1080 = False
+        elif q == "i5":
+            is_4k = False
         has_zh_sub = self._has_chinese_subtitle(title_norm=title_norm, quality_code=quality_code)
 
         keep = False
