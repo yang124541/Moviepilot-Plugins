@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.2.3"
+    plugin_version = "1.2.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -479,25 +479,28 @@ class GyingIndexer(_PluginBase):
 
                     child_dir = str(down_item.get("dir") or default_dir).strip().lower() or "bt"
                     child_detail_url = urljoin(base_url, f"{child_dir}/{child_id}")
-                    child_detail_html = client.get(child_detail_url)
+                    child_hash = str(down_item.get("hash") or "").strip()
+                    enclosure = self._build_magnet_from_hash(info_hash=child_hash, title=child_title)
                     child_detail_data: Dict[str, Any] = {}
-                    if child_detail_html:
-                        _child_detail_data = self._extract_js_object(child_detail_html, "_obj.d")
-                        if isinstance(_child_detail_data, dict):
-                            child_detail_data = _child_detail_data
+                    if not enclosure:
+                        child_detail_html = client.get(child_detail_url)
+                        if child_detail_html:
+                            _child_detail_data = self._extract_js_object(child_detail_html, "_obj.d")
+                            if isinstance(_child_detail_data, dict):
+                                child_detail_data = _child_detail_data
 
-                    download_candidates = self._extract_download_candidates_from_node(
-                        node=child_detail_data,
-                        base_url=base_url
-                    )
-                    if not download_candidates:
-                        download_candidates = self._fetch_download_candidates_from_downurl(
-                            client=client,
-                            base_url=base_url,
-                            resource_dir=child_dir,
-                            resource_id=child_id
+                        download_candidates = self._extract_download_candidates_from_node(
+                            node=child_detail_data,
+                            base_url=base_url
                         )
-                    enclosure = self._pick_preferred_enclosure(download_candidates)
+                        if not download_candidates:
+                            download_candidates = self._fetch_download_candidates_from_downurl(
+                                client=client,
+                                base_url=base_url,
+                                resource_dir=child_dir,
+                                resource_id=child_id
+                            )
+                        enclosure = self._pick_preferred_enclosure(download_candidates)
                     if not enclosure:
                         continue
 
@@ -953,6 +956,8 @@ class GyingIndexer(_PluginBase):
         seeds = self._as_list(list_obj.get("e"))
         times = self._as_list(list_obj.get("n"))
         qualities = self._as_list(list_obj.get("p"))
+        hashes = self._as_list(list_obj.get("m"))
+        dirs = self._as_list(list_obj.get("d"))
 
         entries: List[Dict[str, Any]] = []
         for idx, btid in enumerate(ids):
@@ -963,13 +968,14 @@ class GyingIndexer(_PluginBase):
             quality_label = str(label_by_code.get(quality_code) or "").strip()
             entries.append({
                 "id": rid,
-                "dir": "bt",
+                "dir": str(self._safe_at(dirs, idx) or "bt").strip().lower() or "bt",
                 "title": str(self._safe_at(titles, idx) or "").strip(),
                 "size": str(self._safe_at(sizes, idx) or "").strip(),
                 "seeds": self._safe_at(seeds, idx),
                 "time": str(self._safe_at(times, idx) or "").strip(),
                 "quality": quality_code,
                 "quality_label": quality_label,
+                "hash": str(self._safe_at(hashes, idx) or "").strip(),
             })
         return entries
 
@@ -1014,6 +1020,17 @@ class GyingIndexer(_PluginBase):
         if not base:
             return marker
         return f"{base} | {marker}"
+
+    @staticmethod
+    def _build_magnet_from_hash(info_hash: str, title: str = "") -> str:
+        token = str(info_hash or "").strip()
+        if not token:
+            return ""
+        if not re.match(r"^(?:[0-9a-fA-F]{40}|[A-Za-z2-7]{32})$", token):
+            return ""
+        if title:
+            return f"magnet:?xt=urn:btih:{token}&dn={quote(str(title))}"
+        return f"magnet:?xt=urn:btih:{token}"
 
     def _match_original(self, title: str) -> bool:
         title_norm = re.sub(r"\s+", "", title).lower()
