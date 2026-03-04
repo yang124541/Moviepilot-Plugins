@@ -1,8 +1,9 @@
+import html
 import json
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 from fastapi.concurrency import run_in_threadpool
 
@@ -20,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.11"
+    plugin_version = "1.0.13"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -307,23 +308,37 @@ class GyingIndexer(_PluginBase):
 
             results: List[TorrentInfo] = []
             for entry in search_entries:
-                btid = str(entry.get("id") or "").strip()
-                if not btid:
+                res_id = str(entry.get("id") or "").strip()
+                if not res_id:
                     continue
+                res_dir = str(entry.get("dir") or "bt").strip().lower()
+                if not res_dir:
+                    res_dir = "bt"
 
                 title = str(entry.get("title") or "").strip()
                 if not title:
                     continue
 
-                detail_url = urljoin(base_url, f"bt/{btid}")
+                detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
                 detail_html = client.get(detail_url)
-                if not detail_html:
-                    continue
-                detail_data = self._extract_js_object(detail_html, "_obj.d")
-                if not isinstance(detail_data, dict):
-                    continue
-                magnet = str(detail_data.get("magnet") or "").strip()
-                if not magnet.startswith("magnet:?"):
+                detail_data: Dict[str, Any] = {}
+                if detail_html:
+                    _detail_data = self._extract_js_object(detail_html, "_obj.d")
+                    if isinstance(_detail_data, dict):
+                        detail_data = _detail_data
+                download_candidates = self._extract_download_candidates_from_node(
+                    node=detail_data,
+                    base_url=base_url
+                )
+                if not download_candidates:
+                    download_candidates = self._fetch_download_candidates_from_downurl(
+                        client=client,
+                        base_url=base_url,
+                        resource_dir=res_dir,
+                        resource_id=res_id
+                    )
+                enclosure = self._pick_preferred_enclosure(download_candidates)
+                if not enclosure:
                     continue
 
                 search_size_text = str(entry.get("size") or "").strip()
@@ -344,7 +359,7 @@ class GyingIndexer(_PluginBase):
                     site_downloader=site.get("downloader"),
                     title=title,
                     description=tag_text or detail_title,
-                    enclosure=magnet,
+                    enclosure=enclosure,
                     page_url=detail_url,
                     size=size_bytes,
                     seeders=self._to_int(seeds_text),
@@ -500,8 +515,9 @@ class GyingIndexer(_PluginBase):
 
         entries: List[Dict[str, Any]] = []
         for idx, btid in enumerate(ids):
-            if str(self._safe_at(dirs, idx) or "").lower() != "bt":
-                continue
+            row_dir = str(self._safe_at(dirs, idx) or "").strip().lower()
+            if not row_dir:
+                row_dir = "bt"
             title = str(self._safe_at(titles, idx) or "").strip()
             if not title:
                 continue
@@ -512,6 +528,7 @@ class GyingIndexer(_PluginBase):
 
             entries.append({
                 "id": btid,
+                "dir": row_dir,
                 "title": title,
                 "size": self._safe_at(sizes, idx),
                 "seeds": self._safe_at(seeds, idx),
@@ -711,6 +728,118 @@ class GyingIndexer(_PluginBase):
 
         walk(search_data)
         return result
+
+    def _fetch_download_candidates_from_downurl(self, client: RequestUtils, base_url: str,
+                                                resource_dir: str, resource_id: str) -> List[str]:
+        """
+        回退接口：部分条目详情页不直接包含 magnet，需要从 downurl 接口读取。
+        返回磁力与可下载链接候选（优先磁力，其次 torrent/媒体直链）。
+        """
+        url = urljoin(base_url, f"res/downurl/{resource_dir}/{resource_id}")
+        text = client.get(url)
+        if not text:
+            return []
+        try:
+            obj = json.loads(text)
+        except Exception:
+            return []
+
+        return self._extract_download_candidates_from_node(node=obj, base_url=base_url)
+
+    def _extract_download_candidates_from_node(self, node: Any, base_url: str) -> List[str]:
+        ordered: List[str] = []
+        seen: Set[str] = set()
+
+        def add_value(value: str):
+            item = str(value or "").strip()
+            if not item:
+                return
+            key = item.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            ordered.append(item)
+
+        def walk(data: Any):
+            if isinstance(data, dict):
+                for v in data.values():
+                    walk(v)
+            elif isinstance(data, list):
+                for item in data:
+                    walk(item)
+            elif isinstance(data, str):
+                for item in self._extract_download_candidates_from_text(data=data, base_url=base_url):
+                    add_value(item)
+
+        walk(node)
+        return ordered
+
+    def _extract_download_candidates_from_text(self, data: str, base_url: str) -> List[str]:
+        text = html.unescape(str(data or "").strip())
+        if not text:
+            return []
+
+        variants: List[str] = [text]
+        cursor = text
+        for _ in range(2):
+            decoded = unquote(cursor)
+            if decoded == cursor:
+                break
+            variants.append(decoded)
+            cursor = decoded
+
+        ordered: List[str] = []
+        seen: Set[str] = set()
+
+        def add_value(value: str):
+            item = str(value or "").strip().strip("\"'")
+            if not item:
+                return
+            key = item.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            ordered.append(item)
+
+        for variant in variants:
+            for magnet in re.findall(r"magnet:\?[^\s\"'<>]+", variant, flags=re.IGNORECASE):
+                add_value(magnet)
+
+            url_text = variant.strip().strip("\"'")
+            if not url_text:
+                continue
+            if url_text.startswith("//"):
+                url_text = "https:" + url_text
+            elif url_text.startswith("/"):
+                url_text = urljoin(base_url, url_text)
+            elif not re.match(r"^https?://", url_text, flags=re.IGNORECASE):
+                continue
+
+            lower_url = url_text.lower()
+            if re.search(r"\.(torrent|mkv|mp4)(?:$|[?#])", lower_url):
+                add_value(url_text)
+            elif any(token in lower_url for token in ("/down/", "res/downurl/", "download")):
+                add_value(url_text)
+
+        return ordered
+
+    @staticmethod
+    def _pick_preferred_enclosure(candidates: List[str]) -> str:
+        if not candidates:
+            return ""
+        for item in candidates:
+            value = str(item or "").strip()
+            if value.lower().startswith("magnet:?"):
+                return value
+        for item in candidates:
+            value = str(item or "").strip()
+            if re.search(r"\.torrent(?:$|[?#])", value, flags=re.IGNORECASE):
+                return value
+        for item in candidates:
+            value = str(item or "").strip()
+            if re.search(r"\.(mkv|mp4)(?:$|[?#])", value, flags=re.IGNORECASE):
+                return value
+        return str(candidates[0] or "").strip()
 
     @staticmethod
     def _extract_js_object(html: str, marker: str) -> Optional[Dict[str, Any]]:
