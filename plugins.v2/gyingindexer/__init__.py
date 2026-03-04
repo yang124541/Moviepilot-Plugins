@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.16"
+    plugin_version = "1.0.17"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -438,8 +438,6 @@ class GyingIndexer(_PluginBase):
 
     def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str) -> List[Dict[str, Any]]:
         entry_map: Dict[str, Dict[str, Any]] = {}
-        discovered_original_codes: Set[str] = set()
-
         keyword_plan = self._expand_search_keywords(client=client, base_url=base_url, keyword=keyword)
         logger.info(f"GYing keyword plan: {keyword_plan}")
 
@@ -457,7 +455,6 @@ class GyingIndexer(_PluginBase):
                 search_data = self._extract_js_object(html, "_obj.search")
                 if not isinstance(search_data, dict):
                     break
-                discovered_original_codes.update(self._extract_original_codes(search_data))
                 page_entries = self._extract_entries_from_search(
                     search_data=search_data,
                     forced_quality=None
@@ -475,9 +472,6 @@ class GyingIndexer(_PluginBase):
                 if page_no > 1 and new_count == 0:
                     break
 
-        self._resolved_original_codes = {str(x).lower() for x in discovered_original_codes if x}
-        if self._resolved_original_codes:
-            logger.info(f"GYing detected original codes: {sorted(self._resolved_original_codes)}")
         logger.info(f"GYing entries collected: {len(entry_map)}")
         return list(entry_map.values())
 
@@ -674,49 +668,20 @@ class GyingIndexer(_PluginBase):
     def _normalize_text(text: Any) -> str:
         return re.sub(r"\s+", "", str(text or "")).lower()
 
-    def _has_chinese_subtitle(self, title_norm: str, quality_label: str = "") -> bool:
+    def _has_chinese_subtitle(self, quality_label: str = "") -> bool:
         label_norm = self._normalize_text(quality_label)
-        if label_norm:
-            if "中字" in label_norm or "中文" in label_norm:
-                return True
-            return any(token in title_norm for token in self._subtitle_tokens)
-        return any(token in title_norm for token in self._subtitle_tokens)
+        return ("中字" in label_norm) or ("中文" in label_norm)
 
     def _should_keep_entry(self, title: str, quality_code: str = "", quality_label: str = "") -> bool:
-        title_norm = self._normalize_text(title)
-        if not title_norm:
+        label_norm = self._normalize_text(quality_label)
+        if not label_norm:
+            # 严格模式：没有站点标签时不参与筛选。
             return False
 
-        q = str(quality_code or "").strip().lower()
-        label_norm = self._normalize_text(quality_label)
-
-        is_original = False
-        is_4k = False
-        is_1080 = False
-        if label_norm:
-            is_original = ("原盘" in label_norm) or self._match_original(title)
-            has_res_hint = any(token in label_norm for token in ("720", "1080", "4k", "2160"))
-            if has_res_hint:
-                is_4k = ("4k" in label_norm) or ("2160" in label_norm)
-                is_1080 = ("1080" in label_norm) and not is_4k
-            else:
-                is_4k = self._is_4k(title_norm)
-                is_1080 = self._is_1080(title_norm)
-        else:
-            is_original = (q in self._resolved_original_codes) or self._match_original(title)
-            is_4k = self._is_4k(title_norm)
-            is_1080 = self._is_1080(title_norm)
-            # 兼容旧版站点分类码（i5/i9）
-            if q == "i9":
-                is_4k = True
-                is_1080 = False
-            elif q == "i5":
-                is_1080 = True
-                is_4k = False
-
-        if not is_original and q in self._resolved_original_codes:
-            is_original = True
-        has_zh_sub = self._has_chinese_subtitle(title_norm=title_norm, quality_label=quality_label)
+        is_original = "原盘" in label_norm
+        is_4k = ("4k" in label_norm) or ("2160" in label_norm)
+        is_1080 = ("1080" in label_norm) and not is_4k
+        has_zh_sub = self._has_chinese_subtitle(quality_label=quality_label)
 
         keep = False
         if self._include_original and is_original:
