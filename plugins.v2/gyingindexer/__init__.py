@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.17"
+    plugin_version = "1.0.18"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -307,6 +307,7 @@ class GyingIndexer(_PluginBase):
 
             results: List[TorrentInfo] = []
             parent_tag_cache: Dict[str, Tuple[Dict[str, str], Dict[str, str]]] = {}
+            parent_meta_cache: Dict[str, Dict[str, Any]] = {}
             for entry in search_entries:
                 res_id = str(entry.get("id") or "").strip()
                 if not res_id:
@@ -329,6 +330,7 @@ class GyingIndexer(_PluginBase):
 
                 tag_code = ""
                 tag_label = ""
+                parent_meta: Dict[str, Any] = {}
                 parent_dir, parent_id = self._parse_parent_route(detail_data.get("du"))
                 if parent_dir and parent_id:
                     cache_key = f"{parent_dir}/{parent_id}"
@@ -342,6 +344,14 @@ class GyingIndexer(_PluginBase):
                     tag_by_bt, label_by_code = parent_tag_cache[cache_key]
                     tag_code = str(tag_by_bt.get(res_id) or "").strip().lower()
                     tag_label = str(label_by_code.get(tag_code) or "").strip()
+                    if cache_key not in parent_meta_cache:
+                        parent_meta_cache[cache_key] = self._fetch_parent_meta(
+                            client=client,
+                            base_url=base_url,
+                            parent_dir=parent_dir,
+                            parent_id=parent_id
+                        )
+                    parent_meta = parent_meta_cache[cache_key] or {}
 
                 filter_title = str(detail_data.get("title") or title or "").strip()
                 if not self._should_keep_entry(
@@ -373,6 +383,16 @@ class GyingIndexer(_PluginBase):
                 elapsed_text = str(entry.get("time") or "").strip()
                 tag_text = str(entry.get("tag") or "").strip()
                 detail_title = str(detail_data.get("title") or "").strip()
+                parent_year = str(parent_meta.get("year") or "").strip()
+                title_for_match = self._build_match_title(
+                    title=title,
+                    parent_title=str(parent_meta.get("title") or "").strip(),
+                    parent_year=parent_year
+                )
+                desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
+                description = " | ".join(desc_parts[:3])
+                if parent_year and not re.search(r"(19|20)\d{2}", description):
+                    description = f"{description} {parent_year}".strip()
 
                 results.append(TorrentInfo(
                     site=site.get("id"),
@@ -382,8 +402,8 @@ class GyingIndexer(_PluginBase):
                     site_proxy=site.get("proxy"),
                     site_order=site.get("pri"),
                     site_downloader=site.get("downloader"),
-                    title=title,
-                    description=tag_text or detail_title,
+                    title=title_for_match or title,
+                    description=description or detail_title or title,
                     enclosure=enclosure,
                     page_url=detail_url,
                     size=size_bytes,
@@ -747,6 +767,34 @@ class GyingIndexer(_PluginBase):
                 tag_by_bt[bt_key] = str(self._safe_at(tag_codes, idx) or "").strip().lower()
 
         return tag_by_bt, label_by_code
+
+    def _fetch_parent_meta(self, client: RequestUtils, base_url: str,
+                           parent_dir: str, parent_id: str) -> Dict[str, Any]:
+        detail_url = urljoin(base_url, f"{parent_dir}/{parent_id}")
+        html = client.get(detail_url)
+        if not html:
+            return {}
+        detail_data = self._extract_js_object(html, "_obj.d")
+        if not isinstance(detail_data, dict):
+            return {}
+        return {
+            "title": str(detail_data.get("title") or "").strip(),
+            "year": str(detail_data.get("year") or "").strip(),
+        }
+
+    @staticmethod
+    def _build_match_title(title: str, parent_title: str = "", parent_year: str = "") -> str:
+        base = str(title or "").strip()
+        if not base:
+            return ""
+        if re.search(r"(19|20)\d{2}", base):
+            return base
+        year = str(parent_year or "").strip()
+        if re.match(r"^(19|20)\d{2}$", year):
+            return f"{base}.{year}"
+        if parent_title and parent_title not in base:
+            return f"{parent_title}.{base}"
+        return base
 
     def _match_original(self, title: str) -> bool:
         title_norm = re.sub(r"\s+", "", title).lower()
