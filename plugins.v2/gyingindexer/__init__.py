@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.2.6"
+    plugin_version = "1.2.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -288,7 +288,11 @@ class GyingIndexer(_PluginBase):
         proxies = settings.PROXY if site.get("proxy") else None
         referer = base_url
 
-        logger.info(f"GYing search start: {keyword}")
+        logger.info(
+            f"GYing search start: {keyword} "
+            f"[1080={self._enable_1080}, zh1080={self._enable_zh1080}, "
+            f"4k={self._enable_4k}, zh4k={self._enable_zh4k}, original={self._include_original}]"
+        )
 
         try:
             client = RequestUtils(
@@ -866,20 +870,39 @@ class GyingIndexer(_PluginBase):
     def _normalize_text(text: Any) -> str:
         return re.sub(r"\s+", "", str(text or "")).lower()
 
-    def _has_chinese_subtitle(self, quality_label: str = "") -> bool:
+    def _has_chinese_subtitle(self, quality_label: str = "", title: str = "") -> bool:
         label_norm = self._normalize_text(quality_label)
-        return ("中字" in label_norm) or ("中文" in label_norm)
+        title_norm = self._normalize_text(title)
+        if ("中字" in label_norm) or ("中文" in label_norm):
+            return True
+        if ("中字" in title_norm) or ("中文" in title_norm):
+            return True
+
+        for token in self._subtitle_tokens:
+            token_norm = self._normalize_text(token)
+            if not token_norm:
+                continue
+            if token_norm in label_norm or token_norm in title_norm:
+                return True
+        return False
 
     def _should_keep_entry(self, title: str, quality_code: str = "", quality_label: str = "") -> bool:
         label_norm = self._normalize_text(quality_label)
-        if not label_norm:
-            # 严格模式：没有站点标签时不参与筛选。
-            return False
+        title_norm = self._normalize_text(title)
 
         is_original = "原盘" in label_norm
         is_4k = ("4k" in label_norm) or ("2160" in label_norm)
         is_1080 = ("1080" in label_norm) and not is_4k
-        has_zh_sub = self._has_chinese_subtitle(quality_label=quality_label)
+        has_zh_sub = self._has_chinese_subtitle(quality_label=quality_label, title=title)
+
+        # 标签缺失/异常时，回退到标题判断，减少误过滤。
+        if not (is_original or is_4k or is_1080):
+            is_original = self._match_original(title)
+            is_4k = self._is_4k(title_norm)
+            is_1080 = self._is_1080(title_norm)
+
+        if not (is_original or is_4k or is_1080):
+            return False
 
         keep = False
         if self._include_original and is_original:
