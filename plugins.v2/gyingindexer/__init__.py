@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.15"
+    plugin_version = "1.0.16"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -440,42 +440,83 @@ class GyingIndexer(_PluginBase):
         entry_map: Dict[str, Dict[str, Any]] = {}
         discovered_original_codes: Set[str] = set()
 
-        for page_no in range(1, self._max_search_pages + 1):
-            search_url = self._build_search_url(
-                base_url=base_url,
-                keyword=keyword,
-                page_no=page_no,
-                quality_code=None
-            )
-            html = client.get(search_url)
-            if not html:
-                break
-            search_data = self._extract_js_object(html, "_obj.search")
-            if not isinstance(search_data, dict):
-                break
-            discovered_original_codes.update(self._extract_original_codes(search_data))
-            page_entries = self._extract_entries_from_search(
-                search_data=search_data,
-                forced_quality=None
-            )
-            if not page_entries:
-                break
+        keyword_plan = self._expand_search_keywords(client=client, base_url=base_url, keyword=keyword)
+        logger.info(f"GYing keyword plan: {keyword_plan}")
 
-            new_count = 0
-            for item in page_entries:
-                key = str(item.get("id") or "").strip()
-                if key and key not in entry_map:
-                    entry_map[key] = item
-                    new_count += 1
+        for query_keyword in keyword_plan:
+            for page_no in range(1, self._max_search_pages + 1):
+                search_url = self._build_search_url(
+                    base_url=base_url,
+                    keyword=query_keyword,
+                    page_no=page_no,
+                    quality_code=None
+                )
+                html = client.get(search_url)
+                if not html:
+                    break
+                search_data = self._extract_js_object(html, "_obj.search")
+                if not isinstance(search_data, dict):
+                    break
+                discovered_original_codes.update(self._extract_original_codes(search_data))
+                page_entries = self._extract_entries_from_search(
+                    search_data=search_data,
+                    forced_quality=None
+                )
+                if not page_entries:
+                    break
 
-            if page_no > 1 and new_count == 0:
-                break
+                new_count = 0
+                for item in page_entries:
+                    key = str(item.get("id") or "").strip()
+                    if key and key not in entry_map:
+                        entry_map[key] = item
+                        new_count += 1
+
+                if page_no > 1 and new_count == 0:
+                    break
 
         self._resolved_original_codes = {str(x).lower() for x in discovered_original_codes if x}
         if self._resolved_original_codes:
             logger.info(f"GYing detected original codes: {sorted(self._resolved_original_codes)}")
         logger.info(f"GYing entries collected: {len(entry_map)}")
         return list(entry_map.values())
+
+    def _expand_search_keywords(self, client: RequestUtils, base_url: str, keyword: str) -> List[str]:
+        primary = str(keyword or "").strip()
+        if not primary:
+            return []
+
+        keywords: List[str] = [primary]
+        seen: Set[str] = {self._normalize_text(primary)}
+
+        suggest_url = urljoin(base_url, f"res/s/{quote(primary)}")
+        text = client.get(suggest_url)
+        if not text:
+            return keywords
+
+        try:
+            suggest_list = json.loads(text)
+        except Exception:
+            return keywords
+
+        if not isinstance(suggest_list, list):
+            return keywords
+
+        for item in suggest_list[:3]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            norm = self._normalize_text(title)
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            keywords.append(title)
+            if len(keywords) >= 3:
+                break
+
+        return keywords
 
     def _extract_entries_from_search(self, search_data: Dict[str, Any],
                                      forced_quality: Optional[str]) -> List[Dict[str, Any]]:
