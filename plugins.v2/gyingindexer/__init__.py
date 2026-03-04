@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影索引（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
