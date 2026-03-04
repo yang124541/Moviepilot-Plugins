@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.2.5"
+    plugin_version = "1.2.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -441,7 +441,7 @@ class GyingIndexer(_PluginBase):
                 seeds_text = down_item.get("seeds") or entry.get("seeds")
                 elapsed_text = str(down_item.get("time") or entry.get("time") or "").strip()
                 tag_text = tag_label or search_tag_label
-                detail_title = str(detail_data.get("title") or "").strip()
+                detail_title = str(detail_data.get("title") or title).strip()
                 parent_year = str(parent_meta.get("year") or "").strip()
                 title_for_match = self._build_match_title(
                     title=title,
@@ -554,7 +554,7 @@ class GyingIndexer(_PluginBase):
                     seeds_text = down_item.get("seeds")
                     elapsed_text = str(down_item.get("time") or "").strip()
                     tag_text = child_quality_label
-                    detail_title = str(child_detail_data.get("title") or "").strip()
+                    detail_title = str(child_detail_data.get("title") or child_title).strip()
                     parent_year = str(parent_meta.get("year") or "").strip()
                     title_for_match = self._build_match_title(
                         title=child_title,
@@ -1337,14 +1337,38 @@ class GyingIndexer(_PluginBase):
         若仅有纯数字（如 8），按 GB 处理，避免被识别为字节。
         """
         numeric_value: Optional[float] = None
+        unit_map = {
+            "K": 1024,
+            "M": 1024 ** 2,
+            "G": 1024 ** 3,
+            "T": 1024 ** 4,
+            "P": 1024 ** 5,
+        }
         for raw in size_texts:
             text = str(raw or "").strip()
             if not text:
                 continue
 
+            # 优先兼容站点常见简写：12.81G / 774.46M / 1.2T
+            short_match = re.match(r"^\s*(\d+(?:\.\d+)?)\s*([kKmMgGtTpP])\s*$", text)
+            if short_match:
+                try:
+                    value = float(short_match.group(1))
+                    unit = short_match.group(2).upper()
+                    factor = unit_map.get(unit)
+                    if factor and value > 0:
+                        return int(value * factor)
+                except Exception:
+                    pass
+
             has_unit = bool(re.search(r"[a-zA-Z]", text))
             if has_unit:
-                size = StringUtils.num_filesize(text)
+                normalized = re.sub(r"\s+", "", text).upper()
+                normalized = normalized.replace("IB", "B")
+                unit_tail = re.search(r"(K|M|G|T|P)$", normalized)
+                if unit_tail:
+                    normalized = f"{normalized}B"
+                size = StringUtils.num_filesize(normalized)
                 if size > 0:
                     return size
 
