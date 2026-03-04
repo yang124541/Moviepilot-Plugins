@@ -20,7 +20,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "spider.png"
-    plugin_version = "1.0.10"
+    plugin_version = "1.0.11"
     plugin_author = "yang124541"
     author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
     plugin_config_prefix = "gyingindexer_"
@@ -44,6 +44,7 @@ class GyingIndexer(_PluginBase):
     }
     _target_quality_codes: Tuple[str, ...] = ("i5", "i9")
     _max_search_pages: int = 8
+    _resolved_original_codes: Set[str] = set()
     _subtitle_tokens: Tuple[str, ...] = (
         "\u4e2d\u5b57",
         "\u4e2d\u6587\u5b57\u5e55",
@@ -55,18 +56,35 @@ class GyingIndexer(_PluginBase):
         "cht",
         "chi",
     )
-    _original_tokens: Tuple[str, ...] = (
+    _original_strong_tokens: Tuple[str, ...] = (
         "原盘",
         "原盘源",
-        "blu-ray",
-        "bluray",
-        "bdremux",
         "remux",
+        "bdremux",
         "uhd",
         "bdmv",
+        "bd25",
+        "bd50",
+        "bd66",
+        "bd100",
+        "iso",
         "m2ts",
+    )
+    _original_weak_tokens: Tuple[str, ...] = (
+        "blu-ray",
+        "bluray",
         "fullblu",
         "full bluray",
+    )
+    _non_original_tokens: Tuple[str, ...] = (
+        "web-dl",
+        "webrip",
+        "hdtv",
+        "bdrip",
+        "hdrip",
+        "dvdrip",
+        "x264",
+        "x265",
     )
 
     def init_plugin(self, config: dict = None):
@@ -96,6 +114,7 @@ class GyingIndexer(_PluginBase):
                     self._enable_zh4k = True
         if self._enabled:
             self._register_builtin_indexer()
+        self._resolved_original_codes = set()
 
     def get_state(self) -> bool:
         return self._enabled
@@ -379,6 +398,7 @@ class GyingIndexer(_PluginBase):
 
     def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str) -> List[Dict[str, Any]]:
         entry_map: Dict[str, Dict[str, Any]] = {}
+        discovered_original_codes: Set[str] = set()
 
         quality_plan: List[Optional[str]]
         quality_plan: List[Optional[str]] = []
@@ -401,6 +421,7 @@ class GyingIndexer(_PluginBase):
                 search_data = self._extract_js_object(html, "_obj.search")
                 if not isinstance(search_data, dict):
                     break
+                discovered_original_codes.update(self._extract_original_codes(search_data))
 
                 page_entries = self._extract_entries_from_search(
                     search_data=search_data,
@@ -444,6 +465,7 @@ class GyingIndexer(_PluginBase):
                 search_data = self._extract_js_object(html, "_obj.search")
                 if not isinstance(search_data, dict):
                     break
+                discovered_original_codes.update(self._extract_original_codes(search_data))
                 page_entries = self._extract_entries_from_search(
                     search_data=search_data,
                     forced_quality=None
@@ -455,6 +477,9 @@ class GyingIndexer(_PluginBase):
                     if key and key not in entry_map:
                         entry_map[key] = item
 
+        self._resolved_original_codes = {str(x).lower() for x in discovered_original_codes if x}
+        if self._resolved_original_codes:
+            logger.info(f"GYing detected original codes: {sorted(self._resolved_original_codes)}")
         logger.info(f"GYing entries collected: {len(entry_map)}")
         return list(entry_map.values())
 
@@ -622,7 +647,7 @@ class GyingIndexer(_PluginBase):
             return False
 
         q = str(quality_code or "").strip().lower()
-        is_original = self._match_original(title)
+        is_original = (q in self._resolved_original_codes) or self._match_original(title)
         is_4k = (q == "i9") or self._is_4k(title_norm)
         is_1080 = (q == "i5") or self._is_1080(title_norm)
         if q == "i9":
@@ -646,7 +671,46 @@ class GyingIndexer(_PluginBase):
 
     def _match_original(self, title: str) -> bool:
         title_norm = re.sub(r"\s+", "", title).lower()
-        return any(token.replace(" ", "") in title_norm for token in self._original_tokens)
+        has_negative = any(token.replace(" ", "") in title_norm for token in self._non_original_tokens)
+        has_strong = any(token.replace(" ", "") in title_norm for token in self._original_strong_tokens)
+        has_weak = any(token.replace(" ", "") in title_norm for token in self._original_weak_tokens)
+
+        if has_strong:
+            # remux/bdmv/iso 等强关键词优先保留；若明显是 web-dl/rip 编码则剔除
+            if has_negative and ("remux" not in title_norm and "原盘" not in title_norm):
+                return False
+            return True
+        # 弱关键词（bluray）必须同时具备 remux/uhd 才判为原盘
+        if has_weak and ("remux" in title_norm or "uhd" in title_norm):
+            return True
+        return False
+
+    @staticmethod
+    def _extract_original_codes(search_data: Dict[str, Any]) -> Set[str]:
+        """
+        递归提取搜索数据中与“原盘”关联的分类码。
+        常见结构示例：
+        - {"id":"i10","cat":"原盘"}
+        - {"p":"i10","name":"原盘"}
+        """
+        result: Set[str] = set()
+
+        def walk(node: Any):
+            if isinstance(node, dict):
+                text_values = [str(v) for v in node.values() if isinstance(v, str)]
+                if any("原盘" in tv for tv in text_values):
+                    for key in ("id", "p", "code", "catid", "value"):
+                        val = node.get(key)
+                        if isinstance(val, str) and re.match(r"^i\d+$", val.strip().lower()):
+                            result.add(val.strip().lower())
+                for v in node.values():
+                    walk(v)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(search_data)
+        return result
 
     @staticmethod
     def _extract_js_object(html: str, marker: str) -> Optional[Dict[str, Any]]:
