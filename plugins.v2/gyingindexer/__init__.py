@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.2.9"
+    plugin_version = "1.2.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1053,6 +1053,8 @@ class GyingIndexer(_PluginBase):
             return ""
         parent = str(parent_title or "").strip()
         year = str(parent_year or "").strip()
+        if re.match(r"^(19|20)\d{2}$", year):
+            base = GyingIndexer._strip_release_group_year_noise(base=base, parent_year=year)
         has_year_in_base = bool(re.search(r"(19|20)\d{2}", base))
 
         # 优先补父级片名，提升中文标题匹配命中（如：云图 + Cloud.Atlas...）。
@@ -1066,6 +1068,27 @@ class GyingIndexer(_PluginBase):
         if re.match(r"^(19|20)\d{2}$", year):
             return f"{base}.{year}"
         return base
+
+    @staticmethod
+    def _strip_release_group_year_noise(base: str, parent_year: str) -> str:
+        """
+        去除发布组名中与片子年份冲突的尾缀年份（如 EDGE2020）。
+        这类年份会干扰 MoviePilot 匹配年份判断，导致资源被误判不匹配。
+        """
+        text = str(base or "").strip()
+        if not text:
+            return text
+
+        def repl(match: re.Match) -> str:
+            prefix = str(match.group(1) or "")
+            token = str(match.group(2) or "")
+            y = str(match.group(3) or "")
+            if y and y != parent_year:
+                return f"{prefix}{token}"
+            return match.group(0)
+
+        # 命中示例：-EDGE2020 / .GROUP2019
+        return re.sub(r"([\-\.])([A-Za-z]{2,})(19|20)\d{2}\b", repl, text)
 
     @staticmethod
     def _append_unique_marker(description: str, resource_id: str, enclosure: str = "") -> str:
