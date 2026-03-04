@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "gying.png"
-    plugin_version = "1.2.8"
+    plugin_version = "1.2.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1051,17 +1051,20 @@ class GyingIndexer(_PluginBase):
         base = str(title or "").strip()
         if not base:
             return ""
-        if re.search(r"(19|20)\d{2}", base):
-            return base
+        parent = str(parent_title or "").strip()
         year = str(parent_year or "").strip()
+        has_year_in_base = bool(re.search(r"(19|20)\d{2}", base))
+
+        # 优先补父级片名，提升中文标题匹配命中（如：云图 + Cloud.Atlas...）。
+        if parent and parent not in base:
+            if re.match(r"^(19|20)\d{2}$", year) and year not in base:
+                return f"{parent}.{year}.{base}"
+            return f"{parent}.{base}"
+
+        if has_year_in_base:
+            return base
         if re.match(r"^(19|20)\d{2}$", year):
-            if parent_title:
-                parent = str(parent_title).strip()
-                if parent and parent not in base:
-                    return f"{parent}.{year}.{base}"
             return f"{base}.{year}"
-        if parent_title and parent_title not in base:
-            return f"{parent_title}.{base}"
         return base
 
     @staticmethod
