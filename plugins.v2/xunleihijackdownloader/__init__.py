@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.11"
+    plugin_version = "1.0.12"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -243,27 +243,7 @@ class XunleiHijackDownloader(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
-        return [
-            {
-                "component": "VRow",
-                "content": [
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12},
-                        "content": [
-                            {
-                                "component": "VAlert",
-                                "props": {
-                                    "type": "info",
-                                    "variant": "tonal",
-                                    "text": "本插件用于接管 MoviePilot 下载到迅雷。请在“插件配置”中填写迅雷地址、授权和目录参数。"
-                                }
-                            }
-                        ],
-                    }
-                ],
-            }
-        ]
+        pass
 
     def get_module(self) -> Dict[str, Any]:
         if not self._enabled:
