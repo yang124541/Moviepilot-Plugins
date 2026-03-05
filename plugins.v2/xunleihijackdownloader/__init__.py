@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -51,6 +51,7 @@ class XunleiHijackDownloader(_PluginBase):
     _moved_task_order: List[str] = []
     _task_name_cache: Dict[str, str] = {}
     _max_moved_keys = 2000
+    _last_request_error = ""
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -294,11 +295,13 @@ class XunleiHijackDownloader(_PluginBase):
         magnet = self._normalize_magnet(content)
         if not magnet:
             if self._fallback_to_builtin:
+                logger.warn("XunleiHijack fallback builtin: 不支持当前下载内容类型，未解析出 magnet。")
                 return None
             return "xunlei", None, None, "迅雷接管失败：仅支持磁力链接。"
         task_id, err = self._add_task(magnet)
         if not task_id:
             if self._fallback_to_builtin:
+                logger.warn(f"XunleiHijack fallback builtin: {err or '迅雷添加任务失败'}")
                 return None
             return "xunlei", None, None, err or "迅雷添加任务失败。"
         return "xunlei", task_id, "NoSubfolder", "添加下载成功"
@@ -526,10 +529,11 @@ class XunleiHijackDownloader(_PluginBase):
                       headers: Optional[Dict[str, str]] = None,
                       payload: Optional[Dict[str, Any]] = None,
                       timeout: int = 20,
-                      retry_auth: bool = True) -> Tuple[Optional[requests.Response], Any]:
+                      retry_auth: bool = True,
+                      retry_count: int = 2) -> Tuple[Optional[requests.Response], Any]:
         req_headers = dict(headers or self._get_headers())
 
-        def _once(local_headers: Dict[str, str]) -> Tuple[Optional[requests.Response], Any]:
+        def _once(local_headers: Dict[str, str]) -> Tuple[Optional[requests.Response], Any, str]:
             try:
                 kwargs: Dict[str, Any] = {"headers": local_headers, "timeout": timeout}
                 if payload is not None:
@@ -541,11 +545,22 @@ class XunleiHijackDownloader(_PluginBase):
                         obj = resp.json()
                     except Exception:
                         obj = {}
-                return resp, obj
-            except Exception:
-                return None, {}
+                return resp, obj, ""
+            except Exception as err:
+                return None, {}, f"{type(err).__name__}: {err}"
 
-        resp, obj = _once(req_headers)
+        resp: Optional[requests.Response] = None
+        obj: Any = {}
+        err_text = ""
+        for attempt in range(max(1, int(retry_count) + 1)):
+            resp, obj, err_text = _once(req_headers)
+            if resp is not None:
+                self._last_request_error = ""
+                break
+            self._last_request_error = err_text
+            if attempt < max(1, int(retry_count) + 1) - 1:
+                time.sleep(min(0.5 * (attempt + 1), 1.5))
+
         if (
             retry_auth
             and self._auto_refresh_pan_auth
@@ -557,7 +572,11 @@ class XunleiHijackDownloader(_PluginBase):
                 self._pan_auth = fresh
                 self._save_config()
                 req_headers["pan-auth"] = fresh
-                resp, obj = _once(req_headers)
+                resp, obj, err_text = _once(req_headers)
+                if resp is None:
+                    self._last_request_error = err_text
+                else:
+                    self._last_request_error = ""
         return resp, obj
 
     def _fetch_pan_auth(self) -> Optional[str]:
@@ -586,7 +605,7 @@ class XunleiHijackDownloader(_PluginBase):
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks?type=user%23runner&device_space="
             resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
             if not resp or not resp.ok:
-                raise ValueError(f"http={resp.status_code if resp else 'request-failed'}")
+                raise ValueError(f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}")
             tasks = obj.get("tasks") if isinstance(obj, dict) else None
             if not isinstance(tasks, list):
                 tasks = []
@@ -681,7 +700,8 @@ class XunleiHijackDownloader(_PluginBase):
                 retry_auth=True,
             )
             if not resp:
-                return None, "迅雷任务创建请求失败：网络请求失败。"
+                suffix = f"（{self._last_request_error}）" if self._last_request_error else ""
+                return None, f"迅雷任务创建请求失败：网络请求失败{suffix}"
             if not resp.ok:
                 return None, f"迅雷任务创建请求失败：HTTP {resp.status_code}"
             err = self._extract_api_error(data)
@@ -781,7 +801,7 @@ class XunleiHijackDownloader(_PluginBase):
             )
             resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
             if not resp or not resp.ok:
-                raise ValueError(f"http={resp.status_code if resp else 'request-failed'}")
+                raise ValueError(f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}")
             if isinstance(obj, dict):
                 tasks = obj.get("tasks")
                 if isinstance(tasks, list):
