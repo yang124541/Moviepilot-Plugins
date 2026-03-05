@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.10",
+    "version": "1.0.11",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.11": "修复 device_space 失活导致后续拦截失败：检测到 device_space_not_active 时自动刷新 device_id 并重试（列表/创建/控制任务全链路生效）。",
       "v1.0.10": "增强版本可见性：关键日志追加版本号前缀（如 XunleiHijack[v1.0.10]），并在初始化输出版本与配置摘要，便于确认插件是否实际升级生效。",
       "v1.0.9": "增强故障可观测性：请求失败强制记录异常类型/异常文本/请求URL；HTTP失败附带状态码和响应片段，便于定位“request-failed”根因。",
       "v1.0.8": "修复接管稳定性：增强迅雷 API 请求重试；回退内建下载器时输出具体原因；请求失败日志追加底层错误详情，便于排查“仅首次成功”问题。",

@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.10"
+    plugin_version = "1.0.11"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -614,9 +614,12 @@ class XunleiHijackDownloader(_PluginBase):
             logger.warn(f"XunleiHijack fetch pan_auth failed: {err}")
         return None
 
-    def _fetch_device_id(self) -> Optional[str]:
-        if self._device_id:
+    def _fetch_device_id(self, force_refresh: bool = False) -> Optional[str]:
+        if self._device_id and not force_refresh:
             return self._device_id
+        if force_refresh and self._device_id:
+            self._device_id = ""
+            self._save_config()
         if not self._base_url:
             return None
         try:
@@ -685,27 +688,31 @@ class XunleiHijackDownloader(_PluginBase):
 
         analysis = self._analyze_magnet(magnet, headers)
         file_name = analysis.get("name") or f"xunlei-{int(time.time())}"
-        params = {
-            "parent_folder_id": self._file_id,
-            "url": magnet,
-            "target": self._device_id,
-        }
-        total_count = int(analysis.get("total_count") or 0)
-        indices = analysis.get("indices") or []
-        if total_count and indices:
-            params["total_file_count"] = str(total_count)
-            params["sub_file_index"] = ",".join(indices)
 
-        payload = {
-            "params": params,
-            "name": file_name,
-            "type": "user#download-url",
-            "space": self._device_id,
-            "file_name": file_name,
-        }
-        total_size = int(analysis.get("total_size") or 0)
-        if total_size > 0:
-            payload["file_size"] = str(total_size)
+        def _build_payload(device_id: str) -> Dict[str, Any]:
+            params = {
+                "parent_folder_id": self._file_id,
+                "url": magnet,
+                "target": device_id,
+            }
+            total_count = int(analysis.get("total_count") or 0)
+            indices = analysis.get("indices") or []
+            if total_count and indices:
+                params["total_file_count"] = str(total_count)
+                params["sub_file_index"] = ",".join(indices)
+            payload = {
+                "params": params,
+                "name": file_name,
+                "type": "user#download-url",
+                "space": device_id,
+                "file_name": file_name,
+            }
+            total_size = int(analysis.get("total_size") or 0)
+            if total_size > 0:
+                payload["file_size"] = str(total_size)
+            return payload
+
+        payload = _build_payload(self._device_id)
 
         try:
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task"
@@ -717,6 +724,17 @@ class XunleiHijackDownloader(_PluginBase):
                 timeout=30,
                 retry_auth=True,
             )
+            if self._is_device_space_not_active(obj=data, error_text=self._last_request_error):
+                if self._refresh_device_id_on_inactive_space(obj=data):
+                    payload = _build_payload(self._device_id)
+                    resp, data = self._request_json(
+                        method="POST",
+                        url=url,
+                        headers=headers,
+                        payload=payload,
+                        timeout=30,
+                        retry_auth=True,
+                    )
             if not resp:
                 suffix = f"（{self._last_request_error}）" if self._last_request_error else ""
                 return None, f"迅雷任务创建请求失败：网络请求失败{suffix}"
@@ -818,6 +836,13 @@ class XunleiHijackDownloader(_PluginBase):
                 f"?type=user%23download-url&device_space={quote(device_id)}"
             )
             resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
+            if (not resp or not resp.ok) and self._refresh_device_id_on_inactive_space(obj=obj):
+                device_id = self._device_id
+                url = (
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                    f"?type=user%23download-url&device_space={quote(device_id)}"
+                )
+                resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
             if not resp or not resp.ok:
                 raise ValueError(f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}")
             if isinstance(obj, dict):
@@ -873,6 +898,16 @@ class XunleiHijackDownloader(_PluginBase):
                         timeout=20,
                         retry_auth=True,
                     )
+                    if (not resp or not resp.ok) and self._refresh_device_id_on_inactive_space(obj=obj):
+                        payload["device_space"] = self._device_id
+                        resp, obj = self._request_json(
+                            method="POST",
+                            url=url,
+                            headers=headers,
+                            payload=payload,
+                            timeout=20,
+                            retry_auth=True,
+                        )
                     if not resp or not resp.ok:
                         continue
                     if not self._is_operation_success(obj=obj, ids=ids):
@@ -1185,6 +1220,33 @@ class XunleiHijackDownloader(_PluginBase):
             if value:
                 return str(value)
         return ""
+
+    def _is_device_space_not_active(self, obj: Any = None, error_text: str = "") -> bool:
+        texts = [str(error_text or "").lower(), str(self._last_request_error or "").lower()]
+        if isinstance(obj, dict):
+            for key in ("error", "err", "message", "msg", "detail", "error_code"):
+                value = obj.get(key)
+                if value is not None:
+                    texts.append(str(value).lower())
+        merged = " ".join(texts)
+        return "device_space_not_active" in merged
+
+    def _refresh_device_id_on_inactive_space(self, obj: Any = None) -> bool:
+        if not self._is_device_space_not_active(obj=obj):
+            return False
+        old_device = self._device_id
+        new_device = self._fetch_device_id(force_refresh=True)
+        if new_device:
+            logger.warn(
+                f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, refresh device_id: "
+                f"{old_device or 'EMPTY'} -> {new_device}"
+            )
+            return True
+        logger.warn(
+            f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, "
+            f"but refresh device_id failed."
+        )
+        return False
 
     @staticmethod
     def _should_refresh_pan_auth(resp: Optional[requests.Response], obj: Any) -> bool:
