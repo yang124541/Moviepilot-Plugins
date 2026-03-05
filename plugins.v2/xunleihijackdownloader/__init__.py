@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -48,11 +48,14 @@ class XunleiHijackDownloader(_PluginBase):
     _scheduler: Optional[BackgroundScheduler] = None
     _move_lock = threading.Lock()
     _moved_task_keys: Set[str] = set()
+    _moved_task_order: List[str] = []
     _task_name_cache: Dict[str, str] = {}
+    _max_moved_keys = 2000
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
-        self._moved_task_keys = set()
+        self._moved_task_order = self._load_moved_task_keys()
+        self._moved_task_keys = set(self._moved_task_order)
         self._task_name_cache = {}
         if config:
             self._enabled = bool(config.get("enabled", False))
@@ -333,6 +336,8 @@ class XunleiHijackDownloader(_PluginBase):
                     path = Path(self._source_download_dir) / Path(title).name
                 else:
                     path = None
+                if not path:
+                    continue
                 results.append(schemas.TransferTorrent(
                     downloader="xunlei",
                     title=title,
@@ -361,6 +366,8 @@ class XunleiHijackDownloader(_PluginBase):
         return results
 
     def start_torrents(self, hashs: Union[list, str], downloader: Optional[str] = None) -> Optional[bool]:
+        if not downloader:
+            return None
         if downloader and not self._is_xunlei_downloader(downloader):
             return None
         ids = self._normalize_hashs(hashs)
@@ -369,6 +376,8 @@ class XunleiHijackDownloader(_PluginBase):
         return self._operate_tasks(ids=ids, action="start")
 
     def stop_torrents(self, hashs: Union[list, str], downloader: Optional[str] = None) -> Optional[bool]:
+        if not downloader:
+            return None
         if downloader and not self._is_xunlei_downloader(downloader):
             return None
         ids = self._normalize_hashs(hashs)
@@ -378,6 +387,8 @@ class XunleiHijackDownloader(_PluginBase):
 
     def remove_torrents(self, hashs: Union[str, list], delete_file: Optional[bool] = True,
                         downloader: Optional[str] = None) -> Optional[bool]:
+        if not downloader:
+            return None
         if downloader and not self._is_xunlei_downloader(downloader):
             return None
         ids = self._normalize_hashs(hashs)
@@ -386,7 +397,7 @@ class XunleiHijackDownloader(_PluginBase):
         ok = self._operate_tasks(ids=ids, action="delete", delete_file=bool(delete_file))
         if ok:
             for _id in ids:
-                self._moved_task_keys.add(_id)
+                self._remember_moved_key(_id)
         return ok
 
     def downloader_info(self, downloader: Optional[str] = None) -> Optional[List[schemas.DownloaderInfo]]:
@@ -411,7 +422,7 @@ class XunleiHijackDownloader(_PluginBase):
             return None
         key = str(hashs or "").strip()
         if key:
-            self._moved_task_keys.add(key)
+            self._remember_moved_key(key)
         return None
 
     def _save_config(self) -> None:
@@ -431,6 +442,42 @@ class XunleiHijackDownloader(_PluginBase):
             "move_interval_minutes": self._move_interval_minutes,
             "move_safe_seconds": self._move_safe_seconds,
         })
+
+    def _load_moved_task_keys(self) -> List[str]:
+        try:
+            payload = self.get_data("moved_task_keys")
+            if isinstance(payload, list):
+                ordered: List[str] = []
+                seen: Set[str] = set()
+                for item in payload:
+                    token = str(item or "").strip()
+                    if not token or token in seen:
+                        continue
+                    seen.add(token)
+                    ordered.append(token)
+                if len(ordered) > self._max_moved_keys:
+                    ordered = ordered[-self._max_moved_keys:]
+                return ordered
+        except Exception:
+            pass
+        return []
+
+    def _remember_moved_key(self, key: str) -> None:
+        token = str(key or "").strip()
+        if not token:
+            return
+        if token in self._moved_task_keys:
+            self._moved_task_order = [x for x in self._moved_task_order if x != token]
+        else:
+            self._moved_task_keys.add(token)
+        self._moved_task_order.append(token)
+        if len(self._moved_task_order) > self._max_moved_keys:
+            self._moved_task_order = self._moved_task_order[-self._max_moved_keys:]
+            self._moved_task_keys = set(self._moved_task_order)
+        try:
+            self.save_data("moved_task_keys", list(self._moved_task_order))
+        except Exception as err:
+            logger.warn(f"XunleiHijack persist moved keys failed: {err}")
 
     def _start_move_scheduler(self) -> None:
         self._scheduler = BackgroundScheduler(timezone=settings.TZ)
@@ -512,6 +559,38 @@ class XunleiHijackDownloader(_PluginBase):
                     return device
         except Exception as err:
             logger.warn(f"XunleiHijack fetch device id failed: {err}")
+        # runner 任务为空时，尝试设备列表接口回退获取
+        for endpoint in (
+            "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/devices",
+            "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/device",
+        ):
+            try:
+                url = f"{self._base_url}{endpoint}"
+                resp = requests.get(url, headers=self._get_headers(), timeout=20)
+                if not resp.ok:
+                    continue
+                obj = resp.json() if resp.text else {}
+                if not isinstance(obj, dict):
+                    continue
+                for key in ("devices", "list", "data"):
+                    payload = obj.get(key)
+                    if isinstance(payload, list):
+                        for item in payload:
+                            if not isinstance(item, dict):
+                                continue
+                            device = str(item.get("id") or item.get("device_id") or item.get("target") or "").strip()
+                            if device:
+                                self._device_id = device
+                                self._save_config()
+                                return device
+                    elif isinstance(payload, dict):
+                        device = str(payload.get("id") or payload.get("device_id") or payload.get("target") or "").strip()
+                        if device:
+                            self._device_id = device
+                            self._save_config()
+                            return device
+            except Exception:
+                continue
         return None
 
     def _add_task(self, magnet: str) -> Tuple[Optional[str], Optional[str]]:
@@ -625,7 +704,7 @@ class XunleiHijackDownloader(_PluginBase):
                     continue
                 dst = self._dedupe_target(target_root / src.name)
                 shutil.move(str(src), str(dst))
-                self._moved_task_keys.add(key)
+                self._remember_moved_key(key)
                 logger.info(f"XunleiHijack moved: {src} -> {dst}")
         except Exception as err:
             logger.error(f"XunleiHijack move job failed: {err}")
@@ -659,6 +738,8 @@ class XunleiHijackDownloader(_PluginBase):
             return False
         if not self._base_url:
             return False
+        if not self._fetch_device_id():
+            return False
         headers = self._get_headers()
         if self._auto_refresh_pan_auth and not headers.get("pan-auth"):
             return False
@@ -690,12 +771,69 @@ class XunleiHijackDownloader(_PluginBase):
                     if not resp.ok:
                         continue
                     obj = resp.json() if resp.text else {}
-                    if isinstance(obj, dict) and obj.get("error"):
+                    if not self._is_operation_success(obj=obj, ids=ids):
                         continue
                     return True
                 except Exception:
                     continue
         return False
+
+    @staticmethod
+    def _is_operation_success(obj: Any, ids: Set[str]) -> bool:
+        if not isinstance(obj, dict):
+            return False
+        if obj.get("error") or obj.get("err"):
+            return False
+
+        code_ok = False
+        if isinstance(obj.get("success"), bool):
+            return bool(obj.get("success"))
+        if isinstance(obj.get("result"), bool):
+            return bool(obj.get("result"))
+
+        code = obj.get("code")
+        if code is not None:
+            try:
+                code_ok = int(code) in (0, 200)
+                if not code_ok:
+                    return False
+            except Exception:
+                pass
+
+        id_hints: Set[str] = set()
+        for key in ("id", "task_id", "gid"):
+            value = obj.get(key)
+            if value:
+                id_hints.add(str(value).strip())
+        for key in ("ids", "task_ids", "success_ids", "updated_ids"):
+            value = obj.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    token = str(item or "").strip()
+                    if token:
+                        id_hints.add(token)
+            elif value:
+                id_hints.add(str(value).strip())
+        data = obj.get("data")
+        if isinstance(data, dict):
+            for key in ("id", "task_id", "gid"):
+                value = data.get(key)
+                if value:
+                    id_hints.add(str(value).strip())
+            for key in ("ids", "task_ids", "success_ids", "updated_ids"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    for item in value:
+                        token = str(item or "").strip()
+                        if token:
+                            id_hints.add(token)
+
+        if ids and id_hints:
+            return len(ids.intersection(id_hints)) > 0
+        if code_ok:
+            return True
+        # 没有明确ID回执时，至少要求显式成功字段
+        return bool(obj.get("ok") is True or obj.get("status") in ("ok", "success"))
 
     @staticmethod
     def _is_task_completed(task: Dict[str, Any]) -> bool:
