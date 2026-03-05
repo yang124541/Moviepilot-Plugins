@@ -2,6 +2,7 @@ import re
 import shutil
 import threading
 import time
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -10,16 +11,18 @@ from urllib.parse import quote
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 
+import app.schemas as schemas
 from app.core.config import settings
 from app.log import logger
 from app.plugins import _PluginBase
+from app.schemas.types import TorrentStatus
 
 
 class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -28,7 +31,7 @@ class XunleiHijackDownloader(_PluginBase):
 
     _enabled = False
     _hijack_download = True
-    _fallback_to_builtin = False
+    _fallback_to_builtin = True
     _base_url = ""
     _authorization = ""
     _pan_auth = ""
@@ -54,7 +57,7 @@ class XunleiHijackDownloader(_PluginBase):
         if config:
             self._enabled = bool(config.get("enabled", False))
             self._hijack_download = bool(config.get("hijack_download", True))
-            self._fallback_to_builtin = bool(config.get("fallback_to_builtin", False))
+            self._fallback_to_builtin = bool(config.get("fallback_to_builtin", True))
             self._base_url = self._normalize_base_url(config.get("base_url") or "")
             self._authorization = str(config.get("authorization") or "").strip()
             self._pan_auth = str(config.get("pan_auth") or "").strip()
@@ -233,7 +236,7 @@ class XunleiHijackDownloader(_PluginBase):
         ], {
             "enabled": False,
             "hijack_download": True,
-            "fallback_to_builtin": False,
+            "fallback_to_builtin": True,
             "base_url": "",
             "authorization": "",
             "pan_auth": "",
@@ -251,9 +254,19 @@ class XunleiHijackDownloader(_PluginBase):
         pass
 
     def get_module(self) -> Dict[str, Any]:
-        if not self._enabled or not self._hijack_download:
+        if not self._enabled:
             return {}
-        return {"download": self.download}
+        module_map = {
+            "list_torrents": self.list_torrents,
+            "start_torrents": self.start_torrents,
+            "stop_torrents": self.stop_torrents,
+            "remove_torrents": self.remove_torrents,
+            "downloader_info": self.downloader_info,
+            "transfer_completed": self.transfer_completed,
+        }
+        if self._hijack_download:
+            module_map["download"] = self.download
+        return module_map
 
     def stop_service(self):
         if self._scheduler:
@@ -282,6 +295,124 @@ class XunleiHijackDownloader(_PluginBase):
                 return None
             return "xunlei", None, None, err or "迅雷添加任务失败。"
         return "xunlei", task_id, "NoSubfolder", "添加下载成功"
+
+    def list_torrents(self,
+                      status: TorrentStatus = None,
+                      hashs: Union[list, str] = None,
+                      downloader: Optional[str] = None
+                      ) -> Optional[List[Union[schemas.TransferTorrent, schemas.DownloadingTorrent]]]:
+        if downloader and not self._is_xunlei_downloader(downloader):
+            return None
+        if status not in (TorrentStatus.TRANSFER, TorrentStatus.DOWNLOADING):
+            return None
+
+        tasks = self._list_download_tasks()
+        if not tasks:
+            return []
+        hash_set = self._normalize_hashs(hashs)
+
+        results: List[Union[schemas.TransferTorrent, schemas.DownloadingTorrent]] = []
+        for task in tasks:
+            task_hash = self._task_key(task) or ""
+            if hash_set and task_hash not in hash_set:
+                continue
+
+            title = self._task_name(task) or task_hash or "xunlei-task"
+            progress = self._task_progress(task)
+            done = self._is_task_completed(task)
+            source_path = self._resolve_source_path(Path(self._source_download_dir), title) if self._source_download_dir else None
+            if status == TorrentStatus.TRANSFER:
+                # 开启自动搬运时，不再向转移链路暴露迅雷任务，避免重复搬运。
+                if self._move_enabled:
+                    continue
+                if not done:
+                    continue
+                if source_path and source_path.exists():
+                    path = source_path
+                elif self._source_download_dir:
+                    path = Path(self._source_download_dir) / Path(title).name
+                else:
+                    path = None
+                results.append(schemas.TransferTorrent(
+                    downloader="xunlei",
+                    title=title,
+                    path=path,
+                    hash=task_hash,
+                    size=int(self._task_size(task) or 0),
+                    progress=progress,
+                    state="completed" if done else "downloading",
+                    tags=""
+                ))
+            elif status == TorrentStatus.DOWNLOADING:
+                if done:
+                    continue
+                results.append(schemas.DownloadingTorrent(
+                    downloader="xunlei",
+                    hash=task_hash,
+                    title=title,
+                    name=title,
+                    size=float(self._task_size(task) or 0),
+                    progress=progress,
+                    state="downloading",
+                    dlspeed=self._task_speed_text(task, key="download_speed"),
+                    upspeed=self._task_speed_text(task, key="upload_speed"),
+                    left_time=self._task_left_time(task, progress),
+                ))
+        return results
+
+    def start_torrents(self, hashs: Union[list, str], downloader: Optional[str] = None) -> Optional[bool]:
+        if downloader and not self._is_xunlei_downloader(downloader):
+            return None
+        ids = self._normalize_hashs(hashs)
+        if not ids:
+            return False
+        return self._operate_tasks(ids=ids, action="start")
+
+    def stop_torrents(self, hashs: Union[list, str], downloader: Optional[str] = None) -> Optional[bool]:
+        if downloader and not self._is_xunlei_downloader(downloader):
+            return None
+        ids = self._normalize_hashs(hashs)
+        if not ids:
+            return False
+        return self._operate_tasks(ids=ids, action="pause")
+
+    def remove_torrents(self, hashs: Union[str, list], delete_file: Optional[bool] = True,
+                        downloader: Optional[str] = None) -> Optional[bool]:
+        if downloader and not self._is_xunlei_downloader(downloader):
+            return None
+        ids = self._normalize_hashs(hashs)
+        if not ids:
+            return False
+        ok = self._operate_tasks(ids=ids, action="delete", delete_file=bool(delete_file))
+        if ok:
+            for _id in ids:
+                self._moved_task_keys.add(_id)
+        return ok
+
+    def downloader_info(self, downloader: Optional[str] = None) -> Optional[List[schemas.DownloaderInfo]]:
+        if downloader and not self._is_xunlei_downloader(downloader):
+            return None
+        tasks = self._list_download_tasks()
+        dl_speed = 0.0
+        up_speed = 0.0
+        for task in tasks:
+            dl_speed += float(self._task_number(task, "download_speed") or 0)
+            up_speed += float(self._task_number(task, "upload_speed") or 0)
+        return [schemas.DownloaderInfo(
+            download_speed=dl_speed,
+            upload_speed=up_speed,
+            download_size=0.0,
+            upload_size=0.0,
+            free_space=0.0
+        )]
+
+    def transfer_completed(self, hashs: str, downloader: Optional[str] = None) -> None:
+        if downloader and not self._is_xunlei_downloader(downloader):
+            return None
+        key = str(hashs or "").strip()
+        if key:
+            self._moved_task_keys.add(key)
+        return None
 
     def _save_config(self) -> None:
         self.update_config({
@@ -523,6 +654,49 @@ class XunleiHijackDownloader(_PluginBase):
             logger.warn(f"XunleiHijack list tasks failed: {err}")
         return []
 
+    def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True) -> bool:
+        if not ids:
+            return False
+        if not self._base_url:
+            return False
+        headers = self._get_headers()
+        if self._auto_refresh_pan_auth and not headers.get("pan-auth"):
+            return False
+
+        payloads = [
+            {
+                "action": action,
+                "ids": list(ids),
+                "device_space": self._device_id,
+                "delete_file": bool(delete_file),
+            },
+            {
+                "type": action,
+                "task_ids": list(ids),
+                "device_space": self._device_id,
+                "delete_file": bool(delete_file),
+            }
+        ]
+        urls = [
+            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task",
+            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks",
+            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task/action",
+        ]
+
+        for url in urls:
+            for payload in payloads:
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=20)
+                    if not resp.ok:
+                        continue
+                    obj = resp.json() if resp.text else {}
+                    if isinstance(obj, dict) and obj.get("error"):
+                        continue
+                    return True
+                except Exception:
+                    continue
+        return False
+
     @staticmethod
     def _is_task_completed(task: Dict[str, Any]) -> bool:
         values = []
@@ -565,6 +739,58 @@ class XunleiHijackDownloader(_PluginBase):
             return str(self._task_name_cache.get(task_id) or "").strip()
         return ""
 
+    def _task_progress(self, task: Dict[str, Any]) -> float:
+        value = self._task_number(task, "progress")
+        if value is None:
+            return 0.0
+        try:
+            v = float(value)
+            if v <= 1:
+                return round(v * 100, 2)
+            return max(0.0, min(100.0, v))
+        except Exception:
+            return 0.0
+
+    def _task_size(self, task: Dict[str, Any]) -> int:
+        value = self._task_number(task, "file_size")
+        if value is None:
+            value = self._task_number(task, "size")
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
+
+    def _task_number(self, task: Dict[str, Any], key: str) -> Optional[float]:
+        value = task.get(key)
+        params = task.get("params") if isinstance(task.get("params"), dict) else {}
+        if value is None:
+            value = params.get(key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    def _task_speed_text(self, task: Dict[str, Any], key: str) -> Optional[str]:
+        value = self._task_number(task, key)
+        if value is None:
+            return None
+        try:
+            size = float(value)
+            units = ["B/s", "KB/s", "MB/s", "GB/s"]
+            idx = 0
+            while size >= 1024 and idx < len(units) - 1:
+                size /= 1024.0
+                idx += 1
+            return f"{size:.1f}{units[idx]}"
+        except Exception:
+            return None
+
+    @staticmethod
+    def _task_left_time(task: Dict[str, Any], progress: float) -> Optional[str]:
+        return None
+
     @staticmethod
     def _task_id(data: Any) -> str:
         if not isinstance(data, dict):
@@ -583,6 +809,25 @@ class XunleiHijackDownloader(_PluginBase):
 
     def _task_key(self, task: Dict[str, Any]) -> str:
         return self._task_id(task)
+
+    @staticmethod
+    def _is_xunlei_downloader(downloader: str) -> bool:
+        text = str(downloader or "").strip().lower()
+        return text in ("xunlei", "迅雷", "迅雷下载接管")
+
+    @staticmethod
+    def _normalize_hashs(hashs: Union[list, str]) -> Set[str]:
+        if hashs is None:
+            return set()
+        if isinstance(hashs, str):
+            token = str(hashs).strip()
+            return {token} if token else set()
+        ret = set()
+        for item in hashs:
+            token = str(item or "").strip()
+            if token:
+                ret.add(token)
+        return ret
 
     @staticmethod
     def _extract_resources(obj: Any) -> List[Dict[str, Any]]:
@@ -612,10 +857,17 @@ class XunleiHijackDownloader(_PluginBase):
     def _resolve_source_path(source_root: Path, task_name: str) -> Optional[Path]:
         if not task_name:
             return None
-        path = source_root / task_name
-        if path.exists():
-            return path
-        short = source_root / Path(task_name).name
+        safe_name = Path(task_name).name
+        if not safe_name:
+            return None
+        short = source_root / safe_name
+        try:
+            root_resolved = source_root.resolve(strict=False)
+            short_resolved = short.resolve(strict=False)
+            if root_resolved not in short_resolved.parents and short_resolved != root_resolved:
+                return None
+        except Exception:
+            return None
         if short.exists():
             return short
         return None
@@ -635,16 +887,119 @@ class XunleiHijackDownloader(_PluginBase):
     def _normalize_magnet(content: Union[Path, str, bytes]) -> str:
         if isinstance(content, str):
             text = content.strip()
-            return text if text.lower().startswith("magnet:?") else ""
+            if text.lower().startswith("magnet:?"):
+                return text
+            path = Path(text)
+            if path.exists() and path.is_file():
+                try:
+                    return XunleiHijackDownloader._torrent_to_magnet(path.read_bytes())
+                except Exception:
+                    return ""
+            return ""
         if isinstance(content, bytes):
             try:
                 text = content.decode("utf-8", errors="ignore").strip()
-                return text if text.lower().startswith("magnet:?") else ""
+                if text.lower().startswith("magnet:?"):
+                    return text
+                return XunleiHijackDownloader._torrent_to_magnet(content)
             except Exception:
                 return ""
         if isinstance(content, Path):
+            try:
+                if content.exists() and content.is_file():
+                    return XunleiHijackDownloader._torrent_to_magnet(content.read_bytes())
+            except Exception:
+                return ""
             return ""
         return ""
+
+    @staticmethod
+    def _torrent_to_magnet(data: bytes) -> str:
+        if not data:
+            return ""
+        parsed, info_start, info_end = XunleiHijackDownloader._bdecode_with_info_range(data)
+        if info_start < 0 or info_end <= info_start:
+            return ""
+        info_hash = hashlib.sha1(data[info_start:info_end]).hexdigest()
+        dn = ""
+        tr_list: List[str] = []
+        if isinstance(parsed, dict):
+            info = parsed.get(b"info")
+            if isinstance(info, dict):
+                name_bytes = info.get(b"name.utf-8") or info.get(b"name")
+                if isinstance(name_bytes, (bytes, bytearray)):
+                    dn = bytes(name_bytes).decode("utf-8", errors="ignore").strip()
+            announce = parsed.get(b"announce")
+            if isinstance(announce, (bytes, bytearray)):
+                tr_list.append(bytes(announce).decode("utf-8", errors="ignore").strip())
+            announce_list = parsed.get(b"announce-list")
+            if isinstance(announce_list, list):
+                for tier in announce_list:
+                    if isinstance(tier, list):
+                        for item in tier:
+                            if isinstance(item, (bytes, bytearray)):
+                                tr_list.append(bytes(item).decode("utf-8", errors="ignore").strip())
+                    elif isinstance(tier, (bytes, bytearray)):
+                        tr_list.append(bytes(tier).decode("utf-8", errors="ignore").strip())
+
+        magnet = f"magnet:?xt=urn:btih:{info_hash}"
+        if dn:
+            magnet += f"&dn={quote(dn)}"
+        seen = set()
+        for tr in tr_list:
+            url = str(tr or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            magnet += f"&tr={quote(url, safe=':/?&=')}"
+            if len(seen) >= 20:
+                break
+        return magnet
+
+    @staticmethod
+    def _bdecode_with_info_range(data: bytes) -> Tuple[Any, int, int]:
+        info_start = -1
+        info_end = -1
+
+        def parse(idx: int) -> Tuple[Any, int]:
+            nonlocal info_start, info_end
+            if idx >= len(data):
+                raise ValueError("unexpected eof")
+            token = data[idx:idx + 1]
+            if token == b"i":
+                end = data.index(b"e", idx + 1)
+                return int(data[idx + 1:end]), end + 1
+            if token == b"l":
+                idx += 1
+                arr = []
+                while data[idx:idx + 1] != b"e":
+                    item, idx = parse(idx)
+                    arr.append(item)
+                return arr, idx + 1
+            if token == b"d":
+                idx += 1
+                obj = {}
+                while data[idx:idx + 1] != b"e":
+                    key, idx = parse(idx)
+                    if not isinstance(key, (bytes, bytearray)):
+                        raise ValueError("invalid key")
+                    value_start = idx
+                    value, idx = parse(idx)
+                    obj[bytes(key)] = value
+                    if bytes(key) == b"info" and info_start < 0:
+                        info_start = value_start
+                        info_end = idx
+                return obj, idx + 1
+            if b"0" <= token <= b"9":
+                colon = data.index(b":", idx)
+                length = int(data[idx:colon])
+                start = colon + 1
+                end = start + length
+                return data[start:end], end
+            raise ValueError("invalid bencode")
+
+        obj, _ = parse(0)
+        return obj, info_start, info_end
 
     @staticmethod
     def _normalize_base_url(url: str) -> str:
