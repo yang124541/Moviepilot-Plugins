@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.12"
+    plugin_version = "1.0.13"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -594,14 +594,16 @@ class XunleiHijackDownloader(_PluginBase):
             logger.warn(f"XunleiHijack fetch pan_auth failed: {err}")
         return None
 
-    def _fetch_device_id(self, force_refresh: bool = False) -> Optional[str]:
+    def _fetch_device_id(self, force_refresh: bool = False, exclude_device: str = "") -> Optional[str]:
         if self._device_id and not force_refresh:
             return self._device_id
+        old_device = str(self._device_id or "").strip()
         if force_refresh and self._device_id:
             self._device_id = ""
             self._save_config()
         if not self._base_url:
             return None
+        candidates: List[str] = []
         try:
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks?type=user%23runner&device_space="
             resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
@@ -613,10 +615,7 @@ class XunleiHijackDownloader(_PluginBase):
             for task in tasks:
                 params = task.get("params") if isinstance(task, dict) and isinstance(task.get("params"), dict) else {}
                 device = str(params.get("target") or (task.get("target") if isinstance(task, dict) else "") or "").strip()
-                if device:
-                    self._device_id = device
-                    self._save_config()
-                    return device
+                self._append_device_candidate(candidates, device)
         except Exception as err:
             logger.warn(f"XunleiHijack fetch device id failed: {err}")
         # runner 任务为空时，尝试设备列表接口回退获取
@@ -638,18 +637,22 @@ class XunleiHijackDownloader(_PluginBase):
                             if not isinstance(item, dict):
                                 continue
                             device = str(item.get("id") or item.get("device_id") or item.get("target") or "").strip()
-                            if device:
-                                self._device_id = device
-                                self._save_config()
-                                return device
+                            self._append_device_candidate(candidates, device)
                     elif isinstance(payload, dict):
                         device = str(payload.get("id") or payload.get("device_id") or payload.get("target") or "").strip()
-                        if device:
-                            self._device_id = device
-                            self._save_config()
-                            return device
+                        self._append_device_candidate(candidates, device)
             except Exception:
                 continue
+        # 候选设备探测：优先选择可用设备，避免命中失活 device_space。
+        picked = self._pick_active_device_id(
+            candidates=candidates,
+            exclude_device=exclude_device,
+            old_device=old_device,
+        )
+        if picked:
+            self._device_id = picked
+            self._save_config()
+            return picked
         return None
 
     def _add_task(self, magnet: str) -> Tuple[Optional[str], Optional[str]]:
@@ -809,18 +812,16 @@ class XunleiHijackDownloader(_PluginBase):
         try:
             headers = self._get_headers()
             device_id = self._fetch_device_id() or self._device_id
-            if not device_id:
-                return []
             url = (
                 f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                f"?type=user%23download-url&device_space={quote(device_id)}"
+                f"?type=user%23download-url&device_space={quote(device_id or '')}"
             )
             resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
             if (not resp or not resp.ok) and self._refresh_device_id_on_inactive_space(obj=obj):
                 device_id = self._device_id
                 url = (
                     f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                    f"?type=user%23download-url&device_space={quote(device_id)}"
+                    f"?type=user%23download-url&device_space={quote(device_id or '')}"
                 )
                 resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
             if not resp or not resp.ok:
@@ -828,6 +829,15 @@ class XunleiHijackDownloader(_PluginBase):
             if isinstance(obj, dict):
                 tasks = obj.get("tasks")
                 if isinstance(tasks, list):
+                    if not device_id:
+                        for task in tasks:
+                            if isinstance(task, dict):
+                                params = task.get("params") if isinstance(task.get("params"), dict) else {}
+                                target = str(params.get("target") or task.get("target") or "").strip()
+                                if target:
+                                    self._device_id = target
+                                    self._save_config()
+                                    break
                     return [x for x in tasks if isinstance(x, dict)]
                 list_obj = obj.get("list")
                 if isinstance(list_obj, list):
@@ -1215,7 +1225,7 @@ class XunleiHijackDownloader(_PluginBase):
         if not self._is_device_space_not_active(obj=obj):
             return False
         old_device = self._device_id
-        new_device = self._fetch_device_id(force_refresh=True)
+        new_device = self._fetch_device_id(force_refresh=True, exclude_device=old_device or "")
         if new_device:
             logger.warn(
                 f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, refresh device_id: "
@@ -1227,6 +1237,55 @@ class XunleiHijackDownloader(_PluginBase):
             f"but refresh device_id failed."
         )
         return False
+
+    @staticmethod
+    def _append_device_candidate(candidates: List[str], device: str) -> None:
+        token = str(device or "").strip()
+        if not token:
+            return
+        if token not in candidates:
+            candidates.append(token)
+
+    def _is_device_candidate_active(self, device: str) -> bool:
+        token = str(device or "").strip()
+        if not token or not self._base_url:
+            return False
+        url = (
+            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+            f"?type=user%23download-url&device_space={quote(token)}"
+        )
+        resp, obj = self._request_json(
+            method="GET",
+            url=url,
+            headers=self._get_headers(),
+            timeout=20,
+            retry_auth=True,
+            retry_count=1,
+        )
+        if not resp:
+            return False
+        if self._is_device_space_not_active(obj=obj, error_text=self._last_request_error):
+            return False
+        return bool(resp.ok)
+
+    def _pick_active_device_id(self, candidates: List[str], exclude_device: str = "", old_device: str = "") -> Optional[str]:
+        dedup: List[str] = []
+        for item in candidates:
+            token = str(item or "").strip()
+            if token and token not in dedup:
+                dedup.append(token)
+        exclude = str(exclude_device or "").strip()
+        old = str(old_device or "").strip()
+        preferred = [x for x in dedup if x != exclude]
+        if old and old not in preferred:
+            preferred.append(old)
+        for device in preferred:
+            if self._is_device_candidate_active(device):
+                return device
+        # 全部探测失败时，仍返回一个候选值，避免完全不可用。
+        if preferred:
+            return preferred[0]
+        return None
 
     @staticmethod
     def _should_refresh_pan_auth(resp: Optional[requests.Response], obj: Any) -> bool:
