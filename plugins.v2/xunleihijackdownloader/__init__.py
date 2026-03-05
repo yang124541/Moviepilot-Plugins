@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.21"
+    plugin_version = "1.0.22"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -637,7 +637,7 @@ class XunleiHijackDownloader(_PluginBase):
             return None, "Authorization 未配置。"
         if not self._file_id:
             return None, "file_id 未配置。"
-        if not self._fetch_device_id():
+        if not self._fetch_device_id(force_refresh=True):
             return None, "device_id 未配置且自动获取失败。"
 
         headers = self._get_headers()
@@ -672,35 +672,12 @@ class XunleiHijackDownloader(_PluginBase):
 
         try:
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task"
-            base_device = str(self._device_id or "").strip()
-            device_candidates: List[str] = [base_device]
-            if base_device.startswith("device_id#"):
-                naked = base_device.split("#", 1)[1].strip()
-                if naked and naked not in device_candidates:
-                    device_candidates.append(naked)
-            elif base_device:
-                prefixed = f"device_id#{base_device}"
-                if prefixed not in device_candidates:
-                    device_candidates.append(prefixed)
 
-            attempts: List[Tuple[str, str]] = []
-            for device in device_candidates:
-                attempts.append((device, ""))       # 对齐 liqman：device-space 头保持空
-                attempts.append((device, device))   # 兼容部分环境：device-space 头带 device_id
-
-            seen: Set[Tuple[str, str]] = set()
-            ordered_attempts: List[Tuple[str, str]] = []
-            for item in attempts:
-                if item in seen:
-                    continue
-                seen.add(item)
-                ordered_attempts.append(item)
-
-            last_err = ""
-            for submit_device, header_space in ordered_attempts:
-                payload = _build_payload(submit_device)
-                req_headers = {**headers, "device-space": header_space}
-                resp, data = self._request_json(
+            def _submit_once(device_id: str) -> Tuple[Optional[requests.Response], Any]:
+                payload = _build_payload(device_id)
+                # 对齐 liqman：device-space 头固定为空，实际空间走 payload 中的 target/space。
+                req_headers = {**headers, "device-space": ""}
+                return self._request_json(
                     method="POST",
                     url=url,
                     headers=req_headers,
@@ -708,47 +685,62 @@ class XunleiHijackDownloader(_PluginBase):
                     timeout=30,
                     retry_auth=True,
                 )
+
+            def _resolve_fail(resp: Optional[requests.Response], data: Any, device_id: str) -> Tuple[Optional[str], bool]:
+                merged = self._merge_error_texts(data)
+                if "task_create_count_limit" in merged or "任务创建次数达到上限" in merged:
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] add task limited: device={device_id}, {self._last_request_error}"
+                    )
+                    return "迅雷任务创建失败：任务创建次数达到上限，请稍后重试。", False
+                if "space_name_invalid" in merged:
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] add task invalid space: device={device_id}, {self._last_request_error}"
+                    )
+                    return "迅雷任务创建失败：device_id 对应空间无效，请重新抓取参数。", False
+                if "device_space_not_active" in merged:
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] add task inactive space: device={device_id}, {self._last_request_error}"
+                    )
+                    return None, True
                 if not resp:
-                    last_err = f"网络请求失败 {self._last_request_error}".strip()
-                    logger.warn(
-                        f"XunleiHijack[v{self.plugin_version}] add task failed: "
-                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}, {last_err}"
-                    )
-                    continue
+                    return f"迅雷任务创建请求失败：网络请求失败（{self._last_request_error or 'unknown'}）", False
                 if not resp.ok:
-                    last_err = f"HTTP {resp.status_code} {self._last_request_error}".strip()
-                    logger.warn(
-                        f"XunleiHijack[v{self.plugin_version}] add task failed: "
-                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}, {last_err}"
-                    )
-                    continue
+                    return f"迅雷任务创建请求失败：HTTP {resp.status_code}（{self._last_request_error or 'unknown'}）", False
                 err = self._extract_api_error(data)
                 if err:
-                    last_err = f"API {err}"
-                    logger.warn(
-                        f"XunleiHijack[v{self.plugin_version}] add task api error: "
-                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}, {err}"
-                    )
-                    continue
-                task_id = self._task_id(data)
-                if not task_id:
-                    last_err = "接口未返回 task_id"
-                    logger.warn(
-                        f"XunleiHijack[v{self.plugin_version}] add task missing task_id: "
-                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}"
-                    )
-                    continue
+                    return f"迅雷任务创建失败：{err}", False
+                return "迅雷任务创建失败：接口返回异常。", False
 
-                if submit_device != base_device:
-                    self._device_id = submit_device
-                    self._save_config()
-                    logger.info(
-                        f"XunleiHijack[v{self.plugin_version}] switch submit device_id: "
-                        f"{base_device or 'EMPTY'} -> {submit_device}"
-                    )
-                self._task_name_cache[task_id] = file_name
-                return task_id, None
-            return None, f"迅雷任务创建失败：{last_err or '未知错误'}"
+            first_device = str(self._device_id or "").strip()
+            resp, data = _submit_once(first_device)
+            if resp and resp.ok:
+                task_id = self._task_id(data)
+                if task_id:
+                    self._task_name_cache[task_id] = file_name
+                    return task_id, None
+            first_err, allow_refresh_retry = _resolve_fail(resp=resp, data=data, device_id=first_device)
+            if not allow_refresh_retry:
+                return None, first_err
+
+            refresh_device = self._fetch_device_id(force_refresh=True)
+            refresh_device = str(refresh_device or "").strip()
+            if not refresh_device or refresh_device == first_device:
+                return None, "迅雷任务创建失败：当前 device_space 未激活，且刷新 device_id 无变化。"
+
+            self._device_id = refresh_device
+            self._save_config()
+            logger.info(
+                f"XunleiHijack[v{self.plugin_version}] refresh submit device_id: {first_device or 'EMPTY'} -> {refresh_device}"
+            )
+            resp2, data2 = _submit_once(refresh_device)
+            if resp2 and resp2.ok:
+                task_id = self._task_id(data2)
+                if task_id:
+                    self._task_name_cache[task_id] = file_name
+                    return task_id, None
+            second_err, _ = _resolve_fail(resp=resp2, data=data2, device_id=refresh_device)
+            return None, second_err
         except Exception as err:
             return None, f"迅雷任务创建请求失败：{err}"
 
@@ -832,12 +824,12 @@ class XunleiHijackDownloader(_PluginBase):
             device_id = self._fetch_device_id() or self._device_id
             url = (
                 f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                f"?type=user%23download-url&device_space={quote(device_id or '')}"
+                f"?type=user%23download-url&device_space="
             )
             resp, obj = self._request_json(
                 method="GET",
                 url=url,
-                headers={**headers, "device-space": device_id or ""},
+                headers={**headers, "device-space": ""},
                 timeout=20,
                 retry_auth=True
             )
@@ -1217,6 +1209,15 @@ class XunleiHijackDownloader(_PluginBase):
             if value:
                 return str(value)
         return ""
+
+    def _merge_error_texts(self, obj: Any = None) -> str:
+        texts: List[str] = [str(self._last_request_error or "")]
+        if isinstance(obj, dict):
+            for key in ("error", "err", "message", "msg", "detail", "error_description", "error_code"):
+                value = obj.get(key)
+                if value is not None:
+                    texts.append(str(value))
+        return " ".join(texts).lower()
 
     @staticmethod
     def _should_refresh_pan_auth(resp: Optional[requests.Response], obj: Any) -> bool:

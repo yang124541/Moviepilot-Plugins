@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.21",
+    "version": "1.0.22",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.22": "修复任务创建重试策略：仅按 liqman 模式提交（device-space 头为空），遇到 device_space_not_active 才刷新一次 device_id 重试；遇到 task_create_count_limit/space_name_invalid 直接明确报错并停止多次重试。",
       "v1.0.21": "增强添加任务兼容性：优先按 liqman 方式提交（device-space 头为空），并兼容 device_id# 与裸 ID 两种形态重试；补充失败细节日志，便于定位任务创建失败原因。",
       "v1.0.20": "切换为单设备固定模式：仅通过 runner 任务获取一次 device_id 并固定使用；移除自动切换/变体切换重试路径，行为对齐简化版迅雷下载插件。",
       "v1.0.18": "修复刷新排除策略：仅排除旧 device_id 原串，保留其变体（device_id# 与裸 ID）用于可用性探测，避免唯一候选被误排除导致 refresh 失败。",
