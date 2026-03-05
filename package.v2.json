@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.0",
-    "icon": "https://raw.githubusercontent.com/liqman/MoviePilot-Plugins/refs/heads/main/icons/xunlei.png",
+    "version": "1.0.1",
+    "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.1": "图标切换为仓库自有迅雷图标资源，提升显示稳定性。",
       "v1.0.0": "首版：支持接管下载到迅雷，支持完成后定时搬运到监控目录，提供失败回退内建下载器开关。"
     }
   }
