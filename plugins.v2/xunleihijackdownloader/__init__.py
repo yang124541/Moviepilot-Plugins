@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.14"
+    plugin_version = "1.0.15"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -502,6 +502,7 @@ class XunleiHijackDownloader(_PluginBase):
             "Origin": self._base_url,
             "Referer": f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/",
             "User-Agent": settings.USER_AGENT,
+            "device-space": "",
         }
         if pan_auth:
             headers["pan-auth"] = pan_auth
@@ -618,6 +619,26 @@ class XunleiHijackDownloader(_PluginBase):
                 self._append_device_candidate(candidates, device)
         except Exception as err:
             logger.warn(f"XunleiHijack fetch device id failed: {err}")
+        # runner 候选不足时，再从下载任务列表（空 space）中提取 target/space 作为候选。
+        try:
+            url = (
+                f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                f"?type=user%23download-url&device_space="
+            )
+            resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
+            if resp and resp.ok and isinstance(obj, dict):
+                tasks = obj.get("tasks")
+                if not isinstance(tasks, list):
+                    tasks = []
+                for task in tasks:
+                    if not isinstance(task, dict):
+                        continue
+                    params = task.get("params") if isinstance(task.get("params"), dict) else {}
+                    for key in ("target", "space", "device_space"):
+                        self._append_device_candidate(candidates, str(params.get(key) or "").strip())
+                        self._append_device_candidate(candidates, str(task.get(key) or "").strip())
+        except Exception:
+            pass
         # runner 任务为空时，尝试设备列表接口回退获取
         for endpoint in (
             "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/devices",
@@ -704,7 +725,7 @@ class XunleiHijackDownloader(_PluginBase):
             resp, data = self._request_json(
                 method="POST",
                 url=url,
-                headers=headers,
+                headers={**headers, "device-space": self._device_id},
                 payload=payload,
                 timeout=30,
                 retry_auth=True,
@@ -715,7 +736,7 @@ class XunleiHijackDownloader(_PluginBase):
                     resp, data = self._request_json(
                         method="POST",
                         url=url,
-                        headers=headers,
+                        headers={**headers, "device-space": self._device_id},
                         payload=payload,
                         timeout=30,
                         retry_auth=True,
@@ -818,21 +839,39 @@ class XunleiHijackDownloader(_PluginBase):
                 f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
                 f"?type=user%23download-url&device_space={quote(device_id or '')}"
             )
-            resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
+            resp, obj = self._request_json(
+                method="GET",
+                url=url,
+                headers={**headers, "device-space": device_id or ""},
+                timeout=20,
+                retry_auth=True
+            )
             if (not resp or not resp.ok) and self._refresh_device_id_on_inactive_space(obj=obj):
                 device_id = self._device_id
                 url = (
                     f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
                     f"?type=user%23download-url&device_space={quote(device_id or '')}"
                 )
-                resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
+                resp, obj = self._request_json(
+                    method="GET",
+                    url=url,
+                    headers={**headers, "device-space": device_id or ""},
+                    timeout=20,
+                    retry_auth=True
+                )
             if not resp or not resp.ok:
                 # 失活/异常时再用空 device_space 回退拉取一次，便于从返回任务回填新的 target。
                 url = (
                     f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
                     f"?type=user%23download-url&device_space="
                 )
-                resp2, obj2 = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
+                resp2, obj2 = self._request_json(
+                    method="GET",
+                    url=url,
+                    headers={**headers, "device-space": ""},
+                    timeout=20,
+                    retry_auth=True
+                )
                 if resp2 and resp2.ok:
                     resp, obj = resp2, obj2
                     device_id = ""
@@ -895,7 +934,7 @@ class XunleiHijackDownloader(_PluginBase):
                     resp, obj = self._request_json(
                         method="POST",
                         url=url,
-                        headers=headers,
+                        headers={**headers, "device-space": self._device_id},
                         payload=payload,
                         timeout=20,
                         retry_auth=True,
@@ -905,7 +944,7 @@ class XunleiHijackDownloader(_PluginBase):
                         resp, obj = self._request_json(
                             method="POST",
                             url=url,
-                            headers=headers,
+                            headers={**headers, "device-space": self._device_id},
                             payload=payload,
                             timeout=20,
                             retry_auth=True,
@@ -1275,7 +1314,7 @@ class XunleiHijackDownloader(_PluginBase):
         resp, obj = self._request_json(
             method="GET",
             url=url,
-            headers=self._get_headers(),
+            headers={**self._get_headers(), "device-space": token},
             timeout=20,
             retry_auth=True,
             retry_count=1,
