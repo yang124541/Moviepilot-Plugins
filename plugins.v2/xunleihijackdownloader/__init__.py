@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -156,21 +156,14 @@ class XunleiHijackDownloader(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {"component": "VTextField", "props": {"model": "pan_auth", "label": "pan_auth（可留空自动获取）"}}
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 6},
                                 "content": [
                                     {"component": "VTextField", "props": {"model": "file_id", "label": "迅雷Docker容器file_id"}}
                                 ],
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 6},
                                 "content": [
                                     {"component": "VTextField", "props": {"model": "device_id", "label": "设备 ID（可留空自动获取）"}}
                                 ],
@@ -235,7 +228,6 @@ class XunleiHijackDownloader(_PluginBase):
             "fallback_to_builtin": True,
             "base_url": "",
             "authorization": "",
-            "pan_auth": "",
             "file_id": "",
             "device_id": "",
             "move_enabled": False,
@@ -652,7 +644,7 @@ class XunleiHijackDownloader(_PluginBase):
 
         headers = self._get_headers()
         if self._auto_refresh_pan_auth and not headers.get("pan-auth"):
-            return None, "pan_auth 获取失败，请手动填写。"
+            return None, "pan_auth 自动获取失败，请检查 Authorization/迅雷地址 是否正确。"
 
         analysis = self._analyze_magnet(magnet, headers)
         file_name = analysis.get("name") or f"xunlei-{int(time.time())}"
