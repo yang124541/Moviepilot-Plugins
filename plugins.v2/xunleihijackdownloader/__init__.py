@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.9"
+    plugin_version = "1.0.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -79,6 +79,10 @@ class XunleiHijackDownloader(_PluginBase):
         if self._enabled and self._move_enabled:
             self._start_move_scheduler()
         self._save_config()
+        logger.info(
+            f"XunleiHijack[v{self.plugin_version}] initialized: "
+            f"enabled={self._enabled}, base_url={self._base_url}, move_enabled={self._move_enabled}"
+        )
 
     def get_state(self) -> bool:
         return self._enabled
@@ -295,13 +299,13 @@ class XunleiHijackDownloader(_PluginBase):
         magnet = self._normalize_magnet(content)
         if not magnet:
             if self._fallback_to_builtin:
-                logger.warn("XunleiHijack fallback builtin: 不支持当前下载内容类型，未解析出 magnet。")
+                logger.warn(f"XunleiHijack[v{self.plugin_version}] fallback builtin: 不支持当前下载内容类型，未解析出 magnet。")
                 return None
             return "xunlei", None, None, "迅雷接管失败：仅支持磁力链接。"
         task_id, err = self._add_task(magnet)
         if not task_id:
             if self._fallback_to_builtin:
-                logger.warn(f"XunleiHijack fallback builtin: {err or '迅雷添加任务失败'}")
+                logger.warn(f"XunleiHijack[v{self.plugin_version}] fallback builtin: {err or '迅雷添加任务失败'}")
                 return None
             return "xunlei", None, None, err or "迅雷添加任务失败。"
         return "xunlei", task_id, "NoSubfolder", "添加下载成功"
@@ -582,7 +586,7 @@ class XunleiHijackDownloader(_PluginBase):
             if not self._last_request_error:
                 self._last_request_error = "unknown-request-error"
             logger.warn(
-                f"XunleiHijack request failed: {method.upper()} {url} -> {self._last_request_error}"
+                f"XunleiHijack[v{self.plugin_version}] request failed: {method.upper()} {url} -> {self._last_request_error}"
             )
         elif not resp.ok:
             body_hint = ""
@@ -824,7 +828,7 @@ class XunleiHijackDownloader(_PluginBase):
                 if isinstance(list_obj, list):
                     return [x for x in list_obj if isinstance(x, dict)]
         except Exception as err:
-            logger.warn(f"XunleiHijack list tasks failed: {err}")
+            logger.warn(f"XunleiHijack[v{self.plugin_version}] list tasks failed: {err}")
         return []
 
     def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True) -> bool:
