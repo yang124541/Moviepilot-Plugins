@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.20"
+    plugin_version = "1.0.21"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -670,31 +670,85 @@ class XunleiHijackDownloader(_PluginBase):
                 payload["file_size"] = str(total_size)
             return payload
 
-        payload = _build_payload(self._device_id)
-
         try:
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task"
-            resp, data = self._request_json(
-                method="POST",
-                url=url,
-                headers={**headers, "device-space": self._device_id},
-                payload=payload,
-                timeout=30,
-                retry_auth=True,
-            )
-            if not resp:
-                suffix = f"（{self._last_request_error}）" if self._last_request_error else ""
-                return None, f"迅雷任务创建请求失败：网络请求失败{suffix}"
-            if not resp.ok:
-                return None, f"迅雷任务创建请求失败：HTTP {resp.status_code}"
-            err = self._extract_api_error(data)
-            if err:
-                return None, f"迅雷任务创建失败：{err}"
-            task_id = self._task_id(data)
-            if not task_id:
-                return None, "迅雷任务创建失败：接口未返回 task_id。"
-            self._task_name_cache[task_id] = file_name
-            return task_id, None
+            base_device = str(self._device_id or "").strip()
+            device_candidates: List[str] = [base_device]
+            if base_device.startswith("device_id#"):
+                naked = base_device.split("#", 1)[1].strip()
+                if naked and naked not in device_candidates:
+                    device_candidates.append(naked)
+            elif base_device:
+                prefixed = f"device_id#{base_device}"
+                if prefixed not in device_candidates:
+                    device_candidates.append(prefixed)
+
+            attempts: List[Tuple[str, str]] = []
+            for device in device_candidates:
+                attempts.append((device, ""))       # 对齐 liqman：device-space 头保持空
+                attempts.append((device, device))   # 兼容部分环境：device-space 头带 device_id
+
+            seen: Set[Tuple[str, str]] = set()
+            ordered_attempts: List[Tuple[str, str]] = []
+            for item in attempts:
+                if item in seen:
+                    continue
+                seen.add(item)
+                ordered_attempts.append(item)
+
+            last_err = ""
+            for submit_device, header_space in ordered_attempts:
+                payload = _build_payload(submit_device)
+                req_headers = {**headers, "device-space": header_space}
+                resp, data = self._request_json(
+                    method="POST",
+                    url=url,
+                    headers=req_headers,
+                    payload=payload,
+                    timeout=30,
+                    retry_auth=True,
+                )
+                if not resp:
+                    last_err = f"网络请求失败 {self._last_request_error}".strip()
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] add task failed: "
+                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}, {last_err}"
+                    )
+                    continue
+                if not resp.ok:
+                    last_err = f"HTTP {resp.status_code} {self._last_request_error}".strip()
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] add task failed: "
+                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}, {last_err}"
+                    )
+                    continue
+                err = self._extract_api_error(data)
+                if err:
+                    last_err = f"API {err}"
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] add task api error: "
+                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}, {err}"
+                    )
+                    continue
+                task_id = self._task_id(data)
+                if not task_id:
+                    last_err = "接口未返回 task_id"
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] add task missing task_id: "
+                        f"device={submit_device}, header_device_space={header_space or 'EMPTY'}"
+                    )
+                    continue
+
+                if submit_device != base_device:
+                    self._device_id = submit_device
+                    self._save_config()
+                    logger.info(
+                        f"XunleiHijack[v{self.plugin_version}] switch submit device_id: "
+                        f"{base_device or 'EMPTY'} -> {submit_device}"
+                    )
+                self._task_name_cache[task_id] = file_name
+                return task_id, None
+            return None, f"迅雷任务创建失败：{last_err or '未知错误'}"
         except Exception as err:
             return None, f"迅雷任务创建请求失败：{err}"
 
