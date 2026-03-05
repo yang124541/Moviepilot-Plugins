@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -547,7 +547,8 @@ class XunleiHijackDownloader(_PluginBase):
                         obj = {}
                 return resp, obj, ""
             except Exception as err:
-                return None, {}, f"{type(err).__name__}: {err}"
+                detail = str(err).strip() or repr(err)
+                return None, {}, f"{type(err).__name__}: {detail}"
 
         resp: Optional[requests.Response] = None
         obj: Any = {}
@@ -577,6 +578,19 @@ class XunleiHijackDownloader(_PluginBase):
                     self._last_request_error = err_text
                 else:
                     self._last_request_error = ""
+        if resp is None:
+            if not self._last_request_error:
+                self._last_request_error = "unknown-request-error"
+            logger.warn(
+                f"XunleiHijack request failed: {method.upper()} {url} -> {self._last_request_error}"
+            )
+        elif not resp.ok:
+            body_hint = ""
+            try:
+                body_hint = (resp.text or "").strip().replace("\n", " ")[:200]
+            except Exception:
+                body_hint = ""
+            self._last_request_error = f"HTTP {resp.status_code}" + (f" body={body_hint}" if body_hint else "")
         return resp, obj
 
     def _fetch_pan_auth(self) -> Optional[str]:
