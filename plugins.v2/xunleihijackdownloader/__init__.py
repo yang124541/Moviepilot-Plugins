@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -254,7 +254,27 @@ class XunleiHijackDownloader(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
-        pass
+        return [
+            {
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [
+                            {
+                                "component": "VAlert",
+                                "props": {
+                                    "type": "info",
+                                    "variant": "tonal",
+                                    "text": "本插件用于接管 MoviePilot 下载到迅雷。请在“插件配置”中填写迅雷地址、授权和目录参数。"
+                                }
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
 
     def get_module(self) -> Dict[str, Any]:
         if not self._enabled:
@@ -366,33 +386,30 @@ class XunleiHijackDownloader(_PluginBase):
         return results
 
     def start_torrents(self, hashs: Union[list, str], downloader: Optional[str] = None) -> Optional[bool]:
-        if not downloader:
-            return None
-        if downloader and not self._is_xunlei_downloader(downloader):
-            return None
         ids = self._normalize_hashs(hashs)
-        if not ids:
+        should_handle = self._should_handle_torrent_control(ids=ids, downloader=downloader)
+        if should_handle is None:
+            return None
+        if not should_handle:
             return False
         return self._operate_tasks(ids=ids, action="start")
 
     def stop_torrents(self, hashs: Union[list, str], downloader: Optional[str] = None) -> Optional[bool]:
-        if not downloader:
-            return None
-        if downloader and not self._is_xunlei_downloader(downloader):
-            return None
         ids = self._normalize_hashs(hashs)
-        if not ids:
+        should_handle = self._should_handle_torrent_control(ids=ids, downloader=downloader)
+        if should_handle is None:
+            return None
+        if not should_handle:
             return False
         return self._operate_tasks(ids=ids, action="pause")
 
     def remove_torrents(self, hashs: Union[str, list], delete_file: Optional[bool] = True,
                         downloader: Optional[str] = None) -> Optional[bool]:
-        if not downloader:
-            return None
-        if downloader and not self._is_xunlei_downloader(downloader):
-            return None
         ids = self._normalize_hashs(hashs)
-        if not ids:
+        should_handle = self._should_handle_torrent_control(ids=ids, downloader=downloader)
+        if should_handle is None:
+            return None
+        if not should_handle:
             return False
         ok = self._operate_tasks(ids=ids, action="delete", delete_file=bool(delete_file))
         if ok:
@@ -520,6 +537,46 @@ class XunleiHijackDownloader(_PluginBase):
             headers["pan-auth"] = pan_auth
         return headers
 
+    def _request_json(self,
+                      method: str,
+                      url: str,
+                      headers: Optional[Dict[str, str]] = None,
+                      payload: Optional[Dict[str, Any]] = None,
+                      timeout: int = 20,
+                      retry_auth: bool = True) -> Tuple[Optional[requests.Response], Any]:
+        req_headers = dict(headers or self._get_headers())
+
+        def _once(local_headers: Dict[str, str]) -> Tuple[Optional[requests.Response], Any]:
+            try:
+                kwargs: Dict[str, Any] = {"headers": local_headers, "timeout": timeout}
+                if payload is not None:
+                    kwargs["json"] = payload
+                resp = requests.request(method=method.upper(), url=url, **kwargs)
+                obj: Any = {}
+                if resp.text:
+                    try:
+                        obj = resp.json()
+                    except Exception:
+                        obj = {}
+                return resp, obj
+            except Exception:
+                return None, {}
+
+        resp, obj = _once(req_headers)
+        if (
+            retry_auth
+            and self._auto_refresh_pan_auth
+            and self._authorization
+            and self._should_refresh_pan_auth(resp=resp, obj=obj)
+        ):
+            fresh = self._fetch_pan_auth()
+            if fresh and fresh != req_headers.get("pan-auth"):
+                self._pan_auth = fresh
+                self._save_config()
+                req_headers["pan-auth"] = fresh
+                resp, obj = _once(req_headers)
+        return resp, obj
+
     def _fetch_pan_auth(self) -> Optional[str]:
         if not self._base_url or not self._authorization:
             return None
@@ -544,9 +601,9 @@ class XunleiHijackDownloader(_PluginBase):
             return None
         try:
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks?type=user%23runner&device_space="
-            resp = requests.get(url, headers=self._get_headers(), timeout=20)
-            resp.raise_for_status()
-            obj = resp.json() if resp.text else {}
+            resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
+            if not resp or not resp.ok:
+                raise ValueError(f"http={resp.status_code if resp else 'request-failed'}")
             tasks = obj.get("tasks") if isinstance(obj, dict) else None
             if not isinstance(tasks, list):
                 tasks = []
@@ -566,10 +623,9 @@ class XunleiHijackDownloader(_PluginBase):
         ):
             try:
                 url = f"{self._base_url}{endpoint}"
-                resp = requests.get(url, headers=self._get_headers(), timeout=20)
-                if not resp.ok:
+                resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
+                if not resp or not resp.ok:
                     continue
-                obj = resp.json() if resp.text else {}
                 if not isinstance(obj, dict):
                     continue
                 for key in ("devices", "list", "data"):
@@ -633,14 +689,24 @@ class XunleiHijackDownloader(_PluginBase):
 
         try:
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task"
-            resp = requests.post(url, json=payload, headers=headers, timeout=30)
-            resp.raise_for_status()
-            data = resp.json() if resp.text else {}
-            if isinstance(data, dict) and data.get("error"):
-                return None, f"迅雷任务创建失败：{data.get('error')}"
+            resp, data = self._request_json(
+                method="POST",
+                url=url,
+                headers=headers,
+                payload=payload,
+                timeout=30,
+                retry_auth=True,
+            )
+            if not resp:
+                return None, "迅雷任务创建请求失败：网络请求失败。"
+            if not resp.ok:
+                return None, f"迅雷任务创建请求失败：HTTP {resp.status_code}"
+            err = self._extract_api_error(data)
+            if err:
+                return None, f"迅雷任务创建失败：{err}"
             task_id = self._task_id(data)
             if not task_id:
-                task_id = f"xunlei-{int(time.time())}"
+                return None, "迅雷任务创建失败：接口未返回 task_id。"
             self._task_name_cache[task_id] = file_name
             return task_id, None
         except Exception as err:
@@ -650,9 +716,16 @@ class XunleiHijackDownloader(_PluginBase):
         result = {"name": "", "total_size": 0, "total_count": 0, "indices": []}
         try:
             url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/resource/list"
-            resp = requests.post(url, json={"page_size": 1000, "urls": magnet}, headers=headers, timeout=30)
-            resp.raise_for_status()
-            obj = resp.json() if resp.text else {}
+            resp, obj = self._request_json(
+                method="POST",
+                url=url,
+                headers=headers,
+                payload={"page_size": 1000, "urls": magnet},
+                timeout=30,
+                retry_auth=True,
+            )
+            if not resp or not resp.ok:
+                return result
             resources = self._extract_resources(obj)
             if not resources:
                 return result
@@ -699,6 +772,8 @@ class XunleiHijackDownloader(_PluginBase):
                     continue
                 src = self._resolve_source_path(source_root, self._task_name(task))
                 if not src or not src.exists():
+                    src = self._resolve_source_path_fallback(source_root, self._task_name(task))
+                if not src or not src.exists():
                     continue
                 if self._move_safe_seconds > 0 and now_ts - src.stat().st_mtime < self._move_safe_seconds:
                     continue
@@ -715,13 +790,15 @@ class XunleiHijackDownloader(_PluginBase):
         try:
             headers = self._get_headers()
             device_id = self._fetch_device_id() or self._device_id
+            if not device_id:
+                return []
             url = (
                 f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
                 f"?type=user%23download-url&device_space={quote(device_id)}"
             )
-            resp = requests.get(url, headers=headers, timeout=20)
-            resp.raise_for_status()
-            obj = resp.json() if resp.text else {}
+            resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
+            if not resp or not resp.ok:
+                raise ValueError(f"http={resp.status_code if resp else 'request-failed'}")
             if isinstance(obj, dict):
                 tasks = obj.get("tasks")
                 if isinstance(tasks, list):
@@ -767,10 +844,16 @@ class XunleiHijackDownloader(_PluginBase):
         for url in urls:
             for payload in payloads:
                 try:
-                    resp = requests.post(url, headers=headers, json=payload, timeout=20)
-                    if not resp.ok:
+                    resp, obj = self._request_json(
+                        method="POST",
+                        url=url,
+                        headers=headers,
+                        payload=payload,
+                        timeout=20,
+                        retry_auth=True,
+                    )
+                    if not resp or not resp.ok:
                         continue
-                    obj = resp.json() if resp.text else {}
                     if not self._is_operation_success(obj=obj, ids=ids):
                         continue
                     return True
@@ -931,18 +1014,26 @@ class XunleiHijackDownloader(_PluginBase):
 
     @staticmethod
     def _task_id(data: Any) -> str:
+        if isinstance(data, list):
+            for item in data:
+                ret = XunleiHijackDownloader._task_id(item)
+                if ret:
+                    return ret
         if not isinstance(data, dict):
             return ""
         for key in ("task_id", "id", "gid"):
             value = data.get(key)
             if value:
                 return str(value)
-        task = data.get("task")
-        if isinstance(task, dict):
-            for key in ("task_id", "id", "gid"):
-                value = task.get(key)
-                if value:
-                    return str(value)
+        for key in ("task", "data", "result"):
+            ret = XunleiHijackDownloader._task_id(data.get(key))
+            if ret:
+                return ret
+        tasks = data.get("tasks")
+        if isinstance(tasks, list):
+            ret = XunleiHijackDownloader._task_id(tasks)
+            if ret:
+                return ret
         return ""
 
     def _task_key(self, task: Dict[str, Any]) -> str:
@@ -1009,6 +1100,107 @@ class XunleiHijackDownloader(_PluginBase):
         if short.exists():
             return short
         return None
+
+    @staticmethod
+    def _resolve_source_path_fallback(source_root: Path, task_name: str) -> Optional[Path]:
+        task_raw = str(task_name or "").strip()
+        if not task_raw or not source_root.exists():
+            return None
+        task_base = Path(task_raw).name
+        task_stem = Path(task_base).stem
+        task_norm = XunleiHijackDownloader._normalize_name(task_stem or task_base)
+        if not task_norm:
+            return None
+        candidates: List[Tuple[int, float, Path]] = []
+        try:
+            for item in source_root.iterdir():
+                name = item.name
+                stem = item.stem
+                score = 0
+                if name.lower() == task_base.lower():
+                    score = 100
+                elif stem.lower() == task_stem.lower() and task_stem:
+                    score = 95
+                else:
+                    item_norm = XunleiHijackDownloader._normalize_name(stem or name)
+                    if item_norm == task_norm:
+                        score = 90
+                    elif len(task_norm) >= 8 and (item_norm.startswith(task_norm) or task_norm.startswith(item_norm)):
+                        score = 80
+                if score > 0:
+                    mtime = 0.0
+                    try:
+                        mtime = item.stat().st_mtime
+                    except Exception:
+                        pass
+                    candidates.append((score, mtime, item))
+        except Exception:
+            return None
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return candidates[0][2]
+
+    @staticmethod
+    def _normalize_name(text: str) -> str:
+        name = str(text or "").strip().lower()
+        name = re.sub(r"[\\/:*?\"<>|]+", " ", name)
+        name = re.sub(r"[\s._\-\[\]\(\)\{\}]+", " ", name).strip()
+        return name
+
+    @staticmethod
+    def _extract_api_error(obj: Any) -> str:
+        if not isinstance(obj, dict):
+            return ""
+        code = obj.get("code")
+        if code is not None:
+            try:
+                if int(code) not in (0, 200):
+                    return str(obj.get("error") or obj.get("err") or obj.get("message") or obj.get("msg") or f"code={code}")
+            except Exception:
+                pass
+        for key in ("error", "err"):
+            value = obj.get(key)
+            if value:
+                return str(value)
+        return ""
+
+    @staticmethod
+    def _should_refresh_pan_auth(resp: Optional[requests.Response], obj: Any) -> bool:
+        if resp is not None and resp.status_code in (401, 403):
+            return True
+        if not isinstance(obj, dict):
+            return False
+        code = obj.get("code")
+        if code is not None:
+            try:
+                if int(code) in (401, 403):
+                    return True
+            except Exception:
+                pass
+        text = " ".join([
+            str(obj.get("error") or ""),
+            str(obj.get("err") or ""),
+            str(obj.get("message") or ""),
+            str(obj.get("msg") or ""),
+            str(obj.get("detail") or ""),
+        ]).lower()
+        return any(flag in text for flag in ("unauthorized", "forbidden", "token", "login", "expired", "auth failed"))
+
+    def _should_handle_torrent_control(self, ids: Set[str], downloader: Optional[str]) -> Optional[bool]:
+        if downloader and not self._is_xunlei_downloader(downloader):
+            return None
+        if not ids:
+            return False
+        if downloader:
+            return True
+        tasks = self._list_download_tasks()
+        if not tasks:
+            return None
+        task_ids = {self._task_key(x) for x in tasks if isinstance(x, dict) and self._task_key(x)}
+        if not task_ids:
+            return None
+        return len(ids.intersection(task_ids)) > 0
 
     @staticmethod
     def _dedupe_target(path: Path) -> Path:
