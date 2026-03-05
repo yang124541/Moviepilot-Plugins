@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -139,14 +139,14 @@ class XunleiHijackDownloader(_PluginBase):
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 6},
                                 "content": [
-                                    {"component": "VTextField", "props": {"model": "base_url", "label": "迅雷地址", "placeholder": "http://192.168.2.3:2345"}}
+                                    {"component": "VTextField", "props": {"model": "base_url", "label": "迅雷Docker地址", "placeholder": "http://192.168.2.3:2345"}}
                                 ],
                             },
                             {
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 6},
                                 "content": [
-                                    {"component": "VTextField", "props": {"model": "authorization", "label": "Authorization"}}
+                                    {"component": "VTextField", "props": {"model": "authorization", "label": "Authorization值"}}
                                 ],
                             },
                         ],
@@ -165,7 +165,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 4},
                                 "content": [
-                                    {"component": "VTextField", "props": {"model": "file_id", "label": "父目录 file_id"}}
+                                    {"component": "VTextField", "props": {"model": "file_id", "label": "迅雷Docker容器file_id"}}
                                 ],
                             },
                             {
