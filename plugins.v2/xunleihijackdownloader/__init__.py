@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.13"
+    plugin_version = "1.0.14"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -648,6 +648,8 @@ class XunleiHijackDownloader(_PluginBase):
             candidates=candidates,
             exclude_device=exclude_device,
             old_device=old_device,
+            allow_old_device=(not force_refresh),
+            allow_fallback=(not force_refresh),
         )
         if picked:
             self._device_id = picked
@@ -824,6 +826,16 @@ class XunleiHijackDownloader(_PluginBase):
                     f"?type=user%23download-url&device_space={quote(device_id or '')}"
                 )
                 resp, obj = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
+            if not resp or not resp.ok:
+                # 失活/异常时再用空 device_space 回退拉取一次，便于从返回任务回填新的 target。
+                url = (
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                    f"?type=user%23download-url&device_space="
+                )
+                resp2, obj2 = self._request_json(method="GET", url=url, headers=headers, timeout=20, retry_auth=True)
+                if resp2 and resp2.ok:
+                    resp, obj = resp2, obj2
+                    device_id = ""
             if not resp or not resp.ok:
                 raise ValueError(f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}")
             if isinstance(obj, dict):
@@ -1224,14 +1236,20 @@ class XunleiHijackDownloader(_PluginBase):
     def _refresh_device_id_on_inactive_space(self, obj: Any = None) -> bool:
         if not self._is_device_space_not_active(obj=obj):
             return False
-        old_device = self._device_id
+        old_device = str(self._device_id or "").strip()
         new_device = self._fetch_device_id(force_refresh=True, exclude_device=old_device or "")
-        if new_device:
+        if new_device and new_device != old_device:
             logger.warn(
                 f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, refresh device_id: "
                 f"{old_device or 'EMPTY'} -> {new_device}"
             )
             return True
+        if new_device and new_device == old_device:
+            logger.warn(
+                f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, "
+                f"refresh still got same device_id: {old_device}"
+            )
+            return False
         logger.warn(
             f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, "
             f"but refresh device_id failed."
@@ -1268,7 +1286,11 @@ class XunleiHijackDownloader(_PluginBase):
             return False
         return bool(resp.ok)
 
-    def _pick_active_device_id(self, candidates: List[str], exclude_device: str = "", old_device: str = "") -> Optional[str]:
+    def _pick_active_device_id(self, candidates: List[str],
+                               exclude_device: str = "",
+                               old_device: str = "",
+                               allow_old_device: bool = True,
+                               allow_fallback: bool = True) -> Optional[str]:
         dedup: List[str] = []
         for item in candidates:
             token = str(item or "").strip()
@@ -1277,13 +1299,13 @@ class XunleiHijackDownloader(_PluginBase):
         exclude = str(exclude_device or "").strip()
         old = str(old_device or "").strip()
         preferred = [x for x in dedup if x != exclude]
-        if old and old not in preferred:
+        if allow_old_device and old and old != exclude and old not in preferred:
             preferred.append(old)
         for device in preferred:
             if self._is_device_candidate_active(device):
                 return device
         # 全部探测失败时，仍返回一个候选值，避免完全不可用。
-        if preferred:
+        if allow_fallback and preferred:
             return preferred[0]
         return None
 
