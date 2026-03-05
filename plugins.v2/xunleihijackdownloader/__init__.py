@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.15"
+    plugin_version = "1.0.16"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -599,46 +599,31 @@ class XunleiHijackDownloader(_PluginBase):
         if self._device_id and not force_refresh:
             return self._device_id
         old_device = str(self._device_id or "").strip()
-        if force_refresh and self._device_id:
-            self._device_id = ""
-            self._save_config()
         if not self._base_url:
             return None
         candidates: List[str] = []
-        try:
-            url = f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks?type=user%23runner&device_space="
-            resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
-            if not resp or not resp.ok:
-                raise ValueError(f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}")
-            tasks = obj.get("tasks") if isinstance(obj, dict) else None
-            if not isinstance(tasks, list):
-                tasks = []
-            for task in tasks:
-                params = task.get("params") if isinstance(task, dict) and isinstance(task.get("params"), dict) else {}
-                device = str(params.get("target") or (task.get("target") if isinstance(task, dict) else "") or "").strip()
-                self._append_device_candidate(candidates, device)
-        except Exception as err:
-            logger.warn(f"XunleiHijack fetch device id failed: {err}")
-        # runner 候选不足时，再从下载任务列表（空 space）中提取 target/space 作为候选。
-        try:
-            url = (
-                f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                f"?type=user%23download-url&device_space="
-            )
-            resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
-            if resp and resp.ok and isinstance(obj, dict):
-                tasks = obj.get("tasks")
-                if not isinstance(tasks, list):
-                    tasks = []
-                for task in tasks:
-                    if not isinstance(task, dict):
+        probe_spaces: List[str] = [""]
+        if old_device:
+            probe_spaces.append(old_device)
+        for task_type in ("user%23runner", "user%23download-url"):
+            for probe_space in probe_spaces:
+                try:
+                    url = (
+                        f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                        f"?type={task_type}&device_space={quote(probe_space)}"
+                    )
+                    resp, obj = self._request_json(
+                        method="GET",
+                        url=url,
+                        headers={**self._get_headers(), "device-space": probe_space},
+                        timeout=20,
+                        retry_auth=True
+                    )
+                    if not resp or not resp.ok or not isinstance(obj, dict):
                         continue
-                    params = task.get("params") if isinstance(task.get("params"), dict) else {}
-                    for key in ("target", "space", "device_space"):
-                        self._append_device_candidate(candidates, str(params.get(key) or "").strip())
-                        self._append_device_candidate(candidates, str(task.get(key) or "").strip())
-        except Exception:
-            pass
+                    self._collect_device_candidates_from_obj(candidates=candidates, payload=obj)
+                except Exception:
+                    continue
         # runner 任务为空时，尝试设备列表接口回退获取
         for endpoint in (
             "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/devices",
@@ -646,7 +631,13 @@ class XunleiHijackDownloader(_PluginBase):
         ):
             try:
                 url = f"{self._base_url}{endpoint}"
-                resp, obj = self._request_json(method="GET", url=url, headers=self._get_headers(), timeout=20, retry_auth=True)
+                resp, obj = self._request_json(
+                    method="GET",
+                    url=url,
+                    headers={**self._get_headers(), "device-space": old_device or ""},
+                    timeout=20,
+                    retry_auth=True
+                )
                 if not resp or not resp.ok:
                     continue
                 if not isinstance(obj, dict):
@@ -664,13 +655,19 @@ class XunleiHijackDownloader(_PluginBase):
                         self._append_device_candidate(candidates, device)
             except Exception:
                 continue
+        if force_refresh:
+            logger.info(
+                f"XunleiHijack[v{self.plugin_version}] refresh device candidates: "
+                f"count={len(candidates)}, exclude={exclude_device or 'EMPTY'}"
+            )
         # 候选设备探测：优先选择可用设备，避免命中失活 device_space。
         picked = self._pick_active_device_id(
             candidates=candidates,
             exclude_device=exclude_device,
             old_device=old_device,
             allow_old_device=(not force_refresh),
-            allow_fallback=(not force_refresh),
+            # 刷新场景下也允许回退到“新候选首个”，避免全部探测失败导致完全不可用。
+            allow_fallback=True,
         )
         if picked:
             self._device_id = picked
@@ -1302,6 +1299,18 @@ class XunleiHijackDownloader(_PluginBase):
             return
         if token not in candidates:
             candidates.append(token)
+
+    def _collect_device_candidates_from_obj(self, candidates: List[str], payload: Any) -> None:
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                lk = str(key or "").strip().lower()
+                if lk in ("target", "space", "device_space", "device-id", "device_id"):
+                    self._append_device_candidate(candidates, str(value or "").strip())
+                self._collect_device_candidates_from_obj(candidates, value)
+            return
+        if isinstance(payload, list):
+            for item in payload:
+                self._collect_device_candidates_from_obj(candidates, item)
 
     def _is_device_candidate_active(self, device: str) -> bool:
         token = str(device or "").strip()

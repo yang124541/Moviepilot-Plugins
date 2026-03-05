@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.15",
+    "version": "1.0.16",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.16": "进一步增强失活设备恢复：刷新时不清空旧 device_id；多路径探测 runner/download-url 候选并递归提取 target/space/device_space；刷新场景允许回退到新候选首个，降低“刷新失败导致无法发送任务”的概率。",
       "v1.0.15": "增强失活设备恢复：补充从下载任务列表提取 device_id 候选；请求头统一附带 device-space 并在任务创建/列表/控制/探测中透传，提升 device_space_not_active 场景下的成功率。",
       "v1.0.14": "修复 device_space 失活循环：刷新 device_id 时禁止回退旧值；仅新旧不同才视为刷新成功；任务列表新增空 device_space 回退拉取并回填 target。",
       "v1.0.13": "增强 device_id 自愈：刷新时收集多候选并逐个探测可用性，优先切换到可用 device_space；任务列表在无 device_id 时也可拉取并回填 target。",
