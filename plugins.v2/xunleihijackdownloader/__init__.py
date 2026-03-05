@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.17"
+    plugin_version = "1.0.18"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1367,12 +1367,12 @@ class XunleiHijackDownloader(_PluginBase):
                 if variant and variant not in dedup:
                     dedup.append(variant)
         exclude = str(exclude_device or "").strip()
-        exclude_variants = set(self._device_id_variants(exclude)) if exclude else set()
         old = str(old_device or "").strip()
-        preferred = [x for x in dedup if x not in exclude_variants]
+        # 仅排除“旧值原串”，保留其变体（如 device_id#xxx <-> xxx）供刷新探测。
+        preferred = [x for x in dedup if x != exclude]
         if allow_old_device and old:
             for variant in self._device_id_variants(old):
-                if variant and variant not in exclude_variants and variant not in preferred:
+                if variant and variant != exclude and variant not in preferred:
                     preferred.append(variant)
         for device in preferred:
             if self._is_device_candidate_active(device):
