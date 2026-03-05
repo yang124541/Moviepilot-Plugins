@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -57,6 +57,7 @@ class XunleiHijackDownloader(_PluginBase):
         self._moved_task_order = self._load_moved_task_keys()
         self._moved_task_keys = set(self._moved_task_order)
         self._task_name_cache = {}
+        self._auto_refresh_pan_auth = True
         if config:
             self._enabled = bool(config.get("enabled", False))
             self._hijack_download = bool(config.get("hijack_download", True))
@@ -64,7 +65,6 @@ class XunleiHijackDownloader(_PluginBase):
             self._base_url = self._normalize_base_url(config.get("base_url") or "")
             self._authorization = str(config.get("authorization") or "").strip()
             self._pan_auth = str(config.get("pan_auth") or "").strip()
-            self._auto_refresh_pan_auth = bool(config.get("auto_refresh_pan_auth", True))
             self._file_id = str(config.get("file_id") or "").strip()
             self._device_id = str(config.get("device_id") or "").strip()
             self._move_enabled = bool(config.get("move_enabled", False))
@@ -184,13 +184,6 @@ class XunleiHijackDownloader(_PluginBase):
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 4},
                                 "content": [
-                                    {"component": "VSwitch", "props": {"model": "auto_refresh_pan_auth", "label": "自动刷新 pan_auth"}}
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
                                     {"component": "VSwitch", "props": {"model": "move_enabled", "label": "下载完成自动搬运"}}
                                 ],
                             },
@@ -243,7 +236,6 @@ class XunleiHijackDownloader(_PluginBase):
             "base_url": "",
             "authorization": "",
             "pan_auth": "",
-            "auto_refresh_pan_auth": True,
             "file_id": "",
             "device_id": "",
             "move_enabled": False,
@@ -450,7 +442,6 @@ class XunleiHijackDownloader(_PluginBase):
             "base_url": self._base_url,
             "authorization": self._authorization,
             "pan_auth": self._pan_auth,
-            "auto_refresh_pan_auth": self._auto_refresh_pan_auth,
             "file_id": self._file_id,
             "device_id": self._device_id,
             "move_enabled": self._move_enabled,

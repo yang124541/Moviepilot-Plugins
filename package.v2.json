@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.5": "移除“自动刷新 pan_auth”配置项，改为固定自动刷新，减少手动配置与误关导致的鉴权失败。",
       "v1.0.4": "完善稳定性：修复任务创建假成功问题；API 鉴权失败自动刷新 pan_auth 并重试；任务控制在未指定 downloader 时按任务归属判断；增强完成搬运路径匹配；补齐插件说明页。",
       "v1.0.3": "修复稳定性：搬运完成任务改为有序持久化避免重复搬运；优化任务操作成功判定并补设备ID回退接口，提升接管控制成功率。",
       "v1.0.2": "修复接管稳定性：支持 .torrent/bytes 转磁力；补齐任务列表/暂停/恢复/删除/下载器信息接口；默认开启失败回退内建下载器。",
