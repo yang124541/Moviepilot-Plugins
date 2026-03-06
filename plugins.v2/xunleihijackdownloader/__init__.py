@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.43"
+    plugin_version = "1.0.44"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1219,16 +1219,6 @@ class XunleiHijackDownloader(_PluginBase):
             {"type": action, "id": first_id},
             {"type": action, "task_id": first_id},
         ]
-        payloads: List[Dict[str, Any]] = []
-        for base in payload_templates:
-            raw_payload = dict(base)
-            space_payload = {**base, "device_space": self._device_id}
-            if action == "delete":
-                raw_payload["delete_file"] = bool(delete_file)
-                space_payload["delete_file"] = bool(delete_file)
-            payloads.append(raw_payload)
-            payloads.append(space_payload)
-
         methods = ["POST", "PUT"]
         urls = [
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task/action",
@@ -1236,43 +1226,75 @@ class XunleiHijackDownloader(_PluginBase):
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task",
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks",
         ]
-        header_variants = [
-            {**headers, "device-space": self._device_id},
-            {**headers, "device-space": ""},
-            headers,
-        ]
-        failure_hints: List[str] = []
+        
+        def _attempt_with_device(device_space: str) -> Tuple[bool, List[str]]:
+            payloads: List[Dict[str, Any]] = []
+            for base in payload_templates:
+                raw_payload = dict(base)
+                space_payload = {**base, "device_space": device_space}
+                if action == "delete":
+                    raw_payload["delete_file"] = bool(delete_file)
+                    space_payload["delete_file"] = bool(delete_file)
+                payloads.append(raw_payload)
+                payloads.append(space_payload)
 
-        for method in methods:
-            for url in urls:
-                for request_headers in header_variants:
-                    for payload in payloads:
-                        try:
-                            resp, obj = self._request_json(
-                                method=method,
-                                url=url,
-                                headers=request_headers,
-                                payload=payload,
-                                timeout=20,
-                                retry_auth=True,
-                            )
-                            if not resp or not resp.ok:
-                                hint = str(self._last_request_error or "").strip()
+            header_variants = [
+                {**headers, "device-space": device_space},
+                {**headers, "device-space": ""},
+                headers,
+            ]
+            local_hints: List[str] = []
+            for method in methods:
+                for url in urls:
+                    for request_headers in header_variants:
+                        for payload in payloads:
+                            try:
+                                resp, obj = self._request_json(
+                                    method=method,
+                                    url=url,
+                                    headers=request_headers,
+                                    payload=payload,
+                                    timeout=20,
+                                    retry_auth=True,
+                                )
+                                if not resp or not resp.ok:
+                                    hint = str(self._last_request_error or "").strip()
+                                    if hint:
+                                        local_hints.append(hint)
+                                    continue
+                                if self._is_operation_success(obj=obj, ids=set(id_list)):
+                                    return True, local_hints
+                                hint = str(self._extract_api_error(obj) or "").strip()
+                                if not hint:
+                                    merged = str(self._merge_error_texts(obj) or "").strip()
+                                    if merged and merged != str(self._last_request_error or "").strip().lower():
+                                        hint = merged
                                 if hint:
-                                    failure_hints.append(hint)
+                                    local_hints.append(hint)
+                            except Exception as err:
+                                local_hints.append(str(err))
                                 continue
-                            if self._is_operation_success(obj=obj, ids=set(id_list)):
-                                return True
-                            hint = str(self._extract_api_error(obj) or "").strip()
-                            if not hint:
-                                merged = str(self._merge_error_texts(obj) or "").strip()
-                                if merged and merged != str(self._last_request_error or "").strip().lower():
-                                    hint = merged
-                            if hint:
-                                failure_hints.append(hint)
-                        except Exception as err:
-                            failure_hints.append(str(err))
-                            continue
+            return False, local_hints
+
+        current_device = str(self._device_id or "").strip()
+        ok, failure_hints = _attempt_with_device(current_device)
+        if ok:
+            return True
+
+        merged_failures = " ".join([str(item or "") for item in failure_hints]).lower()
+        if "device_space_not_active" in merged_failures:
+            refreshed_device = str(self._fetch_device_id(force_refresh=True) or "").strip()
+            if refreshed_device:
+                if refreshed_device != current_device:
+                    self._device_id = refreshed_device
+                    self._save_config()
+                ok, retry_hints = _attempt_with_device(refreshed_device)
+                failure_hints.extend(retry_hints)
+                if ok:
+                    return True
+            else:
+                failure_hints.append("device_space_not_active: device_id 刷新失败")
+
         if failure_hints:
             deduped: List[str] = []
             for hint in failure_hints:
