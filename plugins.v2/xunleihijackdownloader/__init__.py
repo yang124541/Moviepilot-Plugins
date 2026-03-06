@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.57"
+    plugin_version = "1.0.58"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -53,8 +53,12 @@ class XunleiHijackDownloader(_PluginBase):
     _completed_seen_at: Dict[str, float] = {}
     _completed_seen_order: List[str] = []
     _completed_seen_name: Dict[str, str] = {}
+    _completed_seen_fail_count: Dict[str, int] = {}
+    _completed_seen_next_try_at: Dict[str, float] = {}
     _max_moved_keys = 2000
     _max_completed_seen_keys = 4000
+    _completed_seen_ttl_seconds = 86400
+    _completed_seen_max_missing = 20
     _last_request_error = ""
 
     def init_plugin(self, config: dict = None):
@@ -65,6 +69,8 @@ class XunleiHijackDownloader(_PluginBase):
         self._completed_seen_at = {}
         self._completed_seen_order = []
         self._completed_seen_name = {}
+        self._completed_seen_fail_count = {}
+        self._completed_seen_next_try_at = {}
         self._auto_refresh_pan_auth = True
         if config:
             self._enabled = bool(config.get("enabled", False))
@@ -80,6 +86,7 @@ class XunleiHijackDownloader(_PluginBase):
             self._target_watch_dir = str(config.get("target_watch_dir") or "").strip()
             self._move_interval_minutes = self._to_positive_int(config.get("move_interval_minutes"), 3)
             self._move_safe_seconds = self._to_non_negative_int(config.get("move_safe_seconds"), 60)
+        self._load_completed_seen_cache()
 
         if self._enabled and self._auto_refresh_pan_auth and not self._pan_auth:
             self._pan_auth = self._fetch_pan_auth() or self._pan_auth
@@ -796,11 +803,75 @@ class XunleiHijackDownloader(_PluginBase):
         except Exception as err:
             logger.warn(f"XunleiHijack persist moved keys failed: {err}")
 
+    def _load_completed_seen_cache(self) -> None:
+        self._completed_seen_at = {}
+        self._completed_seen_order = []
+        self._completed_seen_name = {}
+        self._completed_seen_fail_count = {}
+        self._completed_seen_next_try_at = {}
+        try:
+            payload = self.get_data("completed_seen_cache")
+        except Exception:
+            payload = None
+        items = payload if isinstance(payload, list) else []
+        now_ts = time.time()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            token = str(item.get("key") or "").strip()
+            if not token or token in self._moved_task_keys:
+                continue
+            ts = self._parse_unix_timestamp(item.get("ts"))
+            if ts is None:
+                continue
+            if now_ts - ts > float(self._completed_seen_ttl_seconds):
+                continue
+            if token in self._completed_seen_at:
+                continue
+            self._completed_seen_order.append(token)
+            self._completed_seen_at[token] = float(ts)
+            name = Path(str(item.get("name") or "").strip()).name
+            self._completed_seen_name[token] = name
+            try:
+                fail_count = int(item.get("fail") or 0)
+            except Exception:
+                fail_count = 0
+            self._completed_seen_fail_count[token] = max(0, fail_count)
+            next_try = self._parse_unix_timestamp(item.get("next_try_at"))
+            self._completed_seen_next_try_at[token] = float(next_try or 0.0)
+        if len(self._completed_seen_order) > self._max_completed_seen_keys:
+            overflow = self._completed_seen_order[:-self._max_completed_seen_keys]
+            self._completed_seen_order = self._completed_seen_order[-self._max_completed_seen_keys:]
+            for key in overflow:
+                self._completed_seen_at.pop(key, None)
+                self._completed_seen_name.pop(key, None)
+                self._completed_seen_fail_count.pop(key, None)
+                self._completed_seen_next_try_at.pop(key, None)
+
+    def _save_completed_seen_cache(self) -> None:
+        try:
+            items: List[Dict[str, Any]] = []
+            for key in self._completed_seen_order[-self._max_completed_seen_keys:]:
+                ts = self._completed_seen_at.get(key)
+                if ts is None:
+                    continue
+                items.append({
+                    "key": key,
+                    "ts": float(ts),
+                    "name": str(self._completed_seen_name.get(key) or ""),
+                    "fail": int(self._completed_seen_fail_count.get(key) or 0),
+                    "next_try_at": float(self._completed_seen_next_try_at.get(key) or 0.0),
+                })
+            self.save_data("completed_seen_cache", items)
+        except Exception as err:
+            logger.warn(f"XunleiHijack persist completed cache failed: {err}")
+
     def _remember_completed_seen(self, move_key: str, now_ts: float, task_name: str = "") -> float:
         token = str(move_key or "").strip()
         if not token:
             return float(now_ts)
         ts = float(now_ts)
+        changed = False
         old = self._completed_seen_at.get(token)
         if old is not None:
             try:
@@ -809,30 +880,61 @@ class XunleiHijackDownloader(_PluginBase):
                     ts = min(ts, old_ts)
             except Exception:
                 pass
-            self._completed_seen_order = [x for x in self._completed_seen_order if x != token]
-        self._completed_seen_at[token] = ts
+        if old is None:
+            self._completed_seen_order.append(token)
+            changed = True
+        if self._completed_seen_at.get(token) != ts:
+            self._completed_seen_at[token] = ts
+            changed = True
         name = Path(str(task_name or "").strip()).name
-        if name:
-            self._completed_seen_name[token] = name
+        if name and name != "-":
+            if str(self._completed_seen_name.get(token) or "") != name:
+                self._completed_seen_name[token] = name
+                changed = True
         elif token not in self._completed_seen_name:
             self._completed_seen_name[token] = ""
-        self._completed_seen_order.append(token)
+            changed = True
+        if int(self._completed_seen_fail_count.get(token) or 0) != 0:
+            self._completed_seen_fail_count[token] = 0
+            changed = True
+        if float(self._completed_seen_next_try_at.get(token) or 0.0) != 0.0:
+            self._completed_seen_next_try_at[token] = 0.0
+            changed = True
         if len(self._completed_seen_order) > self._max_completed_seen_keys:
             overflow = self._completed_seen_order[:-self._max_completed_seen_keys]
             self._completed_seen_order = self._completed_seen_order[-self._max_completed_seen_keys:]
             for key in overflow:
                 self._completed_seen_at.pop(key, None)
                 self._completed_seen_name.pop(key, None)
+                self._completed_seen_fail_count.pop(key, None)
+                self._completed_seen_next_try_at.pop(key, None)
+            changed = True
+        if changed:
+            self._save_completed_seen_cache()
         return ts
 
     def _drop_completed_seen(self, move_key: str) -> None:
         token = str(move_key or "").strip()
         if not token:
             return
-        self._completed_seen_at.pop(token, None)
-        self._completed_seen_name.pop(token, None)
+        changed = False
+        if token in self._completed_seen_at:
+            self._completed_seen_at.pop(token, None)
+            changed = True
+        if token in self._completed_seen_name:
+            self._completed_seen_name.pop(token, None)
+            changed = True
+        if token in self._completed_seen_fail_count:
+            self._completed_seen_fail_count.pop(token, None)
+            changed = True
+        if token in self._completed_seen_next_try_at:
+            self._completed_seen_next_try_at.pop(token, None)
+            changed = True
         if token in self._completed_seen_order:
             self._completed_seen_order = [x for x in self._completed_seen_order if x != token]
+            changed = True
+        if changed:
+            self._save_completed_seen_cache()
 
     @staticmethod
     def _parse_unix_timestamp(value: Any) -> Optional[float]:
@@ -1273,23 +1375,38 @@ class XunleiHijackDownloader(_PluginBase):
                 "skip_source_not_found": 0,
                 "skip_safe_wait": 0,
                 "skip_cached_missing_name": 0,
+                "skip_cached_backoff": 0,
+                "skip_cached_expired": 0,
                 "move_failed": 0,
             }
             samples: List[str] = []
             processed_keys: Set[str] = set()
             cached_total = len(self._completed_seen_at)
+            cache_dirty = False
 
             def add_sample(text: str) -> None:
                 if len(samples) < 6:
                     samples.append(text)
 
             def try_move_by_name(move_key: str, task_name: str, task_id: str, task_tag: str, from_cache: bool) -> None:
+                nonlocal cache_dirty
                 src = self._resolve_source_path(source_root, task_name)
                 if not src or not src.exists():
                     src = self._resolve_source_path_fallback(source_root, task_name)
                 if not src or not src.exists():
                     stats["skip_source_not_found"] += 1
-                    flag = "cache_source_not_found" if from_cache else "source_not_found"
+                    flag = "source_not_found"
+                    if from_cache:
+                        fail_count = int(self._completed_seen_fail_count.get(move_key) or 0) + 1
+                        self._completed_seen_fail_count[move_key] = fail_count
+                        backoff_seconds = max(60, min(900, max(1, int(self._move_interval_minutes)) * 60 * 3))
+                        self._completed_seen_next_try_at[move_key] = now_ts + backoff_seconds
+                        cache_dirty = True
+                        if fail_count >= int(self._completed_seen_max_missing):
+                            self._drop_completed_seen(move_key)
+                            flag = "cache_source_not_found_drop"
+                        else:
+                            flag = "cache_source_not_found"
                     add_sample(
                         f"{task_tag} skip:{flag} source_root={source_root} task_name={task_name}"
                     )
@@ -1322,10 +1439,10 @@ class XunleiHijackDownloader(_PluginBase):
 
             for task in tasks:
                 task_id = self._task_key(task) or "-"
-                task_name = Path(str(self._task_name(task) or "")).name or "-"
+                task_name = Path(str(self._task_name(task) or "")).name
                 task_status = ",".join(self._task_status_values(task)) or "-"
                 task_progress = self._task_progress(task)
-                task_tag = f"id={task_id},name={task_name}"
+                task_tag = f"id={task_id},name={task_name or '-'}"
                 move_key = self._task_move_key(task)
                 if not move_key:
                     stats["skip_no_move_key"] += 1
@@ -1353,9 +1470,14 @@ class XunleiHijackDownloader(_PluginBase):
                             f"{task_tag} skip:safe_wait completed_elapsed={elapsed:.1f}s < {self._move_safe_seconds}s"
                         )
                         continue
+                task_name_for_move = task_name or Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
+                if not task_name_for_move:
+                    stats["skip_cached_missing_name"] += 1
+                    add_sample(f"{task_tag} skip:missing_name key={move_key}")
+                    continue
                 try_move_by_name(
                     move_key=move_key,
-                    task_name=task_name,
+                    task_name=task_name_for_move,
                     task_id=task_id,
                     task_tag=task_tag,
                     from_cache=False,
@@ -1369,6 +1491,14 @@ class XunleiHijackDownloader(_PluginBase):
                     self._drop_completed_seen(move_key)
                     continue
                 done_ts = float(self._completed_seen_at.get(move_key) or now_ts)
+                if now_ts - done_ts > float(self._completed_seen_ttl_seconds):
+                    stats["skip_cached_expired"] += 1
+                    self._drop_completed_seen(move_key)
+                    continue
+                next_try_at = float(self._completed_seen_next_try_at.get(move_key) or 0.0)
+                if next_try_at > now_ts:
+                    stats["skip_cached_backoff"] += 1
+                    continue
                 task_name = Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
                 task_tag = f"id=-,name={task_name or '-'}"
                 if not task_name:
@@ -1390,13 +1520,17 @@ class XunleiHijackDownloader(_PluginBase):
                     task_tag=task_tag,
                     from_cache=True,
                 )
+            if cache_dirty:
+                self._save_completed_seen_cache()
             logger.info(
                 f"XunleiHijack move scan summary: source={source_root}, target={target_root}, "
                 f"total={len(tasks)}, cached_completed={cached_total}, moved={stats['moved']}, "
                 f"skip_not_completed={stats['skip_not_completed']}, "
                 f"skip_no_move_key={stats['skip_no_move_key']}, skip_already_moved={stats['skip_already_moved']}, "
                 f"skip_source_not_found={stats['skip_source_not_found']}, skip_safe_wait={stats['skip_safe_wait']}, "
-                f"skip_cached_missing_name={stats['skip_cached_missing_name']}, move_failed={stats['move_failed']}"
+                f"skip_cached_missing_name={stats['skip_cached_missing_name']}, "
+                f"skip_cached_backoff={stats['skip_cached_backoff']}, skip_cached_expired={stats['skip_cached_expired']}, "
+                f"move_failed={stats['move_failed']}"
             )
             if samples:
                 logger.info("XunleiHijack move scan samples: " + " | ".join(samples))
