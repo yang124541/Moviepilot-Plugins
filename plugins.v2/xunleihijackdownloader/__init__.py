@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.35"
+    plugin_version = "1.0.36"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -481,31 +481,31 @@ class XunleiHijackDownloader(_PluginBase):
                                 {"component": "VCol", "props": {"cols": 1, "md": 1}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 6, "md": 6},
+                                    "props": {"cols": 5, "md": 5},
                                     "content": [{"component": "VListItem", "props": {"title": task_name, "density": "compact"}}],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 4, "md": 4},
+                                    "props": {"cols": 6, "md": 6},
                                     "content": [
                                         {
                                             "component": "VRow",
-                                            "props": {"noGutters": True, "class": "mb-1"},
+                                            "props": {"class": "mb-1"},
                                             "content": [
                                                 {
                                                     "component": "VCol",
                                                     "props": {"cols": 4},
-                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": size_text}}],
+                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": size_text, "class": "mx-2"}}],
                                                 },
                                                 {
                                                     "component": "VCol",
                                                     "props": {"cols": 4},
-                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": left_time}}],
+                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": left_time, "class": "mx-2"}}],
                                                 },
                                                 {
                                                     "component": "VCol",
                                                     "props": {"cols": 4},
-                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": speed_text}}],
+                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": speed_text, "class": "mx-2"}}],
                                                 },
                                             ],
                                         },
