@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.29"
+    plugin_version = "1.0.30"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -482,7 +482,8 @@ class XunleiHijackDownloader(_PluginBase):
                                             "component": "VListItem",
                                             "props": {
                                                 "density": "compact",
-                                                "title": f"{size_text}    {left_time}    {speed_text}",
+                                                "subtitle": f"{size_text}    {left_time}    {speed_text}",
+                                                "class": "text-medium-emphasis",
                                             },
                                         },
                                         {
@@ -543,16 +544,20 @@ class XunleiHijackDownloader(_PluginBase):
         button = {
             "component": "VBtn",
             "props": {
-                "size": "x-small",
-                "density": "compact",
+                "size": "small",
+                "density": "comfortable",
                 "variant": "text",
                 "color": color,
-                "text": text,
-                "prependIcon": icon,
+                "icon": True,
                 "title": text,
                 "disabled": bool(disabled),
-                "class": "ml-1 px-1",
+                "class": "ml-1",
+                "width": 28,
+                "height": 28,
+                "minWidth": 28,
+                "rounded": "circle",
             },
+            "content": [{"component": "VIcon", "props": {"icon": icon, "size": 14}}],
         }
         if not disabled:
             button["events"] = {
