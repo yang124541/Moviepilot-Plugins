@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.23"
+    plugin_version = "1.0.24"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -92,7 +92,29 @@ class XunleiHijackDownloader(_PluginBase):
         return []
 
     def get_api(self) -> List[Dict[str, Any]]:
-        return []
+        return [
+            {
+                "path": "/task/start",
+                "endpoint": self.api_start_task,
+                "methods": ["GET"],
+                "summary": "开始迅雷任务",
+                "description": "在插件数据页手动开始指定任务",
+            },
+            {
+                "path": "/task/pause",
+                "endpoint": self.api_pause_task,
+                "methods": ["GET"],
+                "summary": "暂停迅雷任务",
+                "description": "在插件数据页手动暂停指定任务",
+            },
+            {
+                "path": "/task/delete",
+                "endpoint": self.api_delete_task,
+                "methods": ["GET"],
+                "summary": "删除迅雷任务",
+                "description": "在插件数据页手动删除指定任务",
+            },
+        ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [
@@ -259,7 +281,285 @@ class XunleiHijackDownloader(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
-        pass
+        page: List[dict] = [
+            {
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [
+                            {
+                                "component": "VAlert",
+                                "props": {
+                                    "type": "info",
+                                    "variant": "tonal",
+                                    "text": "展示迅雷任务实时状态：图片、文件图标、文件名、大小、剩余时间、速度、进度及开始/暂停/删除。已迁移任务自动隐藏。",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "class": "d-flex justify-end"},
+                        "content": [
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "size": "small",
+                                    "variant": "text",
+                                    "color": "primary",
+                                    "type": "button",
+                                    "prependIcon": "mdi-refresh",
+                                    "text": "刷新列表",
+                                    "onclick": "window.location.reload()",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        ]
+
+        if not self._enabled:
+            page.append({
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [
+                            {
+                                "component": "VAlert",
+                                "props": {
+                                    "type": "warning",
+                                    "variant": "tonal",
+                                    "text": "插件未启用，请先在配置页开启“启用插件”。",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            })
+            return page
+
+        tasks = self._list_download_tasks()
+        visible_tasks = [task for task in tasks if not self._is_moved_task(task)]
+        if not visible_tasks:
+            page.append({
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [
+                            {
+                                "component": "VAlert",
+                                "props": {
+                                    "type": "success",
+                                    "variant": "tonal",
+                                    "text": "暂无可展示的迅雷任务（已迁移任务已过滤）。",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            })
+            return page
+
+        header_cells = [
+            {"component": "th", "props": {"text": "图片", "class": "text-left"}},
+            {"component": "th", "props": {"text": "图标", "class": "text-left"}},
+            {"component": "th", "props": {"text": "文件名", "class": "text-left"}},
+            {"component": "th", "props": {"text": "大小", "class": "text-left"}},
+            {"component": "th", "props": {"text": "剩余时间", "class": "text-left"}},
+            {"component": "th", "props": {"text": "当前下载速度", "class": "text-left"}},
+            {"component": "th", "props": {"text": "进度", "class": "text-left"}},
+            {"component": "th", "props": {"text": "操作", "class": "text-left"}},
+        ]
+        body_rows = [self._build_task_row(task=task) for task in visible_tasks]
+
+        page.append({
+            "component": "VRow",
+            "content": [
+                {
+                    "component": "VCol",
+                    "props": {"cols": 12},
+                    "content": [
+                        {
+                            "component": "VTable",
+                            "props": {"hover": True, "class": "table-striped"},
+                            "content": [
+                                {"component": "thead", "content": [{"component": "tr", "content": header_cells}]},
+                                {"component": "tbody", "content": body_rows},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        })
+        return page
+
+    def api_start_task(self, task_id: str = "", hash: str = "") -> schemas.Response:
+        return self._api_task_action(task_id=task_id or hash, action="start")
+
+    def api_pause_task(self, task_id: str = "", hash: str = "") -> schemas.Response:
+        return self._api_task_action(task_id=task_id or hash, action="pause")
+
+    def api_delete_task(self, task_id: str = "", hash: str = "", delete_file: bool = True) -> schemas.Response:
+        return self._api_task_action(task_id=task_id or hash, action="delete", delete_file=delete_file)
+
+    def _api_task_action(self, task_id: str, action: str, delete_file: bool = True) -> schemas.Response:
+        task_key = str(task_id or "").strip()
+        if not task_key:
+            return schemas.Response(success=False, message="任务ID不能为空。")
+        if action != "delete" and task_key in self._moved_task_keys:
+            return schemas.Response(success=False, message="任务已迁移，无法继续操作。")
+        ok = self._operate_tasks(ids={task_key}, action=action, delete_file=bool(delete_file))
+        if ok and action == "delete":
+            self._remember_moved_key(task_key)
+        action_name = {"start": "开始", "pause": "暂停", "delete": "删除"}.get(action, action)
+        if ok:
+            return schemas.Response(success=True, message=f"{action_name}任务成功。")
+        return schemas.Response(success=False, message=f"{action_name}任务失败，请检查迅雷连接与认证。")
+
+    def _build_task_row(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        plugin_id = self.__class__.__name__
+        task_id = self._task_key(task)
+        task_name = self._task_name(task) or task_id or "xunlei-task"
+        task_done = self._is_task_completed(task)
+        task_paused = self._is_task_paused(task)
+        task_failed = self._is_task_failed(task)
+
+        progress = self._task_progress(task)
+        progress_text = f"{progress:.1f}%"
+        size_text = self._format_bytes(self._task_size(task))
+        left_time = self._task_left_time(task, progress) or "--"
+        speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
+        state_text = self._task_state_text(task)
+        image_url = self._task_image_url(task)
+        icon_name = self._task_file_icon(task_name=task_name, done=task_done)
+
+        can_start = bool(task_id) and not task_done and (task_paused or task_failed)
+        can_pause = bool(task_id) and not task_done and not task_paused and not task_failed
+        can_delete = bool(task_id)
+        quoted_id = quote(task_id or "", safe="")
+        start_api = f"/plugin/{plugin_id}/task/start?task_id={quoted_id}&apikey={{apikey}}"
+        pause_api = f"/plugin/{plugin_id}/task/pause?task_id={quoted_id}&apikey={{apikey}}"
+        delete_api = f"/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true&apikey={{apikey}}"
+        progress_color = "success" if task_done else ("warning" if task_paused else ("error" if task_failed else "primary"))
+
+        image_node: Dict[str, Any]
+        if image_url:
+            image_node = {
+                "component": "VImg",
+                "props": {"src": image_url, "width": 72, "height": 40, "cover": True},
+            }
+        else:
+            image_node = {
+                "component": "VAvatar",
+                "props": {"size": 40, "rounded": "sm", "color": "grey-lighten-3"},
+                "content": [{"component": "VIcon", "props": {"icon": "mdi-image-off-outline", "size": 20}}],
+            }
+
+        return {
+            "component": "tr",
+            "content": [
+                {
+                    "component": "td",
+                    "content": [image_node],
+                },
+                {
+                    "component": "td",
+                    "content": [{"component": "VIcon", "props": {"icon": icon_name, "size": 20}}],
+                },
+                {
+                    "component": "td",
+                    "content": [
+                        {"component": "div", "props": {"text": task_name, "class": "text-body-2"}},
+                        {"component": "div", "props": {"text": state_text, "class": "text-caption text-medium-emphasis"}},
+                    ],
+                },
+                {"component": "td", "props": {"text": size_text}},
+                {"component": "td", "props": {"text": left_time}},
+                {"component": "td", "props": {"text": speed_text}},
+                {
+                    "component": "td",
+                    "props": {"style": "min-width: 160px;"},
+                    "content": [
+                        {
+                            "component": "VProgressLinear",
+                            "props": {"modelValue": progress, "height": 8, "rounded": True, "color": progress_color},
+                        },
+                        {"component": "div", "props": {"text": progress_text, "class": "text-caption mt-1"}},
+                    ],
+                },
+                {
+                    "component": "td",
+                    "content": [
+                        {
+                            "component": "div",
+                            "props": {"class": "d-flex flex-wrap ga-1"},
+                            "content": [
+                                self._build_task_action_button(
+                                    text="开始",
+                                    color="success",
+                                    disabled=not can_start,
+                                    api_path=start_api,
+                                    success_message="开始任务成功，请点击刷新查看状态。",
+                                    failure_message="开始任务失败。",
+                                ),
+                                self._build_task_action_button(
+                                    text="暂停",
+                                    color="warning",
+                                    disabled=not can_pause,
+                                    api_path=pause_api,
+                                    success_message="暂停任务成功，请点击刷新查看状态。",
+                                    failure_message="暂停任务失败。",
+                                ),
+                                self._build_task_action_button(
+                                    text="删除",
+                                    color="error",
+                                    disabled=not can_delete,
+                                    api_path=delete_api,
+                                    success_message="删除任务成功，请点击刷新查看状态。",
+                                    failure_message="删除任务失败。",
+                                ),
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+
+    @staticmethod
+    def _build_task_action_button(text: str, color: str, disabled: bool, api_path: str,
+                                  success_message: str, failure_message: str) -> Dict[str, Any]:
+        button = {
+            "component": "VBtn",
+            "props": {
+                "size": "x-small",
+                "variant": "text",
+                "color": color,
+                "text": text,
+                "disabled": bool(disabled),
+            },
+        }
+        if not disabled:
+            button["events"] = {
+                "click": {
+                    "api": api_path,
+                    "method": "get",
+                    "success_message": success_message,
+                    "failure_message": failure_message,
+                }
+            }
+        return button
 
     def get_module(self) -> Dict[str, Any]:
         if not self._enabled:
@@ -325,6 +625,8 @@ class XunleiHijackDownloader(_PluginBase):
         for task in tasks:
             task_hash = self._task_key(task) or ""
             if hash_set and task_hash not in hash_set:
+                continue
+            if self._is_moved_task(task):
                 continue
 
             title = self._task_name(task) or task_hash or "xunlei-task"
@@ -1054,6 +1356,30 @@ class XunleiHijackDownloader(_PluginBase):
         except Exception:
             return None
 
+    def _task_text(self, task: Dict[str, Any], key: str) -> str:
+        value = task.get(key)
+        params = task.get("params") if isinstance(task.get("params"), dict) else {}
+        if value is None:
+            value = params.get(key)
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @staticmethod
+    def _task_status_values(task: Dict[str, Any]) -> List[str]:
+        values: List[str] = []
+        for key in ("phase", "status", "state"):
+            value = task.get(key)
+            if value is not None:
+                values.append(str(value).strip().lower())
+        params = task.get("params")
+        if isinstance(params, dict):
+            for key in ("phase", "status", "state"):
+                value = params.get(key)
+                if value is not None:
+                    values.append(str(value).strip().lower())
+        return values
+
     def _task_speed_text(self, task: Dict[str, Any], key: str) -> Optional[str]:
         value = self._task_number(task, key)
         if value is None:
@@ -1069,9 +1395,107 @@ class XunleiHijackDownloader(_PluginBase):
         except Exception:
             return None
 
+    def _task_left_time(self, task: Dict[str, Any], progress: float) -> Optional[str]:
+        for key in ("left_time", "remaining_time", "remain_time", "time_remaining", "eta", "predict_left_time"):
+            value = self._task_number(task, key)
+            if value is not None and value >= 0:
+                return self._format_seconds(value)
+            text_value = self._task_text(task, key)
+            if text_value:
+                return text_value
+        total_size = float(self._task_size(task) or 0)
+        speed = float(self._task_number(task, "download_speed") or 0)
+        if total_size <= 0 or speed <= 0:
+            return None
+        left_bytes = total_size * max(0.0, 100.0 - progress) / 100.0
+        if left_bytes <= 0:
+            return "00:00:00"
+        return self._format_seconds(left_bytes / speed)
+
+    def _task_state_text(self, task: Dict[str, Any]) -> str:
+        if self._is_task_completed(task):
+            return "已完成"
+        if self._is_task_failed(task):
+            return "失败"
+        if self._is_task_paused(task):
+            return "已暂停"
+        for text in self._task_status_values(task):
+            if any(k in text for k in ("waiting", "wait", "pending", "queue")):
+                return "排队中"
+        return "下载中"
+
+    def _is_task_paused(self, task: Dict[str, Any]) -> bool:
+        for text in self._task_status_values(task):
+            if any(k in text for k in ("pause", "paused", "suspend", "stop", "stopped", "halt")):
+                return True
+        return False
+
+    def _is_task_failed(self, task: Dict[str, Any]) -> bool:
+        for text in self._task_status_values(task):
+            if any(k in text for k in ("fail", "failed", "error", "invalid")):
+                return True
+        return False
+
+    def _task_image_url(self, task: Dict[str, Any]) -> str:
+        for key in ("icon_link", "thumbnail", "thumb", "cover", "poster", "image", "image_url", "icon"):
+            value = self._task_text(task, key)
+            if value and re.match(r"^https?://", value, flags=re.IGNORECASE):
+                return value
+        return ""
+
     @staticmethod
-    def _task_left_time(task: Dict[str, Any], progress: float) -> Optional[str]:
-        return None
+    def _task_file_icon(task_name: str, done: bool = False) -> str:
+        suffix = Path(str(task_name or "")).suffix.lower()
+        if done:
+            return "mdi-check-circle-outline"
+        if suffix in (".mkv", ".mp4", ".avi", ".mov", ".flv", ".wmv", ".ts", ".m2ts"):
+            return "mdi-file-video-outline"
+        if suffix in (".srt", ".ass", ".ssa", ".sub"):
+            return "mdi-file-document-outline"
+        if suffix in (".rar", ".zip", ".7z", ".tar", ".gz"):
+            return "mdi-folder-zip-outline"
+        if suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+            return "mdi-file-image-outline"
+        if suffix in (".torrent",):
+            return "mdi-file-download-outline"
+        return "mdi-file-outline"
+
+    def _is_moved_task(self, task: Dict[str, Any]) -> bool:
+        task_key = self._task_key(task)
+        task_name = self._task_name(task)
+        if task_key and task_key in self._moved_task_keys:
+            return True
+        if task_name and task_name in self._moved_task_keys:
+            return True
+        return False
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        try:
+            s = int(max(0, float(seconds)))
+        except Exception:
+            return "--"
+        day, rem = divmod(s, 86400)
+        hour, rem = divmod(rem, 3600)
+        minute, second = divmod(rem, 60)
+        if day > 0:
+            return f"{day}d {hour:02d}:{minute:02d}:{second:02d}"
+        return f"{hour:02d}:{minute:02d}:{second:02d}"
+
+    @staticmethod
+    def _format_bytes(size: int) -> str:
+        try:
+            value = float(size or 0)
+        except Exception:
+            value = 0.0
+        units = ["B", "KB", "MB", "GB", "TB"]
+        idx = 0
+        while value >= 1024 and idx < len(units) - 1:
+            value /= 1024.0
+            idx += 1
+        if idx == 0:
+            return f"{int(value)}{units[idx]}"
+        return f"{value:.2f}{units[idx]}"
 
     @staticmethod
     def _task_id(data: Any) -> str:
