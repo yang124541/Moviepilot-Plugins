@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.51"
+    plugin_version = "1.0.52"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1150,37 +1150,87 @@ class XunleiHijackDownloader(_PluginBase):
         if not self._enabled or not self._move_enabled:
             return
         if not self._source_download_dir or not self._target_watch_dir:
+            logger.warn(
+                f"XunleiHijack move skipped: source/target not configured, "
+                f"source={self._source_download_dir or 'EMPTY'}, target={self._target_watch_dir or 'EMPTY'}"
+            )
             return
         if not self._move_lock.acquire(blocking=False):
+            logger.info("XunleiHijack move skipped: previous job still running.")
             return
         try:
             source_root = Path(self._source_download_dir)
             target_root = Path(self._target_watch_dir)
             if not source_root.exists() or not source_root.is_dir():
+                logger.warn(
+                    f"XunleiHijack move skipped: source path invalid, "
+                    f"source={source_root}, exists={source_root.exists()}, is_dir={source_root.is_dir()}"
+                )
                 return
             target_root.mkdir(parents=True, exist_ok=True)
             tasks = self._list_download_tasks()
             if not tasks:
+                logger.info(
+                    f"XunleiHijack move scan: no tasks, source={source_root}, target={target_root}"
+                )
                 return
             now_ts = time.time()
+            stats = {
+                "moved": 0,
+                "skip_not_completed": 0,
+                "skip_no_move_key": 0,
+                "skip_already_moved": 0,
+                "skip_source_not_found": 0,
+                "skip_safe_wait": 0,
+                "skip_stat_error": 0,
+                "move_failed": 0,
+            }
+            samples: List[str] = []
+
+            def add_sample(text: str) -> None:
+                if len(samples) < 6:
+                    samples.append(text)
+
             for task in tasks:
+                task_id = self._task_key(task) or "-"
+                task_name = Path(str(self._task_name(task) or "")).name or "-"
+                task_status = ",".join(self._task_status_values(task)) or "-"
+                task_progress = self._task_progress(task)
+                task_tag = f"id={task_id},name={task_name}"
                 if not self._is_task_completed(task):
+                    stats["skip_not_completed"] += 1
+                    add_sample(f"{task_tag} skip:not_completed status={task_status} progress={task_progress:.2f}")
                     continue
                 move_key = self._task_move_key(task)
-                if not move_key or move_key in self._moved_task_keys:
+                if not move_key:
+                    stats["skip_no_move_key"] += 1
+                    add_sample(f"{task_tag} skip:no_move_key status={task_status}")
+                    continue
+                if move_key in self._moved_task_keys:
+                    stats["skip_already_moved"] += 1
                     continue
                 try:
-                    task_name = self._task_name(task)
                     src = self._resolve_source_path(source_root, task_name)
                     if not src or not src.exists():
                         src = self._resolve_source_path_fallback(source_root, task_name)
                     if not src or not src.exists():
+                        stats["skip_source_not_found"] += 1
+                        add_sample(
+                            f"{task_tag} skip:source_not_found source_root={source_root} task_name={task_name}"
+                        )
                         continue
                     if self._move_safe_seconds > 0:
                         try:
-                            if now_ts - src.stat().st_mtime < self._move_safe_seconds:
+                            age = now_ts - src.stat().st_mtime
+                            if age < self._move_safe_seconds:
+                                stats["skip_safe_wait"] += 1
+                                add_sample(
+                                    f"{task_tag} skip:safe_wait age={age:.1f}s < {self._move_safe_seconds}s src={src}"
+                                )
                                 continue
-                        except Exception:
+                        except Exception as stat_err:
+                            stats["skip_stat_error"] += 1
+                            add_sample(f"{task_tag} skip:stat_error src={src} err={stat_err}")
                             continue
                     dst = self._dedupe_target(target_root / src.name)
                     shutil.move(str(src), str(dst))
@@ -1189,13 +1239,24 @@ class XunleiHijackDownloader(_PluginBase):
                     if task_id:
                         # 兼容历史 moved key（曾使用纯 task_id）
                         self._remember_moved_key(task_id)
+                    stats["moved"] += 1
                     logger.info(f"XunleiHijack moved: {src} -> {dst}")
                 except Exception as move_err:
+                    stats["move_failed"] += 1
                     logger.warn(
                         f"XunleiHijack move item failed: key={move_key}, "
                         f"name={self._task_name(task)}, err={move_err}"
                     )
                     continue
+            logger.info(
+                f"XunleiHijack move scan summary: source={source_root}, target={target_root}, "
+                f"total={len(tasks)}, moved={stats['moved']}, skip_not_completed={stats['skip_not_completed']}, "
+                f"skip_no_move_key={stats['skip_no_move_key']}, skip_already_moved={stats['skip_already_moved']}, "
+                f"skip_source_not_found={stats['skip_source_not_found']}, skip_safe_wait={stats['skip_safe_wait']}, "
+                f"skip_stat_error={stats['skip_stat_error']}, move_failed={stats['move_failed']}"
+            )
+            if samples:
+                logger.info("XunleiHijack move scan samples: " + " | ".join(samples))
         except Exception as err:
             logger.error(f"XunleiHijack move job failed: {err}")
         finally:

@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.51",
+    "version": "1.0.52",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.52": "增强自动搬运可观测性：搬运任务新增每轮汇总日志与跳过原因样本日志（未完成/源路径不存在/安全等待/已搬运/移动失败等），便于快速定位“不搬运”根因。",
       "v1.0.51": "修复下载完成自动搬运判定：兼容 progress 为 0~1 的接口返回，并补充 phase_type_finished/phase_type_seeding 等完成态识别，避免任务已完成但未触发搬运。",
       "v1.0.50": "优化数据页顶部提示栏布局：移除右侧挤占列，蓝色提示条改为全宽显示，与下方状态条宽度一致。",
       "v1.0.49": "增强 Docker 迅雷任务控制兼容性：新增基于 phase 的 UpdateTask 控制链路（PATCH/PUT/POST task/tasks），补充 DELETE 与 delete_files 变体，并支持 HTTP 2xx 空响应判定成功，修复开始/暂停按钮常见失效场景。",
