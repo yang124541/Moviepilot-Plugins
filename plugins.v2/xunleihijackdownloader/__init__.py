@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.34"
+    plugin_version = "1.0.35"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -486,15 +486,28 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 3, "md": 3},
+                                    "props": {"cols": 4, "md": 4},
                                     "content": [
                                         {
-                                            "component": "VListItem",
-                                            "props": {
-                                                "density": "compact",
-                                                "subtitle": f"{size_text}    {left_time}    {speed_text}",
-                                                "class": "text-caption text-medium-emphasis",
-                                            },
+                                            "component": "VRow",
+                                            "props": {"noGutters": True, "class": "mb-1"},
+                                            "content": [
+                                                {
+                                                    "component": "VCol",
+                                                    "props": {"cols": 4},
+                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": size_text}}],
+                                                },
+                                                {
+                                                    "component": "VCol",
+                                                    "props": {"cols": 4},
+                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": left_time}}],
+                                                },
+                                                {
+                                                    "component": "VCol",
+                                                    "props": {"cols": 4},
+                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": speed_text}}],
+                                                },
+                                            ],
                                         },
                                         {
                                             "component": "VProgressLinear",
@@ -509,7 +522,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 2, "md": 2, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
+                                    "props": {"cols": 1, "md": 1, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
                                     "content": [
                                         self._build_task_action_button(
                                             text=toggle_text,
@@ -568,9 +581,13 @@ class XunleiHijackDownloader(_PluginBase):
     def _build_action_onclick(api_path: str) -> str:
         path = str(api_path or "").replace("\\", "\\\\").replace("'", "\\'")
         return (
-            f"fetch('{path}',{{method:'GET',credentials:'same-origin'}})"
-            ".then(()=>window.location.reload())"
-            ".catch(()=>window.location.reload());"
+            "(async()=>{"
+            f"try{{const r=await fetch('{path}',{{method:'GET',credentials:'same-origin'}});"
+            "const j=await r.json().catch(()=>null);"
+            "if(r.ok&&(!j||j.success!==false)){window.location.reload();return;}"
+            "alert((j&&j.message)?j.message:'操作失败，请查看日志');"
+            "}catch(e){alert('请求失败，请检查网络或权限');}"
+            "})();"
         )
 
     def get_module(self) -> Dict[str, Any]:
@@ -1627,11 +1644,11 @@ class XunleiHijackDownloader(_PluginBase):
                     return ret
         if not isinstance(data, dict):
             return ""
-        for key in ("task_id", "id", "gid"):
+        for key in ("task_id", "id", "gid", "taskid", "taskId", "record_id", "download_id"):
             value = data.get(key)
             if value:
                 return str(value)
-        for key in ("task", "data", "result"):
+        for key in ("task", "data", "result", "params", "item"):
             ret = XunleiHijackDownloader._task_id(data.get(key))
             if ret:
                 return ret
