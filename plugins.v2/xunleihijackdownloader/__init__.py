@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.39"
+    plugin_version = "1.0.40"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -433,15 +433,14 @@ class XunleiHijackDownloader(_PluginBase):
         task_failed = self._is_task_failed(task)
 
         progress = self._task_progress(task)
-        progress_text = f"{progress:.1f}%"
         size_text = self._format_bytes(self._task_size(task))
         left_time = self._task_left_time(task, progress) or "--"
         speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
         image_url = self._task_image_url(task)
 
-        can_start = True
-        can_pause = True
-        can_delete = True
+        can_start = bool(task_id)
+        can_pause = bool(task_id)
+        can_delete = bool(task_id)
         quoted_id = quote(task_id or "", safe="")
         start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}"
         pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}"
@@ -481,27 +480,20 @@ class XunleiHijackDownloader(_PluginBase):
                                 {"component": "VCol", "props": {"cols": 1, "md": 1}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 5, "md": 4},
+                                    "props": {"cols": 6, "md": 6},
                                     "content": [{"component": "VListItem", "props": {"title": task_name, "density": "compact"}}],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 6, "md": 7},
+                                    "props": {"cols": 3, "md": 3},
                                     "content": [
                                         {
-                                            "component": "VRow",
-                                            "props": {"class": "mb-2"},
-                                            "content": [
-                                                {
-                                                    "component": "VCol",
-                                                    "props": {"cols": 12, "class": "d-flex align-center flex-nowrap"},
-                                                    "content": [
-                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": size_text, "class": "mr-6"}},
-                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": left_time, "class": "mr-6"}},
-                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": speed_text}},
-                                                    ],
-                                                },
-                                            ],
+                                            "component": "VListItem",
+                                            "props": {
+                                                "density": "compact",
+                                                "subtitle": f"{size_text}    {left_time}    {speed_text}",
+                                                "class": "text-caption text-medium-emphasis",
+                                            },
                                         },
                                         {
                                             "component": "VProgressLinear",
@@ -510,36 +502,32 @@ class XunleiHijackDownloader(_PluginBase):
                                                 "height": 5,
                                                 "rounded": True,
                                                 "color": progress_color,
-                                                "style": "max-width:62%; margin-top:4px;",
                                             },
                                         },
-                                        {
-                                            "component": "VRow",
-                                            "props": {"class": "mt-1"},
-                                            "content": [
-                                                {"component": "VCol", "props": {"cols": 12, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
-                                                 "content": [
-                                                     self._build_task_action_button(
-                                                         text=toggle_text,
-                                                         color=toggle_color,
-                                                         icon=toggle_icon,
-                                                         disabled=not (can_start if toggle_is_start else can_pause),
-                                                         api_path=toggle_api,
-                                                         success_message=f"{toggle_text}任务成功，请点击刷新查看状态。",
-                                                         failure_message=f"{toggle_text}任务失败。",
-                                                     ),
-                                                     self._build_task_action_button(
-                                                         text="删除",
-                                                         color="error",
-                                                         icon="mdi-delete-outline",
-                                                         disabled=not can_delete,
-                                                         api_path=delete_api,
-                                                         success_message="删除任务成功，请点击刷新查看状态。",
-                                                         failure_message="删除任务失败。",
-                                                     ),
-                                                 ]},
-                                            ],
-                                        },
+                                    ],
+                                },
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 2, "md": 2, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
+                                    "content": [
+                                        self._build_task_action_button(
+                                            text=toggle_text,
+                                            color=toggle_color,
+                                            icon=toggle_icon,
+                                            disabled=not (can_start if toggle_is_start else can_pause),
+                                            api_path=toggle_api,
+                                            success_message=f"{toggle_text}任务成功，请点击刷新查看状态。",
+                                            failure_message=f"{toggle_text}任务失败。",
+                                        ),
+                                        self._build_task_action_button(
+                                            text="删除",
+                                            color="error",
+                                            icon="mdi-delete-outline",
+                                            disabled=not can_delete,
+                                            api_path=delete_api,
+                                            success_message="删除任务成功，请点击刷新查看状态。",
+                                            failure_message="删除任务失败。",
+                                        ),
                                     ],
                                 },
                             ],
