@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.28"
+    plugin_version = "1.0.29"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -476,59 +476,14 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 5},
+                                    "props": {"cols": 12, "md": 3},
                                     "content": [
                                         {
-                                            "component": "VRow",
-                                            "props": {"noGutters": True, "align": "center"},
-                                            "content": [
-                                                {
-                                                    "component": "VCol",
-                                                    "props": {"cols": 8},
-                                                    "content": [
-                                                        {
-                                                            "component": "VListItem",
-                                                            "props": {
-                                                                "density": "compact",
-                                                                "title": f"{size_text}    {left_time}    {speed_text}",
-                                                            },
-                                                        }
-                                                    ],
-                                                },
-                                                {
-                                                    "component": "VCol",
-                                                    "props": {"cols": 4, "class": "d-flex justify-end ga-1"},
-                                                    "content": [
-                                                        self._build_task_action_button(
-                                                            text="开始",
-                                                            color="success",
-                                                            icon="mdi-play",
-                                                            disabled=not can_start,
-                                                            api_path=start_api,
-                                                            success_message="开始任务成功，请点击刷新查看状态。",
-                                                            failure_message="开始任务失败。",
-                                                        ),
-                                                        self._build_task_action_button(
-                                                            text="暂停",
-                                                            color="warning",
-                                                            icon="mdi-pause",
-                                                            disabled=not can_pause,
-                                                            api_path=pause_api,
-                                                            success_message="暂停任务成功，请点击刷新查看状态。",
-                                                            failure_message="暂停任务失败。",
-                                                        ),
-                                                        self._build_task_action_button(
-                                                            text="删除",
-                                                            color="error",
-                                                            icon="mdi-close",
-                                                            disabled=not can_delete,
-                                                            api_path=delete_api,
-                                                            success_message="删除任务成功，请点击刷新查看状态。",
-                                                            failure_message="删除任务失败。",
-                                                        ),
-                                                    ],
-                                                },
-                                            ],
+                                            "component": "VListItem",
+                                            "props": {
+                                                "density": "compact",
+                                                "title": f"{size_text}    {left_time}    {speed_text}",
+                                            },
                                         },
                                         {
                                             "component": "VProgressLinear",
@@ -539,6 +494,39 @@ class XunleiHijackDownloader(_PluginBase):
                                                 "color": progress_color,
                                             },
                                         },
+                                    ],
+                                },
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 2, "class": "d-flex justify-end ga-1"},
+                                    "content": [
+                                        self._build_task_action_button(
+                                            text="开始",
+                                            color="success",
+                                            icon="mdi-play",
+                                            disabled=not can_start,
+                                            api_path=start_api,
+                                            success_message="开始任务成功，请点击刷新查看状态。",
+                                            failure_message="开始任务失败。",
+                                        ),
+                                        self._build_task_action_button(
+                                            text="暂停",
+                                            color="warning",
+                                            icon="mdi-pause",
+                                            disabled=not can_pause,
+                                            api_path=pause_api,
+                                            success_message="暂停任务成功，请点击刷新查看状态。",
+                                            failure_message="暂停任务失败。",
+                                        ),
+                                        self._build_task_action_button(
+                                            text="删除",
+                                            color="error",
+                                            icon="mdi-close",
+                                            disabled=not can_delete,
+                                            api_path=delete_api,
+                                            success_message="删除任务成功，请点击刷新查看状态。",
+                                            failure_message="删除任务失败。",
+                                        ),
                                     ],
                                 },
                             ],
@@ -555,16 +543,16 @@ class XunleiHijackDownloader(_PluginBase):
         button = {
             "component": "VBtn",
             "props": {
-                "size": "small",
+                "size": "x-small",
                 "density": "compact",
                 "variant": "text",
                 "color": color,
-                "icon": True,
+                "text": text,
+                "prependIcon": icon,
                 "title": text,
                 "disabled": bool(disabled),
-                "class": "ml-1",
+                "class": "ml-1 px-1",
             },
-            "content": [{"component": "VIcon", "props": {"icon": icon, "size": 16}}],
         }
         if not disabled:
             button["events"] = {
