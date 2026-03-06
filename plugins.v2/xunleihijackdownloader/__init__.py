@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.30"
+    plugin_version = "1.0.31"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -97,6 +97,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "path": "/task/start",
                 "endpoint": self.api_start_task,
                 "methods": ["GET"],
+                "auth": "bear",
                 "summary": "开始迅雷任务",
                 "description": "在插件数据页手动开始指定任务",
             },
@@ -104,6 +105,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "path": "/task/pause",
                 "endpoint": self.api_pause_task,
                 "methods": ["GET"],
+                "auth": "bear",
                 "summary": "暂停迅雷任务",
                 "description": "在插件数据页手动暂停指定任务",
             },
@@ -111,6 +113,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "path": "/task/delete",
                 "endpoint": self.api_delete_task,
                 "methods": ["GET"],
+                "auth": "bear",
                 "summary": "删除迅雷任务",
                 "description": "在插件数据页手动删除指定任务",
             },
@@ -426,10 +429,15 @@ class XunleiHijackDownloader(_PluginBase):
         can_pause = bool(task_id)
         can_delete = bool(task_id)
         quoted_id = quote(task_id or "", safe="")
-        start_api = f"/plugin/{plugin_id}/task/start?task_id={quoted_id}&apikey={{apikey}}"
-        pause_api = f"/plugin/{plugin_id}/task/pause?task_id={quoted_id}&apikey={{apikey}}"
-        delete_api = f"/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true&apikey={{apikey}}"
+        start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}"
+        pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}"
+        delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true"
         progress_color = "success" if task_done else ("warning" if task_paused else ("error" if task_failed else "primary"))
+        toggle_is_start = bool(task_paused or task_failed)
+        toggle_text = "开始" if toggle_is_start else "暂停"
+        toggle_icon = "mdi-play" if toggle_is_start else "mdi-pause"
+        toggle_color = "success" if toggle_is_start else "warning"
+        toggle_api = start_api if toggle_is_start else pause_api
 
         image_node: Dict[str, Any]
         if image_url:
@@ -478,14 +486,14 @@ class XunleiHijackDownloader(_PluginBase):
                                     "component": "VCol",
                                     "props": {"cols": 12, "md": 3},
                                     "content": [
-                                        {
-                                            "component": "VListItem",
-                                            "props": {
-                                                "density": "compact",
-                                                "subtitle": f"{size_text}    {left_time}    {speed_text}",
-                                                "class": "text-medium-emphasis",
-                                            },
-                                        },
+                                                {
+                                                    "component": "VListItem",
+                                                    "props": {
+                                                        "density": "compact",
+                                                        "subtitle": f"{size_text}    {left_time}    {speed_text}",
+                                                        "class": "text-caption text-medium-emphasis",
+                                                    },
+                                                },
                                         {
                                             "component": "VProgressLinear",
                                             "props": {
@@ -502,22 +510,13 @@ class XunleiHijackDownloader(_PluginBase):
                                     "props": {"cols": 12, "md": 2, "class": "d-flex justify-end ga-1"},
                                     "content": [
                                         self._build_task_action_button(
-                                            text="开始",
-                                            color="success",
-                                            icon="mdi-play",
-                                            disabled=not can_start,
-                                            api_path=start_api,
-                                            success_message="开始任务成功，请点击刷新查看状态。",
-                                            failure_message="开始任务失败。",
-                                        ),
-                                        self._build_task_action_button(
-                                            text="暂停",
-                                            color="warning",
-                                            icon="mdi-pause",
-                                            disabled=not can_pause,
-                                            api_path=pause_api,
-                                            success_message="暂停任务成功，请点击刷新查看状态。",
-                                            failure_message="暂停任务失败。",
+                                            text=toggle_text,
+                                            color=toggle_color,
+                                            icon=toggle_icon,
+                                            disabled=not (can_start if toggle_is_start else can_pause),
+                                            api_path=toggle_api,
+                                            success_message=f"{toggle_text}任务成功，请点击刷新查看状态。",
+                                            failure_message=f"{toggle_text}任务失败。",
                                         ),
                                         self._build_task_action_button(
                                             text="删除",
