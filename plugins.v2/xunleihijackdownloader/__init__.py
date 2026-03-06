@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.56"
+    plugin_version = "1.0.57"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -52,6 +52,7 @@ class XunleiHijackDownloader(_PluginBase):
     _task_name_cache: Dict[str, str] = {}
     _completed_seen_at: Dict[str, float] = {}
     _completed_seen_order: List[str] = []
+    _completed_seen_name: Dict[str, str] = {}
     _max_moved_keys = 2000
     _max_completed_seen_keys = 4000
     _last_request_error = ""
@@ -63,6 +64,7 @@ class XunleiHijackDownloader(_PluginBase):
         self._task_name_cache = {}
         self._completed_seen_at = {}
         self._completed_seen_order = []
+        self._completed_seen_name = {}
         self._auto_refresh_pan_auth = True
         if config:
             self._enabled = bool(config.get("enabled", False))
@@ -794,7 +796,7 @@ class XunleiHijackDownloader(_PluginBase):
         except Exception as err:
             logger.warn(f"XunleiHijack persist moved keys failed: {err}")
 
-    def _remember_completed_seen(self, move_key: str, now_ts: float) -> float:
+    def _remember_completed_seen(self, move_key: str, now_ts: float, task_name: str = "") -> float:
         token = str(move_key or "").strip()
         if not token:
             return float(now_ts)
@@ -809,12 +811,18 @@ class XunleiHijackDownloader(_PluginBase):
                 pass
             self._completed_seen_order = [x for x in self._completed_seen_order if x != token]
         self._completed_seen_at[token] = ts
+        name = Path(str(task_name or "").strip()).name
+        if name:
+            self._completed_seen_name[token] = name
+        elif token not in self._completed_seen_name:
+            self._completed_seen_name[token] = ""
         self._completed_seen_order.append(token)
         if len(self._completed_seen_order) > self._max_completed_seen_keys:
             overflow = self._completed_seen_order[:-self._max_completed_seen_keys]
             self._completed_seen_order = self._completed_seen_order[-self._max_completed_seen_keys:]
             for key in overflow:
                 self._completed_seen_at.pop(key, None)
+                self._completed_seen_name.pop(key, None)
         return ts
 
     def _drop_completed_seen(self, move_key: str) -> None:
@@ -822,6 +830,7 @@ class XunleiHijackDownloader(_PluginBase):
         if not token:
             return
         self._completed_seen_at.pop(token, None)
+        self._completed_seen_name.pop(token, None)
         if token in self._completed_seen_order:
             self._completed_seen_order = [x for x in self._completed_seen_order if x != token]
 
@@ -1255,11 +1264,6 @@ class XunleiHijackDownloader(_PluginBase):
                 return
             target_root.mkdir(parents=True, exist_ok=True)
             tasks = self._list_download_tasks()
-            if not tasks:
-                logger.info(
-                    f"XunleiHijack move scan: no tasks, source={source_root}, target={target_root}"
-                )
-                return
             now_ts = time.time()
             stats = {
                 "moved": 0,
@@ -1268,14 +1272,53 @@ class XunleiHijackDownloader(_PluginBase):
                 "skip_already_moved": 0,
                 "skip_source_not_found": 0,
                 "skip_safe_wait": 0,
-                "skip_stat_error": 0,
+                "skip_cached_missing_name": 0,
                 "move_failed": 0,
             }
             samples: List[str] = []
+            processed_keys: Set[str] = set()
+            cached_total = len(self._completed_seen_at)
 
             def add_sample(text: str) -> None:
                 if len(samples) < 6:
                     samples.append(text)
+
+            def try_move_by_name(move_key: str, task_name: str, task_id: str, task_tag: str, from_cache: bool) -> None:
+                src = self._resolve_source_path(source_root, task_name)
+                if not src or not src.exists():
+                    src = self._resolve_source_path_fallback(source_root, task_name)
+                if not src or not src.exists():
+                    stats["skip_source_not_found"] += 1
+                    flag = "cache_source_not_found" if from_cache else "source_not_found"
+                    add_sample(
+                        f"{task_tag} skip:{flag} source_root={source_root} task_name={task_name}"
+                    )
+                    return
+                try:
+                    dst = self._dedupe_target(target_root / src.name)
+                    shutil.move(str(src), str(dst))
+                    self._remember_moved_key(move_key)
+                    self._drop_completed_seen(move_key)
+                    if task_id and task_id != "-":
+                        # 兼容历史 moved key（曾使用纯 task_id）
+                        self._remember_moved_key(task_id)
+                    stats["moved"] += 1
+                    if from_cache:
+                        logger.info(f"XunleiHijack moved(cache): {src} -> {dst}")
+                    else:
+                        logger.info(f"XunleiHijack moved: {src} -> {dst}")
+                except Exception as move_err:
+                    stats["move_failed"] += 1
+                    logger.warn(
+                        f"XunleiHijack move item failed: key={move_key}, "
+                        f"name={task_name}, err={move_err}"
+                    )
+
+            if not tasks:
+                logger.info(
+                    f"XunleiHijack move scan: no tasks, source={source_root}, target={target_root}, "
+                    f"cached_completed={cached_total}"
+                )
 
             for task in tasks:
                 task_id = self._task_key(task) or "-"
@@ -1283,25 +1326,26 @@ class XunleiHijackDownloader(_PluginBase):
                 task_status = ",".join(self._task_status_values(task)) or "-"
                 task_progress = self._task_progress(task)
                 task_tag = f"id={task_id},name={task_name}"
-                if not self._is_task_completed(task):
-                    stats["skip_not_completed"] += 1
-                    add_sample(f"{task_tag} skip:not_completed status={task_status} progress={task_progress:.2f}")
-                    continue
                 move_key = self._task_move_key(task)
                 if not move_key:
                     stats["skip_no_move_key"] += 1
                     add_sample(f"{task_tag} skip:no_move_key status={task_status}")
                     continue
+                if not self._is_task_completed(task):
+                    stats["skip_not_completed"] += 1
+                    self._drop_completed_seen(move_key)
+                    add_sample(f"{task_tag} skip:not_completed status={task_status} progress={task_progress:.2f}")
+                    continue
                 if move_key in self._moved_task_keys:
                     stats["skip_already_moved"] += 1
                     self._drop_completed_seen(move_key)
                     continue
+                processed_keys.add(move_key)
+                done_ts = self._task_completed_timestamp(task)
+                if done_ts is None:
+                    done_ts = now_ts
+                done_ts = self._remember_completed_seen(move_key=move_key, now_ts=done_ts, task_name=task_name)
                 if self._move_safe_seconds > 0:
-                    done_ts = self._task_completed_timestamp(task)
-                    if done_ts is None:
-                        done_ts = self._remember_completed_seen(move_key=move_key, now_ts=now_ts)
-                    else:
-                        self._remember_completed_seen(move_key=move_key, now_ts=done_ts)
                     elapsed = now_ts - done_ts
                     if elapsed < self._move_safe_seconds:
                         stats["skip_safe_wait"] += 1
@@ -1309,39 +1353,50 @@ class XunleiHijackDownloader(_PluginBase):
                             f"{task_tag} skip:safe_wait completed_elapsed={elapsed:.1f}s < {self._move_safe_seconds}s"
                         )
                         continue
-                try:
-                    src = self._resolve_source_path(source_root, task_name)
-                    if not src or not src.exists():
-                        src = self._resolve_source_path_fallback(source_root, task_name)
-                    if not src or not src.exists():
-                        stats["skip_source_not_found"] += 1
+                try_move_by_name(
+                    move_key=move_key,
+                    task_name=task_name,
+                    task_id=task_id,
+                    task_tag=task_tag,
+                    from_cache=False,
+                )
+
+            for move_key in list(self._completed_seen_order):
+                if move_key in processed_keys:
+                    continue
+                if move_key in self._moved_task_keys:
+                    stats["skip_already_moved"] += 1
+                    self._drop_completed_seen(move_key)
+                    continue
+                done_ts = float(self._completed_seen_at.get(move_key) or now_ts)
+                task_name = Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
+                task_tag = f"id=-,name={task_name or '-'}"
+                if not task_name:
+                    stats["skip_cached_missing_name"] += 1
+                    add_sample(f"{task_tag} skip:cached_missing_name key={move_key}")
+                    continue
+                if self._move_safe_seconds > 0:
+                    elapsed = now_ts - done_ts
+                    if elapsed < self._move_safe_seconds:
+                        stats["skip_safe_wait"] += 1
                         add_sample(
-                            f"{task_tag} skip:source_not_found source_root={source_root} task_name={task_name}"
+                            f"{task_tag} skip:cache_safe_wait completed_elapsed={elapsed:.1f}s < {self._move_safe_seconds}s"
                         )
                         continue
-                    dst = self._dedupe_target(target_root / src.name)
-                    shutil.move(str(src), str(dst))
-                    self._remember_moved_key(move_key)
-                    self._drop_completed_seen(move_key)
-                    task_id = self._task_key(task)
-                    if task_id:
-                        # 兼容历史 moved key（曾使用纯 task_id）
-                        self._remember_moved_key(task_id)
-                    stats["moved"] += 1
-                    logger.info(f"XunleiHijack moved: {src} -> {dst}")
-                except Exception as move_err:
-                    stats["move_failed"] += 1
-                    logger.warn(
-                        f"XunleiHijack move item failed: key={move_key}, "
-                        f"name={self._task_name(task)}, err={move_err}"
-                    )
-                    continue
+                try_move_by_name(
+                    move_key=move_key,
+                    task_name=task_name,
+                    task_id="-",
+                    task_tag=task_tag,
+                    from_cache=True,
+                )
             logger.info(
                 f"XunleiHijack move scan summary: source={source_root}, target={target_root}, "
-                f"total={len(tasks)}, moved={stats['moved']}, skip_not_completed={stats['skip_not_completed']}, "
+                f"total={len(tasks)}, cached_completed={cached_total}, moved={stats['moved']}, "
+                f"skip_not_completed={stats['skip_not_completed']}, "
                 f"skip_no_move_key={stats['skip_no_move_key']}, skip_already_moved={stats['skip_already_moved']}, "
                 f"skip_source_not_found={stats['skip_source_not_found']}, skip_safe_wait={stats['skip_safe_wait']}, "
-                f"skip_stat_error={stats['skip_stat_error']}, move_failed={stats['move_failed']}"
+                f"skip_cached_missing_name={stats['skip_cached_missing_name']}, move_failed={stats['move_failed']}"
             )
             if samples:
                 logger.info("XunleiHijack move scan samples: " + " | ".join(samples))
