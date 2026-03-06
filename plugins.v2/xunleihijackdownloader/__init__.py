@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.31"
+    plugin_version = "1.0.32"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1374,6 +1374,75 @@ class XunleiHijackDownloader(_PluginBase):
         return str(value).strip()
 
     @staticmethod
+    def _coerce_float(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                return float(value)
+            except Exception:
+                return None
+        text = str(value).strip()
+        if not text:
+            return None
+        text = text.replace(",", "")
+        try:
+            return float(text)
+        except Exception:
+            pass
+        match = re.search(r"-?\d+(?:\.\d+)?", text)
+        if not match:
+            return None
+        try:
+            return float(match.group(0))
+        except Exception:
+            return None
+
+    def _task_lookup_values(self, task: Dict[str, Any], keys: List[str], max_depth: int = 4) -> List[Any]:
+        if not isinstance(task, dict) or not keys:
+            return []
+        wanted = {str(k or "").strip().lower() for k in keys if str(k or "").strip()}
+        values: List[Any] = []
+
+        def walk(node: Any, depth: int):
+            if depth > max_depth:
+                return
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    try:
+                        key_text = str(k or "").strip().lower()
+                    except Exception:
+                        key_text = ""
+                    if key_text in wanted:
+                        values.append(v)
+                    if isinstance(v, (dict, list)):
+                        walk(v, depth + 1)
+            elif isinstance(node, list):
+                for item in node:
+                    if isinstance(item, (dict, list)):
+                        walk(item, depth + 1)
+
+        walk(task, 0)
+        params = task.get("params")
+        if isinstance(params, dict):
+            walk(params, 0)
+        return values
+
+    def _task_number_by_keys(self, task: Dict[str, Any], keys: List[str]) -> Optional[float]:
+        for value in self._task_lookup_values(task=task, keys=keys):
+            number = self._coerce_float(value)
+            if number is not None:
+                return number
+        return None
+
+    def _task_text_by_keys(self, task: Dict[str, Any], keys: List[str]) -> str:
+        for value in self._task_lookup_values(task=task, keys=keys):
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
     def _task_status_values(task: Dict[str, Any]) -> List[str]:
         values: List[str] = []
         for key in ("phase", "status", "state"):
@@ -1389,7 +1458,21 @@ class XunleiHijackDownloader(_PluginBase):
         return values
 
     def _task_speed_text(self, task: Dict[str, Any], key: str) -> Optional[str]:
-        value = self._task_number(task, key)
+        speed_text_keys = [
+            key,
+            "download_speed",
+            "speed",
+            "dl_speed",
+            "current_speed",
+            "downloadspeed",
+            "speed_download",
+            "download_speed_text",
+            "speed_text",
+        ]
+        speed_text = self._task_text_by_keys(task=task, keys=speed_text_keys)
+        if speed_text and re.search(r"/s", speed_text, flags=re.IGNORECASE):
+            return speed_text.replace(" ", "")
+        value = self._task_number_by_keys(task=task, keys=speed_text_keys)
         if value is None:
             return None
         try:
@@ -1399,20 +1482,46 @@ class XunleiHijackDownloader(_PluginBase):
             while size >= 1024 and idx < len(units) - 1:
                 size /= 1024.0
                 idx += 1
+            if idx == 0:
+                return f"{int(size)}{units[idx]}"
             return f"{size:.1f}{units[idx]}"
         except Exception:
             return None
 
     def _task_left_time(self, task: Dict[str, Any], progress: float) -> Optional[str]:
-        for key in ("left_time", "remaining_time", "remain_time", "time_remaining", "eta", "predict_left_time"):
-            value = self._task_number(task, key)
-            if value is not None and value >= 0:
-                return self._format_seconds(value)
-            text_value = self._task_text(task, key)
-            if text_value:
+        left_time_keys = [
+            "left_time",
+            "remaining_time",
+            "remain_time",
+            "time_remaining",
+            "eta",
+            "predict_left_time",
+            "left_time_text",
+            "remaining_time_text",
+            "eta_text",
+        ]
+        value = self._task_number_by_keys(task=task, keys=left_time_keys)
+        if value is not None and value >= 0:
+            seconds = float(value)
+            # 极大值通常为毫秒
+            if seconds > 315360000:
+                seconds = seconds / 1000.0
+            return self._format_seconds(seconds)
+
+        text_value = self._task_text_by_keys(task=task, keys=left_time_keys)
+        if text_value:
+            text_value = text_value.strip()
+            if ":" in text_value or "秒" in text_value or "分" in text_value or "h" in text_value.lower():
                 return text_value
         total_size = float(self._task_size(task) or 0)
-        speed = float(self._task_number(task, "download_speed") or 0)
+        speed = float(self._task_number_by_keys(task=task, keys=[
+            "download_speed",
+            "speed",
+            "dl_speed",
+            "current_speed",
+            "downloadspeed",
+            "speed_download",
+        ]) or 0)
         if total_size <= 0 or speed <= 0:
             return None
         left_bytes = total_size * max(0.0, 100.0 - progress) / 100.0
