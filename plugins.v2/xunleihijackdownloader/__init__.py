@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.42"
+    plugin_version = "1.0.43"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -422,6 +422,11 @@ class XunleiHijackDownloader(_PluginBase):
         action_name = {"start": "开始", "pause": "暂停", "delete": "删除"}.get(action, action)
         if ok:
             return schemas.Response(success=True, message=f"{action_name}任务成功。")
+        detail = str(self._last_request_error or "").strip()
+        if detail:
+            if len(detail) > 180:
+                detail = detail[:180] + "..."
+            return schemas.Response(success=False, message=f"{action_name}任务失败：{detail}")
         return schemas.Response(success=False, message=f"{action_name}任务失败，请检查迅雷连接与认证。")
 
     def _build_task_row(self, task: Dict[str, Any]) -> Dict[str, Any]:
@@ -1188,54 +1193,100 @@ class XunleiHijackDownloader(_PluginBase):
         return []
 
     def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True) -> bool:
-        if not ids:
+        id_list = [str(item or "").strip() for item in ids if str(item or "").strip()]
+        if not id_list:
+            self._last_request_error = "task_id 为空"
             return False
         if not self._base_url:
+            self._last_request_error = "迅雷地址未配置"
             return False
         if not self._fetch_device_id():
+            self._last_request_error = "device_id 未配置且自动获取失败"
             return False
         headers = self._get_headers()
         if self._auto_refresh_pan_auth and not headers.get("pan-auth"):
+            self._last_request_error = "pan_auth 自动获取失败"
             return False
 
-        payloads = [
-            {
-                "action": action,
-                "ids": list(ids),
-                "device_space": self._device_id,
-                "delete_file": bool(delete_file),
-            },
-            {
-                "type": action,
-                "task_ids": list(ids),
-                "device_space": self._device_id,
-                "delete_file": bool(delete_file),
-            }
+        first_id = id_list[0]
+        payload_templates: List[Dict[str, Any]] = [
+            {"action": action, "ids": id_list},
+            {"action": action, "task_ids": id_list},
+            {"action": action, "id": first_id},
+            {"action": action, "task_id": first_id},
+            {"type": action, "ids": id_list},
+            {"type": action, "task_ids": id_list},
+            {"type": action, "id": first_id},
+            {"type": action, "task_id": first_id},
         ]
+        payloads: List[Dict[str, Any]] = []
+        for base in payload_templates:
+            raw_payload = dict(base)
+            space_payload = {**base, "device_space": self._device_id}
+            if action == "delete":
+                raw_payload["delete_file"] = bool(delete_file)
+                space_payload["delete_file"] = bool(delete_file)
+            payloads.append(raw_payload)
+            payloads.append(space_payload)
+
+        methods = ["POST", "PUT"]
         urls = [
+            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task/action",
+            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks/action",
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task",
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks",
-            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task/action",
         ]
+        header_variants = [
+            {**headers, "device-space": self._device_id},
+            {**headers, "device-space": ""},
+            headers,
+        ]
+        failure_hints: List[str] = []
 
-        for url in urls:
-            for payload in payloads:
-                try:
-                    resp, obj = self._request_json(
-                        method="POST",
-                        url=url,
-                        headers={**headers, "device-space": self._device_id},
-                        payload=payload,
-                        timeout=20,
-                        retry_auth=True,
-                    )
-                    if not resp or not resp.ok:
-                        continue
-                    if not self._is_operation_success(obj=obj, ids=ids):
-                        continue
-                    return True
-                except Exception:
+        for method in methods:
+            for url in urls:
+                for request_headers in header_variants:
+                    for payload in payloads:
+                        try:
+                            resp, obj = self._request_json(
+                                method=method,
+                                url=url,
+                                headers=request_headers,
+                                payload=payload,
+                                timeout=20,
+                                retry_auth=True,
+                            )
+                            if not resp or not resp.ok:
+                                hint = str(self._last_request_error or "").strip()
+                                if hint:
+                                    failure_hints.append(hint)
+                                continue
+                            if self._is_operation_success(obj=obj, ids=set(id_list)):
+                                return True
+                            hint = str(self._extract_api_error(obj) or "").strip()
+                            if not hint:
+                                merged = str(self._merge_error_texts(obj) or "").strip()
+                                if merged and merged != str(self._last_request_error or "").strip().lower():
+                                    hint = merged
+                            if hint:
+                                failure_hints.append(hint)
+                        except Exception as err:
+                            failure_hints.append(str(err))
+                            continue
+        if failure_hints:
+            deduped: List[str] = []
+            for hint in failure_hints:
+                text = str(hint or "").strip()
+                if not text:
                     continue
+                if text not in deduped:
+                    deduped.append(text)
+                if len(deduped) >= 3:
+                    break
+            if deduped:
+                self._last_request_error = " | ".join([x[:120] for x in deduped])
+        if not self._last_request_error:
+            self._last_request_error = f"action={action} 未获得成功响应"
         return False
 
     @staticmethod
