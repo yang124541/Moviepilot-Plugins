@@ -291,7 +291,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "content": [
                     {
                         "component": "VCol",
-                        "props": {"cols": 11},
+                        "props": {"cols": 12},
                         "content": [
                             {
                                 "component": "VAlert",
@@ -301,26 +301,6 @@ class XunleiHijackDownloader(_PluginBase):
                                     "icon": False,
                                     "text": "展示迅雷任务实时状态：图片、文件图标、文件名、大小、剩余时间、速度、进度及开始/暂停/删除。已迁移任务自动隐藏。",
                                 },
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 1, "class": "d-flex justify-end"},
-                        "content": [
-                            {
-                                "component": "VBtn",
-                                "props": {
-                                    "size": "small",
-                                    "variant": "text",
-                                    "color": "primary",
-                                    "icon": True,
-                                    "title": "刷新",
-                                    "onclick": "window.location.reload()",
-                                },
-                                "content": [
-                                    {"component": "VIcon", "props": {"icon": "mdi-refresh"}}
-                                ],
                             }
                         ],
                     },
