@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.41"
+    plugin_version = "1.0.42"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -442,9 +442,9 @@ class XunleiHijackDownloader(_PluginBase):
         can_pause = bool(task_id)
         can_delete = bool(task_id)
         quoted_id = quote(task_id or "", safe="")
-        start_api = f"/plugin/{plugin_id}/task/start?task_id={quoted_id}&apikey={{apikey}}"
-        pause_api = f"/plugin/{plugin_id}/task/pause?task_id={quoted_id}&apikey={{apikey}}"
-        delete_api = f"/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true&apikey={{apikey}}"
+        start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}"
+        pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}"
+        delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true"
         progress_color = "success" if task_done else ("warning" if task_paused else ("error" if task_failed else "primary"))
 
         image_node: Dict[str, Any]
@@ -559,14 +559,7 @@ class XunleiHijackDownloader(_PluginBase):
             },
         }
         if not disabled:
-            button["events"] = {
-                "click": {
-                    "api": api_path,
-                    "method": "get",
-                    "success_message": success_message,
-                    "failure_message": failure_message,
-                }
-            }
+            button["props"]["onclick"] = XunleiHijackDownloader._build_action_onclick(api_path=api_path)
         return button
 
     @staticmethod

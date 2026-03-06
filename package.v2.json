@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.41",
+    "version": "1.0.42",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.42": "修复按钮控制链路：去除 apikey 占位符依赖，按钮改回 onclick 调用 /api/v1/plugin 接口，避免仅刷新不生效。",
       "v1.0.41": "恢复 537c082 的按钮机制：开始/暂停/删除三文字按钮，使用 events.click.api 触发，并回退为 /plugin 路径携带 apikey。",
       "v1.0.40": "回退下载行渲染到 5612c36 的稳定结构（1/6/3/2 列布局），优先恢复三项信息与控制按钮可见性。",
       "v1.0.39": "细化进度区排版：三项信息改为单行 Chip 文本并加大间隔，进度条进一步缩短并与文本拉开垂直间距。",
