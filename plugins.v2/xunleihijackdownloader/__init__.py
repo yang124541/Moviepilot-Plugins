@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.32"
+    plugin_version = "1.0.33"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -97,7 +97,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "path": "/task/start",
                 "endpoint": self.api_start_task,
                 "methods": ["GET"],
-                "auth": "bear",
+                "allow_anonymous": True,
                 "summary": "开始迅雷任务",
                 "description": "在插件数据页手动开始指定任务",
             },
@@ -105,7 +105,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "path": "/task/pause",
                 "endpoint": self.api_pause_task,
                 "methods": ["GET"],
-                "auth": "bear",
+                "allow_anonymous": True,
                 "summary": "暂停迅雷任务",
                 "description": "在插件数据页手动暂停指定任务",
             },
@@ -113,7 +113,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "path": "/task/delete",
                 "endpoint": self.api_delete_task,
                 "methods": ["GET"],
-                "auth": "bear",
+                "allow_anonymous": True,
                 "summary": "删除迅雷任务",
                 "description": "在插件数据页手动删除指定任务",
             },
@@ -464,36 +464,24 @@ class XunleiHijackDownloader(_PluginBase):
                             "component": "VRow",
                             "props": {"align": "center", "noGutters": True},
                             "content": [
+                                {"component": "VCol", "props": {"cols": 1, "md": 1}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 1},
-                                    "content": [image_node],
+                                    "props": {"cols": 6, "md": 6},
+                                    "content": [{"component": "VListItem", "props": {"title": task_name, "density": "compact"}}],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 6},
+                                    "props": {"cols": 3, "md": 3},
                                     "content": [
                                         {
                                             "component": "VListItem",
                                             "props": {
-                                                "title": task_name,
                                                 "density": "compact",
+                                                "subtitle": f"{size_text}    {left_time}    {speed_text}",
+                                                "class": "text-caption text-medium-emphasis",
                                             },
-                                        }
-                                    ],
-                                },
-                                {
-                                    "component": "VCol",
-                                    "props": {"cols": 12, "md": 3},
-                                    "content": [
-                                                {
-                                                    "component": "VListItem",
-                                                    "props": {
-                                                        "density": "compact",
-                                                        "subtitle": f"{size_text}    {left_time}    {speed_text}",
-                                                        "class": "text-caption text-medium-emphasis",
-                                                    },
-                                                },
+                                        },
                                         {
                                             "component": "VProgressLinear",
                                             "props": {
@@ -507,12 +495,11 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 2, "class": "d-flex justify-end ga-1"},
+                                    "props": {"cols": 2, "md": 2, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
                                     "content": [
                                         self._build_task_action_button(
                                             text=toggle_text,
                                             color=toggle_color,
-                                            icon=toggle_icon,
                                             disabled=not (can_start if toggle_is_start else can_pause),
                                             api_path=toggle_api,
                                             success_message=f"{toggle_text}任务成功，请点击刷新查看状态。",
@@ -521,7 +508,6 @@ class XunleiHijackDownloader(_PluginBase):
                                         self._build_task_action_button(
                                             text="删除",
                                             color="error",
-                                            icon="mdi-close",
                                             disabled=not can_delete,
                                             api_path=delete_api,
                                             success_message="删除任务成功，请点击刷新查看状态。",
@@ -538,36 +524,36 @@ class XunleiHijackDownloader(_PluginBase):
         }
 
     @staticmethod
-    def _build_task_action_button(text: str, color: str, icon: str, disabled: bool, api_path: str,
+    def _build_task_action_button(text: str, color: str, disabled: bool, api_path: str,
                                   success_message: str, failure_message: str) -> Dict[str, Any]:
         button = {
             "component": "VBtn",
             "props": {
-                "size": "small",
-                "density": "comfortable",
-                "variant": "text",
+                "size": "x-small",
+                "density": "compact",
+                "variant": "outlined",
                 "color": color,
-                "icon": True,
+                "text": text,
                 "title": text,
                 "disabled": bool(disabled),
                 "class": "ml-1",
-                "width": 28,
-                "height": 28,
-                "minWidth": 28,
-                "rounded": "circle",
+                "minWidth": 52,
+                "height": 26,
+                "rounded": "sm",
             },
-            "content": [{"component": "VIcon", "props": {"icon": icon, "size": 14}}],
         }
         if not disabled:
-            button["events"] = {
-                "click": {
-                    "api": api_path,
-                    "method": "get",
-                    "success_message": success_message,
-                    "failure_message": failure_message,
-                }
-            }
+            button["props"]["onclick"] = XunleiHijackDownloader._build_action_onclick(api_path=api_path)
         return button
+
+    @staticmethod
+    def _build_action_onclick(api_path: str) -> str:
+        path = str(api_path or "").replace("\\", "\\\\").replace("'", "\\'")
+        return (
+            f"fetch('{path}',{{method:'GET',credentials:'same-origin'}})"
+            ".then(()=>window.location.reload())"
+            ".catch(()=>window.location.reload());"
+        )
 
     def get_module(self) -> Dict[str, Any]:
         if not self._enabled:
