@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.55"
+    plugin_version = "1.0.56"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -50,7 +50,10 @@ class XunleiHijackDownloader(_PluginBase):
     _moved_task_keys: Set[str] = set()
     _moved_task_order: List[str] = []
     _task_name_cache: Dict[str, str] = {}
+    _completed_seen_at: Dict[str, float] = {}
+    _completed_seen_order: List[str] = []
     _max_moved_keys = 2000
+    _max_completed_seen_keys = 4000
     _last_request_error = ""
 
     def init_plugin(self, config: dict = None):
@@ -58,6 +61,8 @@ class XunleiHijackDownloader(_PluginBase):
         self._moved_task_order = self._load_moved_task_keys()
         self._moved_task_keys = set(self._moved_task_order)
         self._task_name_cache = {}
+        self._completed_seen_at = {}
+        self._completed_seen_order = []
         self._auto_refresh_pan_auth = True
         if config:
             self._enabled = bool(config.get("enabled", False))
@@ -789,6 +794,87 @@ class XunleiHijackDownloader(_PluginBase):
         except Exception as err:
             logger.warn(f"XunleiHijack persist moved keys failed: {err}")
 
+    def _remember_completed_seen(self, move_key: str, now_ts: float) -> float:
+        token = str(move_key or "").strip()
+        if not token:
+            return float(now_ts)
+        ts = float(now_ts)
+        old = self._completed_seen_at.get(token)
+        if old is not None:
+            try:
+                old_ts = float(old)
+                if old_ts > 0:
+                    ts = min(ts, old_ts)
+            except Exception:
+                pass
+            self._completed_seen_order = [x for x in self._completed_seen_order if x != token]
+        self._completed_seen_at[token] = ts
+        self._completed_seen_order.append(token)
+        if len(self._completed_seen_order) > self._max_completed_seen_keys:
+            overflow = self._completed_seen_order[:-self._max_completed_seen_keys]
+            self._completed_seen_order = self._completed_seen_order[-self._max_completed_seen_keys:]
+            for key in overflow:
+                self._completed_seen_at.pop(key, None)
+        return ts
+
+    def _drop_completed_seen(self, move_key: str) -> None:
+        token = str(move_key or "").strip()
+        if not token:
+            return
+        self._completed_seen_at.pop(token, None)
+        if token in self._completed_seen_order:
+            self._completed_seen_order = [x for x in self._completed_seen_order if x != token]
+
+    @staticmethod
+    def _parse_unix_timestamp(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        raw: Optional[float] = None
+        if isinstance(value, (int, float)):
+            raw = float(value)
+        else:
+            text = str(value or "").strip()
+            if not text:
+                return None
+            if re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+                try:
+                    raw = float(text)
+                except Exception:
+                    raw = None
+            else:
+                iso = text.replace("Z", "+00:00")
+                try:
+                    dt = datetime.fromisoformat(iso)
+                    raw = dt.timestamp()
+                except Exception:
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M"):
+                        try:
+                            raw = datetime.strptime(text, fmt).timestamp()
+                            break
+                        except Exception:
+                            continue
+        if raw is None or raw <= 0:
+            return None
+        # 兼容毫秒时间戳
+        if raw > 1e12:
+            raw = raw / 1000.0
+        if raw > 1e11:
+            raw = raw / 1000.0
+        return raw if raw > 0 else None
+
+    def _task_completed_timestamp(self, task: Dict[str, Any]) -> Optional[float]:
+        keys = [
+            "completed_time", "completed_at", "complete_time", "complete_at",
+            "finished_time", "finished_at", "finish_time", "finish_at",
+            "end_time", "end_at", "ended_time", "done_time", "done_at",
+            "mtime", "update_time", "updated_at",
+        ]
+        for value in self._task_lookup_values(task=task, keys=keys):
+            ts = self._parse_unix_timestamp(value)
+            if ts:
+                return ts
+        return None
+
     def _start_move_scheduler(self) -> None:
         self._scheduler = BackgroundScheduler(timezone=settings.TZ)
         self._scheduler.add_job(
@@ -1208,7 +1294,21 @@ class XunleiHijackDownloader(_PluginBase):
                     continue
                 if move_key in self._moved_task_keys:
                     stats["skip_already_moved"] += 1
+                    self._drop_completed_seen(move_key)
                     continue
+                if self._move_safe_seconds > 0:
+                    done_ts = self._task_completed_timestamp(task)
+                    if done_ts is None:
+                        done_ts = self._remember_completed_seen(move_key=move_key, now_ts=now_ts)
+                    else:
+                        self._remember_completed_seen(move_key=move_key, now_ts=done_ts)
+                    elapsed = now_ts - done_ts
+                    if elapsed < self._move_safe_seconds:
+                        stats["skip_safe_wait"] += 1
+                        add_sample(
+                            f"{task_tag} skip:safe_wait completed_elapsed={elapsed:.1f}s < {self._move_safe_seconds}s"
+                        )
+                        continue
                 try:
                     src = self._resolve_source_path(source_root, task_name)
                     if not src or not src.exists():
@@ -1219,22 +1319,10 @@ class XunleiHijackDownloader(_PluginBase):
                             f"{task_tag} skip:source_not_found source_root={source_root} task_name={task_name}"
                         )
                         continue
-                    if self._move_safe_seconds > 0:
-                        try:
-                            age = now_ts - src.stat().st_mtime
-                            if age < self._move_safe_seconds:
-                                stats["skip_safe_wait"] += 1
-                                add_sample(
-                                    f"{task_tag} skip:safe_wait age={age:.1f}s < {self._move_safe_seconds}s src={src}"
-                                )
-                                continue
-                        except Exception as stat_err:
-                            stats["skip_stat_error"] += 1
-                            add_sample(f"{task_tag} skip:stat_error src={src} err={stat_err}")
-                            continue
                     dst = self._dedupe_target(target_root / src.name)
                     shutil.move(str(src), str(dst))
                     self._remember_moved_key(move_key)
+                    self._drop_completed_seen(move_key)
                     task_id = self._task_key(task)
                     if task_id:
                         # 兼容历史 moved key（曾使用纯 task_id）
