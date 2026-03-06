@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.24"
+    plugin_version = "1.0.25"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -372,18 +372,6 @@ class XunleiHijackDownloader(_PluginBase):
             })
             return page
 
-        header_cells = [
-            {"component": "th", "props": {"text": "图片", "class": "text-left"}},
-            {"component": "th", "props": {"text": "图标", "class": "text-left"}},
-            {"component": "th", "props": {"text": "文件名", "class": "text-left"}},
-            {"component": "th", "props": {"text": "大小", "class": "text-left"}},
-            {"component": "th", "props": {"text": "剩余时间", "class": "text-left"}},
-            {"component": "th", "props": {"text": "当前下载速度", "class": "text-left"}},
-            {"component": "th", "props": {"text": "进度", "class": "text-left"}},
-            {"component": "th", "props": {"text": "操作", "class": "text-left"}},
-        ]
-        body_rows = [self._build_task_row(task=task) for task in visible_tasks]
-
         page.append({
             "component": "VRow",
             "content": [
@@ -392,17 +380,29 @@ class XunleiHijackDownloader(_PluginBase):
                     "props": {"cols": 12},
                     "content": [
                         {
-                            "component": "VTable",
-                            "props": {"hover": True, "class": "table-striped"},
-                            "content": [
-                                {"component": "thead", "content": [{"component": "tr", "content": header_cells}]},
-                                {"component": "tbody", "content": body_rows},
-                            ],
+                            "component": "VAlert",
+                            "props": {
+                                "type": "info",
+                                "variant": "tonal",
+                                "text": "任务字段：图片 | 文件图标 | 文件名 | 大小 | 剩余时间 | 下载速度 | 进度 | 开始/暂停/删除",
+                            },
                         }
                     ],
                 }
             ],
         })
+
+        for task in visible_tasks:
+            page.append({
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [self._build_task_row(task=task)],
+                    }
+                ],
+            })
         return page
 
     def api_start_task(self, task_id: str = "", hash: str = "") -> schemas.Response:
@@ -468,77 +468,97 @@ class XunleiHijackDownloader(_PluginBase):
             }
 
         return {
-            "component": "tr",
+            "component": "VCard",
+            "props": {"variant": "outlined", "class": "mb-3"},
             "content": [
                 {
-                    "component": "td",
-                    "content": [image_node],
-                },
-                {
-                    "component": "td",
-                    "content": [{"component": "VIcon", "props": {"icon": icon_name, "size": 20}}],
-                },
-                {
-                    "component": "td",
-                    "content": [
-                        {"component": "div", "props": {"text": task_name, "class": "text-body-2"}},
-                        {"component": "div", "props": {"text": state_text, "class": "text-caption text-medium-emphasis"}},
-                    ],
-                },
-                {"component": "td", "props": {"text": size_text}},
-                {"component": "td", "props": {"text": left_time}},
-                {"component": "td", "props": {"text": speed_text}},
-                {
-                    "component": "td",
-                    "props": {"style": "min-width: 160px;"},
+                    "component": "VCardText",
                     "content": [
                         {
-                            "component": "VProgressLinear",
-                            "props": {"modelValue": progress, "height": 8, "rounded": True, "color": progress_color},
-                        },
-                        {"component": "div", "props": {"text": progress_text, "class": "text-caption mt-1"}},
-                    ],
-                },
-                {
-                    "component": "td",
-                    "content": [
-                        {
-                            "component": "div",
-                            "props": {"class": "d-flex flex-wrap ga-1"},
+                            "component": "VRow",
+                            "props": {"align": "center"},
                             "content": [
-                                self._build_task_action_button(
-                                    text="开始",
-                                    color="success",
-                                    disabled=not can_start,
-                                    api_path=start_api,
-                                    success_message="开始任务成功，请点击刷新查看状态。",
-                                    failure_message="开始任务失败。",
-                                ),
-                                self._build_task_action_button(
-                                    text="暂停",
-                                    color="warning",
-                                    disabled=not can_pause,
-                                    api_path=pause_api,
-                                    success_message="暂停任务成功，请点击刷新查看状态。",
-                                    failure_message="暂停任务失败。",
-                                ),
-                                self._build_task_action_button(
-                                    text="删除",
-                                    color="error",
-                                    disabled=not can_delete,
-                                    api_path=delete_api,
-                                    success_message="删除任务成功，请点击刷新查看状态。",
-                                    failure_message="删除任务失败。",
-                                ),
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 2},
+                                    "content": [image_node],
+                                },
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 5},
+                                    "content": [
+                                        {
+                                            "component": "VListItem",
+                                            "props": {
+                                                "title": task_name,
+                                                "subtitle": f"{state_text} | 大小 {size_text} | 剩余 {left_time} | 速度 {speed_text}",
+                                                "prependIcon": icon_name,
+                                            },
+                                        }
+                                    ],
+                                },
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 3},
+                                    "content": [
+                                        {
+                                            "component": "VProgressLinear",
+                                            "props": {"modelValue": progress, "height": 8, "rounded": True, "color": progress_color},
+                                        },
+                                        {
+                                            "component": "VChip",
+                                            "props": {
+                                                "size": "x-small",
+                                                "variant": "tonal",
+                                                "color": progress_color,
+                                                "text": f"进度 {progress_text}",
+                                                "class": "mt-2",
+                                            },
+                                        },
+                                    ],
+                                },
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 2},
+                                    "content": [
+                                        self._build_task_action_button(
+                                            text="开始",
+                                            color="success",
+                                            icon="mdi-play",
+                                            disabled=not can_start,
+                                            api_path=start_api,
+                                            success_message="开始任务成功，请点击刷新查看状态。",
+                                            failure_message="开始任务失败。",
+                                        ),
+                                        self._build_task_action_button(
+                                            text="暂停",
+                                            color="warning",
+                                            icon="mdi-pause",
+                                            disabled=not can_pause,
+                                            api_path=pause_api,
+                                            success_message="暂停任务成功，请点击刷新查看状态。",
+                                            failure_message="暂停任务失败。",
+                                        ),
+                                        self._build_task_action_button(
+                                            text="删除",
+                                            color="error",
+                                            icon="mdi-delete",
+                                            disabled=not can_delete,
+                                            api_path=delete_api,
+                                            success_message="删除任务成功，请点击刷新查看状态。",
+                                            failure_message="删除任务失败。",
+                                        ),
+                                    ],
+                                },
                             ],
                         }
                     ],
-                },
+                }
             ],
         }
 
     @staticmethod
-    def _build_task_action_button(text: str, color: str, disabled: bool, api_path: str,
+    def _build_task_action_button(text: str, color: str, icon: str, disabled: bool, api_path: str,
                                   success_message: str, failure_message: str) -> Dict[str, Any]:
         button = {
             "component": "VBtn",
@@ -547,6 +567,9 @@ class XunleiHijackDownloader(_PluginBase):
                 "variant": "text",
                 "color": color,
                 "text": text,
+                "icon": icon,
+                "title": text,
+                "class": "mr-1",
                 "disabled": bool(disabled),
             },
         }
