@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.46"
+    plugin_version = "1.0.47"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -452,9 +452,7 @@ class XunleiHijackDownloader(_PluginBase):
         can_pause = bool(task_id)
         can_delete = bool(task_id)
         quoted_id = quote(task_id or "", safe="")
-        task_space = self._task_space(task)
-        quoted_space = quote(task_space or "", safe="")
-        space_qs = f"&space={quoted_space}" if quoted_space else ""
+        space_qs = "&space="
         start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}{space_qs}"
         pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}{space_qs}"
         delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}"
@@ -1335,12 +1333,12 @@ class XunleiHijackDownloader(_PluginBase):
                                 continue
             return False, local_hints
 
-        first_device = preferred_space or str(self._device_id or "").strip()
+        first_device = preferred_space if preferred_space else ""
         ok, failure_hints = _attempt_with_device(first_device)
         if ok:
             return True
 
-        if preferred_space and self._device_id and str(self._device_id).strip() != preferred_space:
+        if self._device_id and str(self._device_id).strip() != first_device:
             fallback_device = str(self._device_id).strip()
             ok, extra_hints = _attempt_with_device(fallback_device)
             failure_hints.extend(extra_hints)
