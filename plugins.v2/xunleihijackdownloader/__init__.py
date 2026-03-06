@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.48"
+    plugin_version = "1.0.49"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1286,7 +1286,7 @@ class XunleiHijackDownloader(_PluginBase):
             {"type": action, "id": first_id},
             {"type": action, "task_id": first_id},
         ]
-        methods = ["POST", "PUT"]
+        methods = ["PATCH", "POST", "PUT", "DELETE"]
         urls = [
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task/action",
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks/action",
@@ -1303,9 +1303,13 @@ class XunleiHijackDownloader(_PluginBase):
                 full_payload = {**base, "device_space": device_space, "target": device_space, "space": device_space}
                 if action == "delete":
                     raw_payload["delete_file"] = bool(delete_file)
+                    raw_payload["delete_files"] = bool(delete_file)
                     space_payload["delete_file"] = bool(delete_file)
+                    space_payload["delete_files"] = bool(delete_file)
                     target_payload["delete_file"] = bool(delete_file)
+                    target_payload["delete_files"] = bool(delete_file)
                     full_payload["delete_file"] = bool(delete_file)
+                    full_payload["delete_files"] = bool(delete_file)
                 payloads.append(raw_payload)
                 payloads.append(space_payload)
                 payloads.append(target_payload)
@@ -1317,6 +1321,61 @@ class XunleiHijackDownloader(_PluginBase):
                 headers,
             ]
             local_hints: List[str] = []
+            phase_candidates = self._phase_candidates_for_action(action=action)
+            if phase_candidates:
+                update_urls = [
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task",
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks",
+                ]
+                update_methods = ["PATCH", "PUT", "POST"]
+                phase_payloads: List[Dict[str, Any]] = []
+                for phase in phase_candidates:
+                    per_phase = [
+                        {"id": first_id, "phase": phase},
+                        {"task_id": first_id, "phase": phase},
+                        {"ids": id_list, "phase": phase},
+                        {"task_ids": id_list, "phase": phase},
+                        {"id": first_id, "set_params": {"phase": phase}},
+                        {"task_id": first_id, "set_params": {"phase": phase}},
+                    ]
+                    for base in per_phase:
+                        phase_payloads.append(dict(base))
+                        phase_payloads.append({**base, "space": device_space})
+                        phase_payloads.append({**base, "space": device_space, "type": "user#download-url"})
+                        phase_payloads.append({**base, "space": device_space, "type": "user#runner"})
+                        phase_payloads.append({**base, "space": device_space, "target": device_space})
+                        phase_payloads.append({**base, "space": device_space, "device_space": device_space})
+                        phase_payloads.append({**base, "target": device_space, "device_space": device_space})
+                for method in update_methods:
+                    for url in update_urls:
+                        for request_headers in header_variants:
+                            for payload in phase_payloads:
+                                try:
+                                    resp, obj = self._request_json(
+                                        method=method,
+                                        url=url,
+                                        headers=request_headers,
+                                        payload=payload,
+                                        timeout=20,
+                                        retry_auth=True,
+                                    )
+                                    if not resp or not resp.ok:
+                                        hint = str(self._last_request_error or "").strip()
+                                        if hint:
+                                            local_hints.append(hint)
+                                        continue
+                                    if self._is_operation_success(obj=obj, ids=set(id_list), resp=resp):
+                                        return True, local_hints
+                                    hint = str(self._extract_api_error(obj) or "").strip()
+                                    if not hint:
+                                        merged = str(self._merge_error_texts(obj) or "").strip()
+                                        if merged and merged != str(self._last_request_error or "").strip().lower():
+                                            hint = merged
+                                    if hint:
+                                        local_hints.append(hint)
+                                except Exception as err:
+                                    local_hints.append(str(err))
+                                    continue
             for method in methods:
                 for url in urls:
                     for request_headers in header_variants:
@@ -1335,7 +1394,7 @@ class XunleiHijackDownloader(_PluginBase):
                                     if hint:
                                         local_hints.append(hint)
                                     continue
-                                if self._is_operation_success(obj=obj, ids=set(id_list)):
+                                if self._is_operation_success(obj=obj, ids=set(id_list), resp=resp):
                                     return True, local_hints
                                 hint = str(self._extract_api_error(obj) or "").strip()
                                 if not hint:
@@ -1390,7 +1449,23 @@ class XunleiHijackDownloader(_PluginBase):
         return False
 
     @staticmethod
-    def _is_operation_success(obj: Any, ids: Set[str]) -> bool:
+    def _phase_candidates_for_action(action: str) -> List[str]:
+        token = str(action or "").strip().lower()
+        if token in ("start", "resume", "continue", "unpause"):
+            return ["phase_type_running", "PHASE_TYPE_RUNNING", "running", "RUNNING"]
+        if token in ("pause", "stop", "suspend"):
+            return ["phase_type_paused", "PHASE_TYPE_PAUSED", "paused", "PAUSED"]
+        return []
+
+    @staticmethod
+    def _is_operation_success(obj: Any, ids: Set[str], resp: Optional[requests.Response] = None) -> bool:
+        if resp is not None and resp.ok:
+            try:
+                if not str(resp.text or "").strip():
+                    return True
+            except Exception:
+                if resp.status_code in (200, 201, 202, 204):
+                    return True
         if not isinstance(obj, dict):
             return False
         if obj.get("error") or obj.get("err"):

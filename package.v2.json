@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.48",
+    "version": "1.0.49",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.49": "增强 Docker 迅雷任务控制兼容性：新增基于 phase 的 UpdateTask 控制链路（PATCH/PUT/POST task/tasks），补充 DELETE 与 delete_files 变体，并支持 HTTP 2xx 空响应判定成功，修复开始/暂停按钮常见失效场景。",
       "v1.0.48": "修复自动搬运稳定性：改为稳定搬运键（优先 task_id，退化名称+大小），单任务搬运异常不再中断整轮，回退路径匹配支持递归子目录。",
       "v1.0.47": "调试控制链路：按钮固定透传空 space（space=），后端先按空空间尝试，再回退 device_id，以验证空间参数对控制成功率的影响。",
       "v1.0.46": "任务控制优先使用任务自身 target/space：按钮透传 space 参数，后端按该空间发起控制并补齐 space/target/device_space payload 变体。",
