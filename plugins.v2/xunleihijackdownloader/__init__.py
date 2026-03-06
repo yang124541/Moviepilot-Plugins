@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.44"
+    plugin_version = "1.0.45"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -932,39 +932,83 @@ class XunleiHijackDownloader(_PluginBase):
             logger.warn(f"XunleiHijack fetch pan_auth failed: {err}")
         return None
 
-    def _fetch_device_id(self, force_refresh: bool = False) -> Optional[str]:
+    def _fetch_device_id(self, force_refresh: bool = False, exclude_device: str = "") -> Optional[str]:
         if self._device_id and not force_refresh:
             return self._device_id
+        old_device = str(self._device_id or "").strip()
+        if force_refresh and self._device_id:
+            self._device_id = ""
+            self._save_config()
         if not self._base_url or not self._authorization:
             return None
+        headers = self._get_headers()
+        candidates: List[str] = []
+
         try:
-            url = (
-                f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                f"?type=user%23runner&device_space="
-            )
-            resp, obj = self._request_json(
-                method="GET",
-                url=url,
-                headers={**self._get_headers(), "device-space": ""},
-                timeout=20,
-                retry_auth=True
-            )
-            if not resp or not resp.ok or not isinstance(obj, dict):
-                raise ValueError(f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}")
-            tasks = obj.get("tasks")
-            if isinstance(tasks, list):
+            for task_type in ("user%23runner", "user%23download-url"):
+                url = (
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                    f"?type={task_type}&device_space="
+                )
+                resp, obj = self._request_json(
+                    method="GET",
+                    url=url,
+                    headers={**headers, "device-space": ""},
+                    timeout=20,
+                    retry_auth=True,
+                )
+                if not resp or not resp.ok or not isinstance(obj, dict):
+                    continue
+                tasks = obj.get("tasks")
+                if not isinstance(tasks, list):
+                    continue
                 for task in tasks:
                     if not isinstance(task, dict):
                         continue
                     params = task.get("params") if isinstance(task.get("params"), dict) else {}
                     token = str(params.get("target") or task.get("target") or "").strip()
-                    if token:
-                        self._device_id = token
-                        self._save_config()
-                        logger.info(f"XunleiHijack[v{self.plugin_version}] got device_id from runner tasks: {token}")
-                        return token
+                    self._append_device_candidate(candidates, token)
         except Exception as err:
             logger.warn(f"XunleiHijack[v{self.plugin_version}] fetch device_id failed: {err}")
+
+        for endpoint in (
+            "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/devices",
+            "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/device",
+        ):
+            try:
+                url = f"{self._base_url}{endpoint}"
+                resp, obj = self._request_json(
+                    method="GET",
+                    url=url,
+                    headers=headers,
+                    timeout=20,
+                    retry_auth=True,
+                )
+                if not resp or not resp.ok or not isinstance(obj, dict):
+                    continue
+                for key in ("devices", "list", "data"):
+                    payload = obj.get(key)
+                    if isinstance(payload, list):
+                        for item in payload:
+                            if not isinstance(item, dict):
+                                continue
+                            device = str(item.get("id") or item.get("device_id") or item.get("target") or item.get("space") or "").strip()
+                            self._append_device_candidate(candidates, device)
+                    elif isinstance(payload, dict):
+                        device = str(payload.get("id") or payload.get("device_id") or payload.get("target") or payload.get("space") or "").strip()
+                        self._append_device_candidate(candidates, device)
+            except Exception:
+                continue
+
+        picked = self._pick_active_device_id(
+            candidates=candidates,
+            exclude_device=exclude_device,
+            old_device=old_device,
+        )
+        if picked:
+            self._device_id = picked
+            self._save_config()
+            return picked
         return None
 
     def _add_task(self, magnet: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1060,7 +1104,7 @@ class XunleiHijackDownloader(_PluginBase):
             if not allow_refresh_retry:
                 return None, first_err
 
-            refresh_device = self._fetch_device_id(force_refresh=True)
+            refresh_device = self._fetch_device_id(force_refresh=True, exclude_device=first_device)
             refresh_device = str(refresh_device or "").strip()
             if not refresh_device or refresh_device == first_device:
                 return None, "迅雷任务创建失败：当前 device_space 未激活，且刷新 device_id 无变化。"
@@ -1282,18 +1326,15 @@ class XunleiHijackDownloader(_PluginBase):
             return True
 
         merged_failures = " ".join([str(item or "") for item in failure_hints]).lower()
-        if "device_space_not_active" in merged_failures:
-            refreshed_device = str(self._fetch_device_id(force_refresh=True) or "").strip()
-            if refreshed_device:
-                if refreshed_device != current_device:
-                    self._device_id = refreshed_device
-                    self._save_config()
+        if self._refresh_device_id_on_inactive_space(error_text=merged_failures):
+            refreshed_device = str(self._device_id or "").strip()
+            if refreshed_device and refreshed_device != current_device:
                 ok, retry_hints = _attempt_with_device(refreshed_device)
                 failure_hints.extend(retry_hints)
                 if ok:
                     return True
             else:
-                failure_hints.append("device_space_not_active: device_id 刷新失败")
+                failure_hints.append("device_space_not_active: 刷新后 device_id 无变化")
 
         if failure_hints:
             deduped: List[str] = []
@@ -1854,6 +1895,102 @@ class XunleiHijackDownloader(_PluginBase):
                 if value is not None:
                     texts.append(str(value))
         return " ".join(texts).lower()
+
+    def _is_device_space_not_active(self, obj: Any = None, error_text: str = "") -> bool:
+        texts = [str(error_text or "").lower(), str(self._last_request_error or "").lower()]
+        if isinstance(obj, dict):
+            for key in ("error", "err", "message", "msg", "detail", "error_code"):
+                value = obj.get(key)
+                if value is not None:
+                    texts.append(str(value).lower())
+        merged = " ".join(texts)
+        return any(
+            flag in merged for flag in (
+                "device_space_not_active",
+                "device space not active",
+                "space_name_invalid",
+                "invalid space",
+            )
+        )
+
+    def _refresh_device_id_on_inactive_space(self, obj: Any = None, error_text: str = "") -> bool:
+        if not self._is_device_space_not_active(obj=obj, error_text=error_text):
+            return False
+        old_device = str(self._device_id or "").strip()
+        new_device = self._fetch_device_id(force_refresh=True, exclude_device=old_device)
+        if new_device:
+            logger.warn(
+                f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, "
+                f"refresh device_id: {old_device or 'EMPTY'} -> {new_device}"
+            )
+            return True
+        logger.warn(
+            f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, "
+            f"but refresh device_id failed."
+        )
+        return False
+
+    @staticmethod
+    def _append_device_candidate(candidates: List[str], device: str) -> None:
+        token = str(device or "").strip()
+        if not token:
+            return
+
+        def _add(value: str) -> None:
+            text = str(value or "").strip()
+            if text and text not in candidates:
+                candidates.append(text)
+
+        _add(token)
+        if token.endswith("#"):
+            _add(token[:-1])
+        elif "#" not in token:
+            _add(f"{token}#")
+
+    def _is_device_candidate_active(self, device: str) -> bool:
+        token = str(device or "").strip()
+        if not token or not self._base_url:
+            return False
+        url = (
+            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+            f"?type=user%23download-url&device_space={quote(token)}"
+        )
+        resp, obj = self._request_json(
+            method="GET",
+            url=url,
+            headers={**self._get_headers(), "device-space": token},
+            timeout=20,
+            retry_auth=True,
+            retry_count=1,
+        )
+        if not resp:
+            return False
+        if self._is_device_space_not_active(obj=obj, error_text=self._last_request_error):
+            return False
+        return bool(resp.ok)
+
+    def _pick_active_device_id(self, candidates: List[str], exclude_device: str = "", old_device: str = "") -> Optional[str]:
+        dedup: List[str] = []
+        for item in candidates:
+            token = str(item or "").strip()
+            if token and token not in dedup:
+                dedup.append(token)
+
+        exclude = str(exclude_device or "").strip()
+        old = str(old_device or "").strip()
+
+        preferred = [x for x in dedup if x != exclude]
+        if old and old not in preferred and old != exclude:
+            preferred.append(old)
+
+        for device in preferred:
+            if self._is_device_candidate_active(device):
+                return device
+
+        # 全部探测失败时，返回一个候选，避免完全不可用。
+        if preferred:
+            return preferred[0]
+        return None
 
     @staticmethod
     def _should_refresh_pan_auth(resp: Optional[requests.Response], obj: Any) -> bool:
