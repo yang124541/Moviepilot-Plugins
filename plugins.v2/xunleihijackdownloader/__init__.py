@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.37"
+    plugin_version = "1.0.38"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -439,9 +439,9 @@ class XunleiHijackDownloader(_PluginBase):
         speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
         image_url = self._task_image_url(task)
 
-        can_start = bool(task_id)
-        can_pause = bool(task_id)
-        can_delete = bool(task_id)
+        can_start = True
+        can_pause = True
+        can_delete = True
         quoted_id = quote(task_id or "", safe="")
         start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}"
         pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}"
@@ -486,7 +486,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 6, "md": 5},
+                                    "props": {"cols": 6, "md": 7},
                                     "content": [
                                         {
                                             "component": "VRow",
@@ -495,17 +495,17 @@ class XunleiHijackDownloader(_PluginBase):
                                                 {
                                                     "component": "VCol",
                                                     "props": {"cols": 4},
-                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": size_text, "class": "mx-2"}}],
+                                                    "content": [{"component": "VListItem", "props": {"density": "compact", "title": size_text, "class": "text-caption"}}],
                                                 },
                                                 {
                                                     "component": "VCol",
                                                     "props": {"cols": 4},
-                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": left_time, "class": "mx-2"}}],
+                                                    "content": [{"component": "VListItem", "props": {"density": "compact", "title": left_time, "class": "text-caption"}}],
                                                 },
                                                 {
                                                     "component": "VCol",
                                                     "props": {"cols": 4},
-                                                    "content": [{"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": speed_text, "class": "mx-2"}}],
+                                                    "content": [{"component": "VListItem", "props": {"density": "compact", "title": speed_text, "class": "text-caption"}}],
                                                 },
                                             ],
                                         },
@@ -516,32 +516,36 @@ class XunleiHijackDownloader(_PluginBase):
                                                 "height": 5,
                                                 "rounded": True,
                                                 "color": progress_color,
+                                                "style": "max-width:72%;",
                                             },
                                         },
-                                    ],
-                                },
-                                {
-                                    "component": "VCol",
-                                    "props": {"cols": 2, "md": 2, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
-                                    "content": [
-                                        self._build_task_action_button(
-                                            text=toggle_text,
-                                            color=toggle_color,
-                                            icon=toggle_icon,
-                                            disabled=not (can_start if toggle_is_start else can_pause),
-                                            api_path=toggle_api,
-                                            success_message=f"{toggle_text}任务成功，请点击刷新查看状态。",
-                                            failure_message=f"{toggle_text}任务失败。",
-                                        ),
-                                        self._build_task_action_button(
-                                            text="删除",
-                                            color="error",
-                                            icon="mdi-delete-outline",
-                                            disabled=not can_delete,
-                                            api_path=delete_api,
-                                            success_message="删除任务成功，请点击刷新查看状态。",
-                                            failure_message="删除任务失败。",
-                                        ),
+                                        {
+                                            "component": "VRow",
+                                            "props": {"class": "mt-1"},
+                                            "content": [
+                                                {"component": "VCol", "props": {"cols": 12, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
+                                                 "content": [
+                                                     self._build_task_action_button(
+                                                         text=toggle_text,
+                                                         color=toggle_color,
+                                                         icon=toggle_icon,
+                                                         disabled=not (can_start if toggle_is_start else can_pause),
+                                                         api_path=toggle_api,
+                                                         success_message=f"{toggle_text}任务成功，请点击刷新查看状态。",
+                                                         failure_message=f"{toggle_text}任务失败。",
+                                                     ),
+                                                     self._build_task_action_button(
+                                                         text="删除",
+                                                         color="error",
+                                                         icon="mdi-delete-outline",
+                                                         disabled=not can_delete,
+                                                         api_path=delete_api,
+                                                         success_message="删除任务成功，请点击刷新查看状态。",
+                                                         failure_message="删除任务失败。",
+                                                     ),
+                                                 ]},
+                                            ],
+                                        },
                                     ],
                                 },
                             ],
@@ -566,9 +570,9 @@ class XunleiHijackDownloader(_PluginBase):
                 "title": text,
                 "disabled": bool(disabled),
                 "class": "ml-1",
-                "width": 28,
-                "height": 28,
-                "minWidth": 28,
+                "width": 30,
+                "height": 30,
+                "minWidth": 30,
                 "rounded": "circle",
             },
             "content": [{"component": "VIcon", "props": {"icon": icon, "size": 14}}],
