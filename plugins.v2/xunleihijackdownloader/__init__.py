@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.33"
+    plugin_version = "1.0.34"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -402,7 +402,21 @@ class XunleiHijackDownloader(_PluginBase):
             return schemas.Response(success=False, message="任务ID不能为空。")
         if action != "delete" and task_key in self._moved_task_keys:
             return schemas.Response(success=False, message="任务已迁移，无法继续操作。")
-        ok = self._operate_tasks(ids={task_key}, action=action, delete_file=bool(delete_file))
+        action_candidates: List[str]
+        if action == "start":
+            action_candidates = ["start", "resume", "continue", "unpause"]
+        elif action == "pause":
+            action_candidates = ["pause", "stop", "suspend"]
+        elif action == "delete":
+            action_candidates = ["delete", "remove"]
+        else:
+            action_candidates = [action]
+
+        ok = False
+        for act in action_candidates:
+            ok = self._operate_tasks(ids={task_key}, action=act, delete_file=bool(delete_file))
+            if ok:
+                break
         if ok and action == "delete":
             self._remember_moved_key(task_key)
         action_name = {"start": "开始", "pause": "暂停", "delete": "删除"}.get(action, action)
@@ -500,6 +514,7 @@ class XunleiHijackDownloader(_PluginBase):
                                         self._build_task_action_button(
                                             text=toggle_text,
                                             color=toggle_color,
+                                            icon=toggle_icon,
                                             disabled=not (can_start if toggle_is_start else can_pause),
                                             api_path=toggle_api,
                                             success_message=f"{toggle_text}任务成功，请点击刷新查看状态。",
@@ -508,6 +523,7 @@ class XunleiHijackDownloader(_PluginBase):
                                         self._build_task_action_button(
                                             text="删除",
                                             color="error",
+                                            icon="mdi-delete-outline",
                                             disabled=not can_delete,
                                             api_path=delete_api,
                                             success_message="删除任务成功，请点击刷新查看状态。",
@@ -524,23 +540,25 @@ class XunleiHijackDownloader(_PluginBase):
         }
 
     @staticmethod
-    def _build_task_action_button(text: str, color: str, disabled: bool, api_path: str,
+    def _build_task_action_button(text: str, color: str, icon: str, disabled: bool, api_path: str,
                                   success_message: str, failure_message: str) -> Dict[str, Any]:
         button = {
             "component": "VBtn",
             "props": {
-                "size": "x-small",
-                "density": "compact",
-                "variant": "outlined",
+                "size": "small",
+                "density": "comfortable",
+                "variant": "text",
                 "color": color,
-                "text": text,
+                "icon": True,
                 "title": text,
                 "disabled": bool(disabled),
                 "class": "ml-1",
-                "minWidth": 52,
-                "height": 26,
-                "rounded": "sm",
+                "width": 28,
+                "height": 28,
+                "minWidth": 28,
+                "rounded": "circle",
             },
+            "content": [{"component": "VIcon", "props": {"icon": icon, "size": 14}}],
         }
         if not disabled:
             button["props"]["onclick"] = XunleiHijackDownloader._build_action_onclick(api_path=api_path)
