@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.26"
+    plugin_version = "1.0.27"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -295,6 +295,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 "props": {
                                     "type": "info",
                                     "variant": "tonal",
+                                    "icon": False,
                                     "text": "展示迅雷任务实时状态：图片、文件图标、文件名、大小、剩余时间、速度、进度及开始/暂停/删除。已迁移任务自动隐藏。",
                                 },
                             }
@@ -423,8 +424,8 @@ class XunleiHijackDownloader(_PluginBase):
         image_url = self._task_image_url(task)
         icon_name = self._task_file_icon(task_name=task_name, done=task_done)
 
-        can_start = bool(task_id) and not task_done and (task_paused or task_failed)
-        can_pause = bool(task_id) and not task_done and not task_paused and not task_failed
+        can_start = bool(task_id)
+        can_pause = bool(task_id)
         can_delete = bool(task_id)
         quoted_id = quote(task_id or "", safe="")
         start_api = f"/plugin/{plugin_id}/task/start?task_id={quoted_id}&apikey={{apikey}}"
@@ -470,7 +471,6 @@ class XunleiHijackDownloader(_PluginBase):
                                             "component": "VListItem",
                                             "props": {
                                                 "title": task_name,
-                                                "prependIcon": icon_name,
                                                 "density": "compact",
                                             },
                                         }
@@ -481,20 +481,12 @@ class XunleiHijackDownloader(_PluginBase):
                                     "props": {"cols": 12, "md": 4},
                                     "content": [
                                         {
-                                            "component": "VRow",
-                                            "props": {"class": "mb-1", "noGutters": True},
-                                            "content": [
-                                                {
-                                                    "component": "VCol",
-                                                    "props": {"cols": 12, "class": "d-flex align-center ga-1 flex-wrap"},
-                                                    "content": [
-                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": state_text}},
-                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": size_text}},
-                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": left_time}},
-                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": speed_text}},
-                                                    ],
-                                                }
-                                            ],
+                                            "component": "VListItem",
+                                            "props": {
+                                                "density": "compact",
+                                                "title": f"{size_text}    {left_time}    {speed_text}",
+                                                "subtitle": state_text,
+                                            },
                                         },
                                         {
                                             "component": "VProgressLinear",
@@ -514,7 +506,6 @@ class XunleiHijackDownloader(_PluginBase):
                                         self._build_task_action_button(
                                             text="开始",
                                             color="success",
-                                            icon="mdi-play",
                                             disabled=not can_start,
                                             api_path=start_api,
                                             success_message="开始任务成功，请点击刷新查看状态。",
@@ -523,7 +514,6 @@ class XunleiHijackDownloader(_PluginBase):
                                         self._build_task_action_button(
                                             text="暂停",
                                             color="warning",
-                                            icon="mdi-pause",
                                             disabled=not can_pause,
                                             api_path=pause_api,
                                             success_message="暂停任务成功，请点击刷新查看状态。",
@@ -532,7 +522,6 @@ class XunleiHijackDownloader(_PluginBase):
                                         self._build_task_action_button(
                                             text="删除",
                                             color="error",
-                                            icon="mdi-delete",
                                             disabled=not can_delete,
                                             api_path=delete_api,
                                             success_message="删除任务成功，请点击刷新查看状态。",
@@ -549,22 +538,20 @@ class XunleiHijackDownloader(_PluginBase):
         }
 
     @staticmethod
-    def _build_task_action_button(text: str, color: str, icon: str, disabled: bool, api_path: str,
+    def _build_task_action_button(text: str, color: str, disabled: bool, api_path: str,
                                   success_message: str, failure_message: str) -> Dict[str, Any]:
         button = {
             "component": "VBtn",
             "props": {
-                "size": "small",
+                "size": "x-small",
                 "density": "compact",
                 "variant": "text",
                 "color": color,
-                "icon": True,
+                "text": text,
                 "title": text,
                 "disabled": bool(disabled),
+                "class": "ml-1",
             },
-            "content": [
-                {"component": "VIcon", "props": {"icon": icon, "size": 18}}
-            ],
         }
         if not disabled:
             button["events"] = {
