@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.22"
+    plugin_version = "1.0.23"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -194,14 +194,30 @@ class XunleiHijackDownloader(_PluginBase):
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 6},
                                 "content": [
-                                    {"component": "VTextField", "props": {"model": "source_download_dir", "label": "迅雷下载目录（源）", "placeholder": "/downloads_ssd"}}
+                                    {
+                                        "component": "VPathField",
+                                        "props": {
+                                            "model": "source_download_dir",
+                                            "label": "迅雷下载目录（源）",
+                                            "placeholder": "/downloads_ssd",
+                                            "storage": "local",
+                                        },
+                                    }
                                 ],
                             },
                             {
                                 "component": "VCol",
                                 "props": {"cols": 12, "md": 6},
                                 "content": [
-                                    {"component": "VTextField", "props": {"model": "target_watch_dir", "label": "MoviePilot 监控目录（目标）", "placeholder": "/downloads_hdd/watch"}}
+                                    {
+                                        "component": "VPathField",
+                                        "props": {
+                                            "model": "target_watch_dir",
+                                            "label": "MoviePilot 监控目录（目标）",
+                                            "placeholder": "/downloads_hdd/watch",
+                                            "storage": "local",
+                                        },
+                                    }
                                 ],
                             },
                         ],
