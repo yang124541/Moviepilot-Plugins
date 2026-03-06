@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.25"
+    plugin_version = "1.0.26"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -284,10 +284,11 @@ class XunleiHijackDownloader(_PluginBase):
         page: List[dict] = [
             {
                 "component": "VRow",
+                "props": {"align": "center"},
                 "content": [
                     {
                         "component": "VCol",
-                        "props": {"cols": 12},
+                        "props": {"cols": 11},
                         "content": [
                             {
                                 "component": "VAlert",
@@ -298,15 +299,10 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                             }
                         ],
-                    }
-                ],
-            },
-            {
-                "component": "VRow",
-                "content": [
+                    },
                     {
                         "component": "VCol",
-                        "props": {"cols": 12, "class": "d-flex justify-end"},
+                        "props": {"cols": 1, "class": "d-flex justify-end"},
                         "content": [
                             {
                                 "component": "VBtn",
@@ -314,14 +310,16 @@ class XunleiHijackDownloader(_PluginBase):
                                     "size": "small",
                                     "variant": "text",
                                     "color": "primary",
-                                    "type": "button",
-                                    "prependIcon": "mdi-refresh",
-                                    "text": "刷新列表",
+                                    "icon": True,
+                                    "title": "刷新",
                                     "onclick": "window.location.reload()",
                                 },
+                                "content": [
+                                    {"component": "VIcon", "props": {"icon": "mdi-refresh"}}
+                                ],
                             }
                         ],
-                    }
+                    },
                 ],
             },
         ]
@@ -371,26 +369,6 @@ class XunleiHijackDownloader(_PluginBase):
                 ],
             })
             return page
-
-        page.append({
-            "component": "VRow",
-            "content": [
-                {
-                    "component": "VCol",
-                    "props": {"cols": 12},
-                    "content": [
-                        {
-                            "component": "VAlert",
-                            "props": {
-                                "type": "info",
-                                "variant": "tonal",
-                                "text": "任务字段：图片 | 文件图标 | 文件名 | 大小 | 剩余时间 | 下载速度 | 进度 | 开始/暂停/删除",
-                            },
-                        }
-                    ],
-                }
-            ],
-        })
 
         for task in visible_tasks:
             page.append({
@@ -469,57 +447,69 @@ class XunleiHijackDownloader(_PluginBase):
 
         return {
             "component": "VCard",
-            "props": {"variant": "outlined", "class": "mb-3"},
+            "props": {"variant": "text", "class": "mb-1"},
             "content": [
                 {
                     "component": "VCardText",
+                    "props": {"class": "py-2"},
                     "content": [
                         {
                             "component": "VRow",
-                            "props": {"align": "center"},
+                            "props": {"align": "center", "noGutters": True},
                             "content": [
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 2},
+                                    "props": {"cols": 12, "md": 1},
                                     "content": [image_node],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 5},
+                                    "props": {"cols": 12, "md": 6},
                                     "content": [
                                         {
                                             "component": "VListItem",
                                             "props": {
                                                 "title": task_name,
-                                                "subtitle": f"{state_text} | 大小 {size_text} | 剩余 {left_time} | 速度 {speed_text}",
                                                 "prependIcon": icon_name,
+                                                "density": "compact",
                                             },
                                         }
                                     ],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 3},
+                                    "props": {"cols": 12, "md": 4},
                                     "content": [
                                         {
-                                            "component": "VProgressLinear",
-                                            "props": {"modelValue": progress, "height": 8, "rounded": True, "color": progress_color},
+                                            "component": "VRow",
+                                            "props": {"class": "mb-1", "noGutters": True},
+                                            "content": [
+                                                {
+                                                    "component": "VCol",
+                                                    "props": {"cols": 12, "class": "d-flex align-center ga-1 flex-wrap"},
+                                                    "content": [
+                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": state_text}},
+                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": size_text}},
+                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": left_time}},
+                                                        {"component": "VChip", "props": {"size": "x-small", "variant": "text", "text": speed_text}},
+                                                    ],
+                                                }
+                                            ],
                                         },
                                         {
-                                            "component": "VChip",
+                                            "component": "VProgressLinear",
                                             "props": {
-                                                "size": "x-small",
-                                                "variant": "tonal",
+                                                "modelValue": progress,
+                                                "height": 5,
+                                                "rounded": True,
                                                 "color": progress_color,
-                                                "text": f"进度 {progress_text}",
-                                                "class": "mt-2",
                                             },
                                         },
                                     ],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 2},
+                                    "props": {"cols": 12, "md": 1, "class": "d-flex justify-end ga-1"},
                                     "content": [
                                         self._build_task_action_button(
                                             text="开始",
@@ -553,7 +543,8 @@ class XunleiHijackDownloader(_PluginBase):
                             ],
                         }
                     ],
-                }
+                },
+                {"component": "VDivider"},
             ],
         }
 
@@ -563,15 +554,17 @@ class XunleiHijackDownloader(_PluginBase):
         button = {
             "component": "VBtn",
             "props": {
-                "size": "x-small",
+                "size": "small",
+                "density": "compact",
                 "variant": "text",
                 "color": color,
-                "text": text,
-                "icon": icon,
+                "icon": True,
                 "title": text,
-                "class": "mr-1",
                 "disabled": bool(disabled),
             },
+            "content": [
+                {"component": "VIcon", "props": {"icon": icon, "size": 18}}
+            ],
         }
         if not disabled:
             button["events"] = {
