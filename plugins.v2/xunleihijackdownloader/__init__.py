@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.36"
+    plugin_version = "1.0.37"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -481,12 +481,12 @@ class XunleiHijackDownloader(_PluginBase):
                                 {"component": "VCol", "props": {"cols": 1, "md": 1}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 5, "md": 5},
+                                    "props": {"cols": 5, "md": 4},
                                     "content": [{"component": "VListItem", "props": {"title": task_name, "density": "compact"}}],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 6, "md": 6},
+                                    "props": {"cols": 6, "md": 5},
                                     "content": [
                                         {
                                             "component": "VRow",
@@ -522,7 +522,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 1, "md": 1, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
+                                    "props": {"cols": 2, "md": 2, "class": "d-flex justify-end ga-1", "style": "padding-right:56px;"},
                                     "content": [
                                         self._build_task_action_button(
                                             text=toggle_text,
