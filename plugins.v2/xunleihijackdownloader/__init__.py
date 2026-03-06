@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.52"
+    plugin_version = "1.0.53"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1168,13 +1168,11 @@ class XunleiHijackDownloader(_PluginBase):
                 )
                 return
             target_root.mkdir(parents=True, exist_ok=True)
+            now_ts = time.time()
             tasks = self._list_download_tasks()
             if not tasks:
-                logger.info(
-                    f"XunleiHijack move scan: no tasks, source={source_root}, target={target_root}"
-                )
+                self._move_completed_by_source_scan(source_root=source_root, target_root=target_root, now_ts=now_ts)
                 return
-            now_ts = time.time()
             stats = {
                 "moved": 0,
                 "skip_not_completed": 0,
@@ -1262,26 +1260,128 @@ class XunleiHijackDownloader(_PluginBase):
         finally:
             self._move_lock.release()
 
+    @staticmethod
+    def _is_temp_download_entry(path: Path) -> bool:
+        name = str(path.name or "").strip().lower()
+        if not name:
+            return True
+        if name in (".bt", "@eadir", "#recycle"):
+            return True
+        if name.startswith("."):
+            return True
+        if path.is_dir() and any(flag in name for flag in ("cache", "缓存")):
+            return True
+        temp_suffixes = (".xltd", ".tmp", ".part", ".download", ".aria2", ".!qb", ".qb!")
+        return any(name.endswith(suffix) for suffix in temp_suffixes)
+
+    def _move_completed_by_source_scan(self, source_root: Path, target_root: Path, now_ts: float) -> None:
+        moved = 0
+        skip_temp = 0
+        skip_safe_wait = 0
+        skip_stat_error = 0
+        move_failed = 0
+        entries: List[Path] = []
+        samples: List[str] = []
+
+        def add_sample(text: str) -> None:
+            if len(samples) < 6:
+                samples.append(text)
+
+        try:
+            for item in source_root.iterdir():
+                if self._is_temp_download_entry(item):
+                    skip_temp += 1
+                    continue
+                entries.append(item)
+        except Exception as scan_err:
+            logger.warn(f"XunleiHijack move source-scan failed: source={source_root}, err={scan_err}")
+            return
+
+        if not entries:
+            logger.info(
+                f"XunleiHijack move source-scan: no tasks and no eligible entries, "
+                f"source={source_root}, target={target_root}, skip_temp={skip_temp}"
+            )
+            return
+
+        for src in entries:
+            src_tag = f"name={src.name},path={src}"
+            if self._move_safe_seconds > 0:
+                try:
+                    age = now_ts - src.stat().st_mtime
+                    if age < self._move_safe_seconds:
+                        skip_safe_wait += 1
+                        add_sample(
+                            f"{src_tag} skip:safe_wait age={age:.1f}s < {self._move_safe_seconds}s"
+                        )
+                        continue
+                except Exception as stat_err:
+                    skip_stat_error += 1
+                    add_sample(f"{src_tag} skip:stat_error err={stat_err}")
+                    continue
+            try:
+                dst = self._dedupe_target(target_root / src.name)
+                shutil.move(str(src), str(dst))
+                moved += 1
+                logger.info(f"XunleiHijack moved(source-scan): {src} -> {dst}")
+            except Exception as move_err:
+                move_failed += 1
+                add_sample(f"{src_tag} move_failed err={move_err}")
+                logger.warn(f"XunleiHijack move source-scan item failed: src={src}, err={move_err}")
+
+        logger.info(
+            f"XunleiHijack move source-scan summary: source={source_root}, target={target_root}, "
+            f"total={len(entries)}, moved={moved}, skip_temp={skip_temp}, "
+            f"skip_safe_wait={skip_safe_wait}, skip_stat_error={skip_stat_error}, move_failed={move_failed}"
+        )
+        if samples:
+            logger.info("XunleiHijack move source-scan samples: " + " | ".join(samples))
+
     def _list_download_tasks(self) -> List[Dict[str, Any]]:
         try:
             headers = self._get_headers()
-            device_id = self._fetch_device_id() or self._device_id
-            url = (
-                f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                f"?type=user%23download-url&device_space="
-            )
-            resp, obj = self._request_json(
-                method="GET",
-                url=url,
-                headers={**headers, "device-space": ""},
-                timeout=20,
-                retry_auth=True
-            )
-            if not resp or not resp.ok:
-                raise ValueError(f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}")
-            if isinstance(obj, dict):
-                tasks = obj.get("tasks")
-                if isinstance(tasks, list):
+            device_id = str(self._fetch_device_id() or self._device_id or "").strip()
+
+            def _extract_tasks(data: Any) -> List[Dict[str, Any]]:
+                if not isinstance(data, dict):
+                    return []
+                payload = data.get("tasks")
+                if isinstance(payload, list):
+                    return [x for x in payload if isinstance(x, dict)]
+                list_obj = data.get("list")
+                if isinstance(list_obj, list):
+                    return [x for x in list_obj if isinstance(x, dict)]
+                return []
+
+            spaces: List[str] = [""]
+            if device_id and device_id not in spaces:
+                spaces.append(device_id)
+
+            last_err = ""
+            for space in spaces:
+                url = (
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                    f"?type=user%23download-url&device_space={quote(space) if space else ''}"
+                )
+                resp, obj = self._request_json(
+                    method="GET",
+                    url=url,
+                    headers={**headers, "device-space": space},
+                    timeout=20,
+                    retry_auth=True
+                )
+                if not resp or not resp.ok:
+                    last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
+                    logger.warn(
+                        f"XunleiHijack[v{self.plugin_version}] list tasks failed: space={space or 'EMPTY'}, {last_err}"
+                    )
+                    continue
+                tasks = _extract_tasks(obj)
+                logger.info(
+                    f"XunleiHijack[v{self.plugin_version}] list tasks: "
+                    f"space={space or 'EMPTY'}, count={len(tasks)}"
+                )
+                if tasks:
                     if not device_id:
                         for task in tasks:
                             if isinstance(task, dict):
@@ -1291,10 +1391,16 @@ class XunleiHijackDownloader(_PluginBase):
                                     self._device_id = target
                                     self._save_config()
                                     break
-                    return [x for x in tasks if isinstance(x, dict)]
-                list_obj = obj.get("list")
-                if isinstance(list_obj, list):
-                    return [x for x in list_obj if isinstance(x, dict)]
+                    return tasks
+            if last_err:
+                logger.info(
+                    f"XunleiHijack[v{self.plugin_version}] list tasks empty after all spaces: "
+                    f"device_id={device_id or 'EMPTY'}, last_error={last_err}"
+                )
+            else:
+                logger.info(
+                    f"XunleiHijack[v{self.plugin_version}] list tasks empty: device_id={device_id or 'EMPTY'}"
+                )
         except Exception as err:
             logger.warn(f"XunleiHijack[v{self.plugin_version}] list tasks failed: {err}")
         return []
