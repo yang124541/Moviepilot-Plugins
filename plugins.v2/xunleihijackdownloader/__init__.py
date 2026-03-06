@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.50"
+    plugin_version = "1.0.51"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1515,14 +1515,38 @@ class XunleiHijackDownloader(_PluginBase):
                 if value is not None:
                     values.append(str(value).strip().lower())
         for text in values:
-            if any(k in text for k in ("complete", "completed", "finished", "success", "done", "phase_type_complete")):
+            if any(k in text for k in (
+                "complete",
+                "completed",
+                "finished",
+                "success",
+                "done",
+                "phase_type_complete",
+                "phase_type_finished",
+                "phase_type_seeding",
+                "seeding",
+            )):
+                return True
+        for key in ("completed", "is_completed", "finished", "is_finished", "done", "is_done", "success"):
+            value = task.get(key)
+            if value is None and isinstance(params, dict):
+                value = params.get(key)
+            if isinstance(value, bool):
+                if value:
+                    return True
+                continue
+            text = str(value or "").strip().lower()
+            if text in ("1", "true", "yes", "ok", "success", "completed", "done", "finished"):
                 return True
         progress = task.get("progress")
         if progress is None and isinstance(params, dict):
             progress = params.get("progress")
         if progress is not None:
             try:
-                return float(progress) >= 100
+                p = float(progress)
+                if p <= 1:
+                    return p >= 0.999
+                return p >= 100
             except Exception:
                 pass
         return False
