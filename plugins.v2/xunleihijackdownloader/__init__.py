@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.47"
+    plugin_version = "1.0.48"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1176,7 +1176,7 @@ class XunleiHijackDownloader(_PluginBase):
         try:
             source_root = Path(self._source_download_dir)
             target_root = Path(self._target_watch_dir)
-            if not source_root.exists():
+            if not source_root.exists() or not source_root.is_dir():
                 return
             target_root.mkdir(parents=True, exist_ok=True)
             tasks = self._list_download_tasks()
@@ -1186,20 +1186,36 @@ class XunleiHijackDownloader(_PluginBase):
             for task in tasks:
                 if not self._is_task_completed(task):
                     continue
-                key = self._task_key(task) or self._task_name(task)
-                if not key or key in self._moved_task_keys:
+                move_key = self._task_move_key(task)
+                if not move_key or move_key in self._moved_task_keys:
                     continue
-                src = self._resolve_source_path(source_root, self._task_name(task))
-                if not src or not src.exists():
-                    src = self._resolve_source_path_fallback(source_root, self._task_name(task))
-                if not src or not src.exists():
+                try:
+                    task_name = self._task_name(task)
+                    src = self._resolve_source_path(source_root, task_name)
+                    if not src or not src.exists():
+                        src = self._resolve_source_path_fallback(source_root, task_name)
+                    if not src or not src.exists():
+                        continue
+                    if self._move_safe_seconds > 0:
+                        try:
+                            if now_ts - src.stat().st_mtime < self._move_safe_seconds:
+                                continue
+                        except Exception:
+                            continue
+                    dst = self._dedupe_target(target_root / src.name)
+                    shutil.move(str(src), str(dst))
+                    self._remember_moved_key(move_key)
+                    task_id = self._task_key(task)
+                    if task_id:
+                        # 兼容历史 moved key（曾使用纯 task_id）
+                        self._remember_moved_key(task_id)
+                    logger.info(f"XunleiHijack moved: {src} -> {dst}")
+                except Exception as move_err:
+                    logger.warn(
+                        f"XunleiHijack move item failed: key={move_key}, "
+                        f"name={self._task_name(task)}, err={move_err}"
+                    )
                     continue
-                if self._move_safe_seconds > 0 and now_ts - src.stat().st_mtime < self._move_safe_seconds:
-                    continue
-                dst = self._dedupe_target(target_root / src.name)
-                shutil.move(str(src), str(dst))
-                self._remember_moved_key(key)
-                logger.info(f"XunleiHijack moved: {src} -> {dst}")
         except Exception as err:
             logger.error(f"XunleiHijack move job failed: {err}")
         finally:
@@ -1719,11 +1735,12 @@ class XunleiHijackDownloader(_PluginBase):
         return "mdi-file-outline"
 
     def _is_moved_task(self, task: Dict[str, Any]) -> bool:
-        task_key = self._task_key(task)
-        task_name = self._task_name(task)
-        if task_key and task_key in self._moved_task_keys:
+        move_key = self._task_move_key(task)
+        if move_key and move_key in self._moved_task_keys:
             return True
-        if task_name and task_name in self._moved_task_keys:
+        # 兼容历史 moved key（曾使用纯 task_id）
+        task_key = self._task_key(task)
+        if task_key and task_key in self._moved_task_keys:
             return True
         return False
 
@@ -1781,6 +1798,16 @@ class XunleiHijackDownloader(_PluginBase):
 
     def _task_key(self, task: Dict[str, Any]) -> str:
         return self._task_id(task)
+
+    def _task_move_key(self, task: Dict[str, Any]) -> str:
+        task_id = self._task_key(task)
+        if task_id:
+            return f"id:{task_id}"
+        task_name = Path(str(self._task_name(task) or "")).name
+        task_norm = self._normalize_name(task_name)
+        if not task_norm:
+            return ""
+        return f"name:{task_norm}|size:{int(self._task_size(task) or 0)}"
 
     @staticmethod
     def _task_space(task: Dict[str, Any]) -> str:
@@ -1863,7 +1890,7 @@ class XunleiHijackDownloader(_PluginBase):
     @staticmethod
     def _resolve_source_path_fallback(source_root: Path, task_name: str) -> Optional[Path]:
         task_raw = str(task_name or "").strip()
-        if not task_raw or not source_root.exists():
+        if not task_raw or not source_root.exists() or not source_root.is_dir():
             return None
         task_base = Path(task_raw).name
         task_stem = Path(task_base).stem
@@ -1872,7 +1899,12 @@ class XunleiHijackDownloader(_PluginBase):
             return None
         candidates: List[Tuple[int, float, Path]] = []
         try:
-            for item in source_root.iterdir():
+            scanned = 0
+            # 递归匹配子目录，避免仅扫描第一层导致漏搬；限制上限防止大目录过慢。
+            for item in source_root.rglob("*"):
+                scanned += 1
+                if scanned > 5000:
+                    break
                 name = item.name
                 stem = item.stem
                 score = 0
