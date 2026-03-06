@@ -22,7 +22,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.45"
+    plugin_version = "1.0.46"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -387,16 +387,16 @@ class XunleiHijackDownloader(_PluginBase):
             })
         return page
 
-    def api_start_task(self, task_id: str = "", hash: str = "") -> schemas.Response:
-        return self._api_task_action(task_id=task_id or hash, action="start")
+    def api_start_task(self, task_id: str = "", hash: str = "", space: str = "") -> schemas.Response:
+        return self._api_task_action(task_id=task_id or hash, action="start", space=space)
 
-    def api_pause_task(self, task_id: str = "", hash: str = "") -> schemas.Response:
-        return self._api_task_action(task_id=task_id or hash, action="pause")
+    def api_pause_task(self, task_id: str = "", hash: str = "", space: str = "") -> schemas.Response:
+        return self._api_task_action(task_id=task_id or hash, action="pause", space=space)
 
-    def api_delete_task(self, task_id: str = "", hash: str = "", delete_file: bool = True) -> schemas.Response:
-        return self._api_task_action(task_id=task_id or hash, action="delete", delete_file=delete_file)
+    def api_delete_task(self, task_id: str = "", hash: str = "", delete_file: bool = True, space: str = "") -> schemas.Response:
+        return self._api_task_action(task_id=task_id or hash, action="delete", delete_file=delete_file, space=space)
 
-    def _api_task_action(self, task_id: str, action: str, delete_file: bool = True) -> schemas.Response:
+    def _api_task_action(self, task_id: str, action: str, delete_file: bool = True, space: str = "") -> schemas.Response:
         task_key = str(task_id or "").strip()
         if not task_key:
             return schemas.Response(success=False, message="任务ID不能为空。")
@@ -414,7 +414,12 @@ class XunleiHijackDownloader(_PluginBase):
 
         ok = False
         for act in action_candidates:
-            ok = self._operate_tasks(ids={task_key}, action=act, delete_file=bool(delete_file))
+            ok = self._operate_tasks(
+                ids={task_key},
+                action=act,
+                delete_file=bool(delete_file),
+                preferred_space=space,
+            )
             if ok:
                 break
         if ok and action == "delete":
@@ -447,9 +452,12 @@ class XunleiHijackDownloader(_PluginBase):
         can_pause = bool(task_id)
         can_delete = bool(task_id)
         quoted_id = quote(task_id or "", safe="")
-        start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}"
-        pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}"
-        delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true"
+        task_space = self._task_space(task)
+        quoted_space = quote(task_space or "", safe="")
+        space_qs = f"&space={quoted_space}" if quoted_space else ""
+        start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}{space_qs}"
+        pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}{space_qs}"
+        delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}"
         progress_color = "success" if task_done else ("warning" if task_paused else ("error" if task_failed else "primary"))
 
         image_node: Dict[str, Any]
@@ -1236,7 +1244,7 @@ class XunleiHijackDownloader(_PluginBase):
             logger.warn(f"XunleiHijack[v{self.plugin_version}] list tasks failed: {err}")
         return []
 
-    def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True) -> bool:
+    def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True, preferred_space: str = "") -> bool:
         id_list = [str(item or "").strip() for item in ids if str(item or "").strip()]
         if not id_list:
             self._last_request_error = "task_id 为空"
@@ -1244,7 +1252,8 @@ class XunleiHijackDownloader(_PluginBase):
         if not self._base_url:
             self._last_request_error = "迅雷地址未配置"
             return False
-        if not self._fetch_device_id():
+        preferred_space = str(preferred_space or "").strip()
+        if not preferred_space and not self._fetch_device_id():
             self._last_request_error = "device_id 未配置且自动获取失败"
             return False
         headers = self._get_headers()
@@ -1276,11 +1285,17 @@ class XunleiHijackDownloader(_PluginBase):
             for base in payload_templates:
                 raw_payload = dict(base)
                 space_payload = {**base, "device_space": device_space}
+                target_payload = {**base, "target": device_space, "space": device_space}
+                full_payload = {**base, "device_space": device_space, "target": device_space, "space": device_space}
                 if action == "delete":
                     raw_payload["delete_file"] = bool(delete_file)
                     space_payload["delete_file"] = bool(delete_file)
+                    target_payload["delete_file"] = bool(delete_file)
+                    full_payload["delete_file"] = bool(delete_file)
                 payloads.append(raw_payload)
                 payloads.append(space_payload)
+                payloads.append(target_payload)
+                payloads.append(full_payload)
 
             header_variants = [
                 {**headers, "device-space": device_space},
@@ -1320,15 +1335,23 @@ class XunleiHijackDownloader(_PluginBase):
                                 continue
             return False, local_hints
 
-        current_device = str(self._device_id or "").strip()
-        ok, failure_hints = _attempt_with_device(current_device)
+        first_device = preferred_space or str(self._device_id or "").strip()
+        ok, failure_hints = _attempt_with_device(first_device)
         if ok:
             return True
+
+        if preferred_space and self._device_id and str(self._device_id).strip() != preferred_space:
+            fallback_device = str(self._device_id).strip()
+            ok, extra_hints = _attempt_with_device(fallback_device)
+            failure_hints.extend(extra_hints)
+            if ok:
+                return True
+            first_device = fallback_device
 
         merged_failures = " ".join([str(item or "") for item in failure_hints]).lower()
         if self._refresh_device_id_on_inactive_space(error_text=merged_failures):
             refreshed_device = str(self._device_id or "").strip()
-            if refreshed_device and refreshed_device != current_device:
+            if refreshed_device and refreshed_device != first_device:
                 ok, retry_hints = _attempt_with_device(refreshed_device)
                 failure_hints.extend(retry_hints)
                 if ok:
@@ -1760,6 +1783,22 @@ class XunleiHijackDownloader(_PluginBase):
 
     def _task_key(self, task: Dict[str, Any]) -> str:
         return self._task_id(task)
+
+    @staticmethod
+    def _task_space(task: Dict[str, Any]) -> str:
+        if not isinstance(task, dict):
+            return ""
+        for key in ("target", "space", "device_space", "deviceSpace"):
+            value = task.get(key)
+            if value:
+                return str(value).strip()
+        params = task.get("params")
+        if isinstance(params, dict):
+            for key in ("target", "space", "device_space", "deviceSpace"):
+                value = params.get(key)
+                if value:
+                    return str(value).strip()
+        return ""
 
     @staticmethod
     def _is_xunlei_downloader(downloader: str) -> bool:
