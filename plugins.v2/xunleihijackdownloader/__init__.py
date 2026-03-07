@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.62"
+    plugin_version = "1.0.63"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -406,7 +406,7 @@ class XunleiHijackDownloader(_PluginBase):
         task_key = str(task_id or "").strip()
         if not task_key:
             return schemas.Response(success=False, message="任务ID不能为空。")
-        if action != "delete" and task_key in self._moved_task_keys:
+        if action != "delete" and f"id:{task_key}" in self._moved_task_keys:
             return schemas.Response(success=False, message="任务已迁移，无法继续操作。")
         action_candidates: List[str]
         if action == "start":
@@ -2347,6 +2347,9 @@ class XunleiHijackDownloader(_PluginBase):
         return "mdi-file-outline"
 
     def _is_moved_task(self, task: Dict[str, Any]) -> bool:
+        # 仅对已完成任务做已迁移过滤，避免下载中任务被历史 key 误判
+        if not self._is_task_completed(task):
+            return False
         move_key = self._task_move_key(task)
         if move_key and move_key in self._moved_task_keys:
             return True
