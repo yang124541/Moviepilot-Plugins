@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.3.13"
+    plugin_version = "1.4.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -342,6 +342,23 @@ class GyingIndexer(_PluginBase):
             parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
             bt_parent_cache: Dict[str, str] = {}
             result_keys: Set[str] = set()
+            drop_stats: Dict[str, int] = {
+                "dedupe": 0,
+                "quality": 0,
+                "keyword": 0,
+                "enclosure": 0,
+            }
+            drop_samples: List[str] = []
+
+            def record_drop(reason: str, resource_id: str = "", title_text: str = "", extra: str = "") -> None:
+                key = str(reason or "").strip().lower() or "other"
+                drop_stats[key] = int(drop_stats.get(key) or 0) + 1
+                if len(drop_samples) >= 20:
+                    return
+                name = Path(str(title_text or "").strip()).name
+                suffix = f" {extra}" if extra else ""
+                drop_samples.append(f"{key}:id={resource_id or '-'} title={name or '-'}{suffix}")
+
             for entry in search_entries:
                 res_id = str(entry.get("id") or "").strip()
                 if not res_id:
@@ -427,6 +444,12 @@ class GyingIndexer(_PluginBase):
                     quality_code=quality_code_for_filter,
                     quality_label=quality_label_for_filter
                 ):
+                    record_drop(
+                        reason="quality",
+                        resource_id=res_id,
+                        title_text=filter_title or title,
+                        extra=f"q={quality_code_for_filter or '-'}"
+                    )
                     continue
 
                 entry_hash = str(down_item.get("hash") or "").strip()
@@ -441,6 +464,12 @@ class GyingIndexer(_PluginBase):
                     fetcher=guarded_get
                 )
                 if not enclosure:
+                    record_drop(
+                        reason="enclosure",
+                        resource_id=res_id,
+                        title_text=title,
+                        extra=f"dir={res_dir or '-'}"
+                    )
                     continue
 
                 if cache_key and cache_key not in parent_meta_cache:
@@ -479,6 +508,12 @@ class GyingIndexer(_PluginBase):
                     str(parent_meta.get("title") or "").strip(),
                     title
                 ):
+                    record_drop(
+                        reason="keyword",
+                        resource_id=res_id,
+                        title_text=title_for_match or detail_title or title,
+                        extra=f"kw={keyword}"
+                    )
                     continue
                 desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
                 description = " | ".join(desc_parts[:3])
@@ -533,7 +568,14 @@ class GyingIndexer(_PluginBase):
                     child_key = self._result_key(resource_dir=str(down_item.get("dir") or default_dir),
                                                  resource_id=child_id,
                                                  title=str(down_item.get("title") or ""))
-                    if not child_id or (child_key and child_key in result_keys):
+                    if not child_id:
+                        continue
+                    if child_key and child_key in result_keys:
+                        record_drop(
+                            reason="dedupe",
+                            resource_id=child_id,
+                            title_text=str(down_item.get("title") or "")
+                        )
                         continue
 
                     child_title = str(down_item.get("title") or "").strip()
@@ -550,6 +592,12 @@ class GyingIndexer(_PluginBase):
                         quality_code=child_quality_code,
                         quality_label=child_quality_label
                     ):
+                        record_drop(
+                            reason="quality",
+                            resource_id=child_id,
+                            title_text=child_title,
+                            extra=f"q={child_quality_code or '-'}"
+                        )
                         continue
 
                     child_dir = str(down_item.get("dir") or default_dir).strip().lower() or "bt"
@@ -567,6 +615,12 @@ class GyingIndexer(_PluginBase):
                         fetcher=guarded_get
                     )
                     if not enclosure:
+                        record_drop(
+                            reason="enclosure",
+                            resource_id=child_id,
+                            title_text=child_title,
+                            extra=f"dir={child_dir or '-'}"
+                        )
                         continue
 
                     if not parent_meta_loaded:
@@ -600,6 +654,12 @@ class GyingIndexer(_PluginBase):
                         str(parent_meta.get("title") or "").strip(),
                         child_title
                     ):
+                        record_drop(
+                            reason="keyword",
+                            resource_id=child_id,
+                            title_text=title_for_match or detail_title or child_title,
+                            extra=f"kw={keyword}"
+                        )
                         continue
                     desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
                     description = " | ".join(desc_parts[:3])
@@ -641,6 +701,14 @@ class GyingIndexer(_PluginBase):
                 f"GYing search done: {len(results)} result(s), cost={cost}s, "
                 f"http={request_state.get('http')}, cache_hit={request_state.get('cache_hit')}"
             )
+            logger.info(
+                f"GYing search drops: dedupe={drop_stats.get('dedupe', 0)}, "
+                f"quality={drop_stats.get('quality', 0)}, "
+                f"keyword={drop_stats.get('keyword', 0)}, "
+                f"enclosure={drop_stats.get('enclosure', 0)}"
+            )
+            if drop_samples:
+                logger.info("GYing drop samples: " + " | ".join(drop_samples))
             return results
         except Exception as err:
             logger.error(f"GYing search error: {err}")
