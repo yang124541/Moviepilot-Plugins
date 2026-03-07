@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.61"
+    plugin_version = "1.0.62"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -355,7 +355,7 @@ class XunleiHijackDownloader(_PluginBase):
             })
             return page
 
-        tasks = self._list_download_tasks()
+        tasks = self._list_download_tasks(include_runner=False)
         visible_tasks = [task for task in tasks if not self._is_moved_task(task)]
         if not visible_tasks:
             page.append({
@@ -382,10 +382,11 @@ class XunleiHijackDownloader(_PluginBase):
         for task in visible_tasks:
             page.append({
                 "component": "VRow",
+                "props": {"class": "my-0 py-0", "noGutters": True},
                 "content": [
                     {
                         "component": "VCol",
-                        "props": {"cols": 12},
+                        "props": {"cols": 12, "class": "py-0"},
                         "content": [self._build_task_row(task=task)],
                     }
                 ],
@@ -478,32 +479,33 @@ class XunleiHijackDownloader(_PluginBase):
 
         return {
             "component": "VCard",
-            "props": {"variant": "text", "class": "mb-0"},
+            "props": {"variant": "text", "class": "my-0 mb-0"},
             "content": [
                 {
                     "component": "VCardText",
-                    "props": {"class": "py-1"},
+                    "props": {"class": "py-1 px-2"},
                     "content": [
                         {
                             "component": "VRow",
-                            "props": {"align": "center", "noGutters": True},
+                            "props": {"align": "center", "noGutters": True, "class": "my-0 py-0"},
                             "content": [
-                                {"component": "VCol", "props": {"cols": 1, "md": 1}, "content": [image_node]},
+                                {"component": "VCol", "props": {"cols": 1, "md": 1, "class": "py-0"}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 6, "md": 6},
+                                    "props": {"cols": 6, "md": 6, "class": "py-0"},
                                     "content": [{"component": "VListItem", "props": {"title": task_name, "density": "compact"}}],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 3, "md": 3},
+                                    "props": {"cols": 3, "md": 3, "class": "py-0"},
                                     "content": [
                                         {
                                             "component": "VListItem",
                                             "props": {
                                                 "density": "compact",
+                                                "class": "py-0",
+                                                "style": "min-height:18px;font-size:11px;line-height:1.15;",
                                                 "title": f"{size_text}    {left_time}    {speed_text}",
-                                                "titleClass": "text-caption",
                                             },
                                         },
                                         {
@@ -519,7 +521,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 2, "md": 2, "class": "d-flex justify-end ga-1"},
+                                    "props": {"cols": 2, "md": 2, "class": "d-flex justify-end ga-1 py-0"},
                                     "content": [
                                         self._build_task_action_button(
                                             text="开始",
@@ -740,7 +742,7 @@ class XunleiHijackDownloader(_PluginBase):
     def downloader_info(self, downloader: Optional[str] = None) -> Optional[List[schemas.DownloaderInfo]]:
         if downloader and not self._is_xunlei_downloader(downloader):
             return None
-        tasks = self._list_download_tasks()
+        tasks = self._list_download_tasks(include_runner=True)
         dl_speed = 0.0
         up_speed = 0.0
         for task in tasks:
@@ -1565,7 +1567,7 @@ class XunleiHijackDownloader(_PluginBase):
         finally:
             self._move_lock.release()
 
-    def _list_download_tasks(self) -> List[Dict[str, Any]]:
+    def _list_download_tasks(self, include_runner: bool = False) -> List[Dict[str, Any]]:
         try:
             headers = self._get_headers()
             device_id = str(self._fetch_device_id() or self._device_id or "").strip()
@@ -1593,10 +1595,10 @@ class XunleiHijackDownloader(_PluginBase):
                 ("status_completed", {"status": "completed"}),
                 ("state_completed", {"state": "completed"}),
             ]
-            task_type_probes: List[Tuple[str, List[Tuple[str, Dict[str, str]]]]] = [
-                ("user%23runner", [("default", {})]),
-                ("user%23download-url", completed_probes),
-            ]
+            task_type_probes: List[Tuple[str, List[Tuple[str, Dict[str, str]]]]] = []
+            if include_runner:
+                task_type_probes.append(("user%23runner", [("default", {})]))
+            task_type_probes.append(("user%23download-url", completed_probes))
 
             merged_tasks: Dict[str, Dict[str, Any]] = {}
             merged_scores: Dict[str, int] = {}
