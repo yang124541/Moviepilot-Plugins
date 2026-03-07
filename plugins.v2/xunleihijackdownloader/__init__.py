@@ -479,11 +479,11 @@ class XunleiHijackDownloader(_PluginBase):
 
         return {
             "component": "VCard",
-            "props": {"variant": "text", "class": "my-0 mb-0"},
+            "props": {"variant": "text", "style": "margin-top:5px;margin-bottom:5px;"},
             "content": [
                 {
                     "component": "VCardText",
-                    "props": {"class": "py-1 px-2"},
+                    "props": {"class": "px-2", "style": "padding-top:8px;padding-bottom:8px;"},
                     "content": [
                         {
                             "component": "VRow",
