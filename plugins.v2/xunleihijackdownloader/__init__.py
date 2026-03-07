@@ -5,6 +5,7 @@ import time
 import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import quote
 
@@ -16,6 +17,16 @@ from app.core.config import settings
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import TorrentStatus
+
+try:
+    from app.db.downloadhistory_oper import DownloadHistoryOper
+except Exception:
+    DownloadHistoryOper = None
+
+try:
+    from app.helper.directory import DirectoryHelper
+except Exception:
+    DirectoryHelper = None
 
 
 class XunleiHijackDownloader(_PluginBase):
@@ -1373,6 +1384,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "skip_no_move_key": 0,
                 "skip_already_moved": 0,
                 "skip_source_not_found": 0,
+                "skip_target_unresolved": 0,
                 "skip_safe_wait": 0,
                 "skip_cached_missing_name": 0,
                 "skip_cached_backoff": 0,
@@ -1412,7 +1424,18 @@ class XunleiHijackDownloader(_PluginBase):
                     )
                     return
                 try:
-                    dst = self._dedupe_target(target_root / src.name)
+                    dst = self._build_move_target_path(
+                        target_root=target_root,
+                        src=src,
+                        task_id=task_id,
+                        task_name=task_name,
+                    )
+                    if not dst:
+                        stats["skip_target_unresolved"] += 1
+                        add_sample(
+                            f"{task_tag} skip:target_unresolved task_id={task_id}"
+                        )
+                        return
                     shutil.move(str(src), str(dst))
                     self._remember_moved_key(move_key)
                     self._drop_completed_seen(move_key)
@@ -1527,7 +1550,9 @@ class XunleiHijackDownloader(_PluginBase):
                 f"total={len(tasks)}, cached_completed={cached_total}, moved={stats['moved']}, "
                 f"skip_not_completed={stats['skip_not_completed']}, "
                 f"skip_no_move_key={stats['skip_no_move_key']}, skip_already_moved={stats['skip_already_moved']}, "
-                f"skip_source_not_found={stats['skip_source_not_found']}, skip_safe_wait={stats['skip_safe_wait']}, "
+                f"skip_source_not_found={stats['skip_source_not_found']}, "
+                f"skip_target_unresolved={stats['skip_target_unresolved']}, "
+                f"skip_safe_wait={stats['skip_safe_wait']}, "
                 f"skip_cached_missing_name={stats['skip_cached_missing_name']}, "
                 f"skip_cached_backoff={stats['skip_cached_backoff']}, skip_cached_expired={stats['skip_cached_expired']}, "
                 f"move_failed={stats['move_failed']}"
@@ -2590,6 +2615,69 @@ class XunleiHijackDownloader(_PluginBase):
         if not task_ids:
             return None
         return len(ids.intersection(task_ids)) > 0
+
+    def _build_move_target_path(self, target_root: Path, src: Path, task_id: str, task_name: str) -> Optional[Path]:
+        """
+        根据 MoviePilot 目录配置决定迅雷搬运目标路径：
+        - 仅复用 app/chain/download.py 的下载目录拼接逻辑
+        - 仅使用 MoviePilot 下载历史中的媒体类型/类别
+        - 不做插件侧分析或兜底
+        """
+        try:
+            history_dir = self._resolve_history_download_dir(task_id=task_id)
+            if not history_dir:
+                logger.warn(
+                    f"XunleiHijack move skipped: unresolved target by MoviePilot rules, "
+                    f"task_id={task_id or '-'}, task_name={task_name or '-'}"
+                )
+                return None
+            base_dir = history_dir
+        except Exception as err:
+            logger.warn(f"XunleiHijack build move target path failed: task={task_name}, err={err}")
+            return None
+        base_dir.mkdir(parents=True, exist_ok=True)
+        return self._dedupe_target(base_dir / src.name)
+
+    def _resolve_history_download_dir(self, task_id: str) -> Optional[Path]:
+        """
+        复用 MoviePilot app/chain/download.py 的下载目录拼装逻辑：
+        - DirectoryHelper().get_dir(media, include_unsorted=True)
+        - download_type_folder / download_category_folder
+        """
+        token = str(task_id or "").strip()
+        if not token or token == "-" or not DownloadHistoryOper or not DirectoryHelper:
+            return None
+        try:
+            history = DownloadHistoryOper().get_by_hash(token)
+            if not history:
+                return None
+            media_type = str(getattr(history, "type", "") or "").strip()
+            media_category = str(getattr(history, "media_category", "") or "").strip()
+            if not media_type:
+                return None
+            media = SimpleNamespace(
+                type=SimpleNamespace(value=media_type),
+                category=media_category,
+            )
+            dir_conf = DirectoryHelper().get_dir(media=media, include_unsorted=True)
+            if not dir_conf:
+                return None
+            download_path = str(getattr(dir_conf, "download_path", "") or "").strip()
+            if not download_path:
+                return None
+            download_dir = Path(download_path)
+            if not getattr(dir_conf, "media_type", None) and bool(getattr(dir_conf, "download_type_folder", False)):
+                download_dir = download_dir / media_type
+            if (
+                not getattr(dir_conf, "media_category", None)
+                and bool(getattr(dir_conf, "download_category_folder", False))
+                and media_category
+            ):
+                download_dir = download_dir / media_category
+            return download_dir
+        except Exception as err:
+            logger.debug(f"XunleiHijack resolve history download dir failed: task_id={task_id}, err={err}")
+        return None
 
     @staticmethod
     def _dedupe_target(path: Path) -> Path:
