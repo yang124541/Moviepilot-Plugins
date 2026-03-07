@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.59"
+    plugin_version = "1.0.61"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -478,11 +478,11 @@ class XunleiHijackDownloader(_PluginBase):
 
         return {
             "component": "VCard",
-            "props": {"variant": "text", "class": "mb-1"},
+            "props": {"variant": "text", "class": "mb-0"},
             "content": [
                 {
                     "component": "VCardText",
-                    "props": {"class": "py-2"},
+                    "props": {"class": "py-1"},
                     "content": [
                         {
                             "component": "VRow",
@@ -503,6 +503,7 @@ class XunleiHijackDownloader(_PluginBase):
                                             "props": {
                                                 "density": "compact",
                                                 "title": f"{size_text}    {left_time}    {speed_text}",
+                                                "titleClass": "text-caption",
                                             },
                                         },
                                         {
@@ -743,8 +744,8 @@ class XunleiHijackDownloader(_PluginBase):
         dl_speed = 0.0
         up_speed = 0.0
         for task in tasks:
-            dl_speed += float(self._task_number(task, "download_speed") or 0)
-            up_speed += float(self._task_number(task, "upload_speed") or 0)
+            dl_speed += float(self._task_speed_number(task, key="download_speed") or 0)
+            up_speed += float(self._task_speed_number(task, key="upload_speed") or 0)
         return [schemas.DownloaderInfo(
             download_speed=dl_speed,
             upload_speed=up_speed,
@@ -1584,7 +1585,7 @@ class XunleiHijackDownloader(_PluginBase):
             if device_id and device_id not in spaces:
                 spaces.append(device_id)
 
-            probes: List[Tuple[str, Dict[str, str]]] = [
+            completed_probes: List[Tuple[str, Dict[str, str]]] = [
                 ("default", {}),
                 ("phase_complete", {"phase": "PHASE_TYPE_COMPLETE"}),
                 ("phase_finished", {"phase": "PHASE_TYPE_FINISHED"}),
@@ -1592,9 +1593,13 @@ class XunleiHijackDownloader(_PluginBase):
                 ("status_completed", {"status": "completed"}),
                 ("state_completed", {"state": "completed"}),
             ]
+            task_type_probes: List[Tuple[str, List[Tuple[str, Dict[str, str]]]]] = [
+                ("user%23runner", [("default", {})]),
+                ("user%23download-url", completed_probes),
+            ]
 
-            merged_tasks: List[Dict[str, Any]] = []
-            seen_keys: Set[str] = set()
+            merged_tasks: Dict[str, Dict[str, Any]] = {}
+            merged_scores: Dict[str, int] = {}
             probe_stats: List[str] = []
 
             def _task_merge_key(task: Dict[str, Any]) -> str:
@@ -1606,64 +1611,82 @@ class XunleiHijackDownloader(_PluginBase):
                 progress = str(task.get("progress") or "").strip()
                 return f"name:{name}|phase:{phase}|progress:{progress}"
 
+            def _source_score(task: Dict[str, Any], task_type: str, probe_name: str) -> int:
+                score = 0
+                if task_type == "user%23runner":
+                    score += 200
+                if probe_name == "default":
+                    score += 20
+                if not self._is_task_completed(task):
+                    score += 50
+                speed_value = float(self._task_speed_number(task=task, key="download_speed") or 0)
+                if speed_value > 0:
+                    score += 30
+                score += int(float(self._task_progress(task) or 0) / 25)
+                return score
+
             last_err = ""
             for space in spaces:
-                for probe_name, extra_params in probes:
-                    query = [
-                        "type=user%23download-url",
-                        f"device_space={quote(space) if space else ''}",
-                    ]
-                    for k, v in extra_params.items():
-                        token = str(v or "").strip()
-                        if token:
-                            query.append(f"{k}={quote(token)}")
-                    url = (
-                        f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                        f"?{'&'.join(query)}"
-                    )
-                    resp, obj = self._request_json(
-                        method="GET",
-                        url=url,
-                        headers={**headers, "device-space": space},
-                        timeout=20,
-                        retry_auth=True
-                    )
-                    if not resp or not resp.ok:
-                        last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
-                        logger.warn(
-                            f"XunleiHijack[v{self.plugin_version}] list tasks failed: "
-                            f"space={space or 'EMPTY'}, probe={probe_name}, {last_err}"
+                for task_type, probes in task_type_probes:
+                    for probe_name, extra_params in probes:
+                        query = [
+                            f"type={task_type}",
+                            f"device_space={quote(space) if space else ''}",
+                        ]
+                        for k, v in extra_params.items():
+                            token = str(v or "").strip()
+                            if token:
+                                query.append(f"{k}={quote(token)}")
+                        url = (
+                            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                            f"?{'&'.join(query)}"
                         )
-                        continue
-                    tasks = _extract_tasks(obj)
-                    logger.info(
-                        f"XunleiHijack[v{self.plugin_version}] list tasks: "
-                        f"space={space or 'EMPTY'}, probe={probe_name}, count={len(tasks)}"
-                    )
-                    if not tasks:
-                        continue
-                    probe_stats.append(f"{space or 'EMPTY'}:{probe_name}={len(tasks)}")
-                    for task in tasks:
-                        key = _task_merge_key(task)
-                        if not key or key in seen_keys:
+                        resp, obj = self._request_json(
+                            method="GET",
+                            url=url,
+                            headers={**headers, "device-space": space},
+                            timeout=20,
+                            retry_auth=True
+                        )
+                        if not resp or not resp.ok:
+                            last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
+                            logger.warn(
+                                f"XunleiHijack[v{self.plugin_version}] list tasks failed: "
+                                f"space={space or 'EMPTY'}, type={task_type}, probe={probe_name}, {last_err}"
+                            )
                             continue
-                        seen_keys.add(key)
-                        merged_tasks.append(task)
-                    if not device_id:
+                        tasks = _extract_tasks(obj)
+                        logger.info(
+                            f"XunleiHijack[v{self.plugin_version}] list tasks: "
+                            f"space={space or 'EMPTY'}, type={task_type}, probe={probe_name}, count={len(tasks)}"
+                        )
+                        if not tasks:
+                            continue
+                        probe_stats.append(f"{space or 'EMPTY'}:{task_type}:{probe_name}={len(tasks)}")
                         for task in tasks:
-                            if isinstance(task, dict):
-                                params = task.get("params") if isinstance(task.get("params"), dict) else {}
-                                target = str(params.get("target") or task.get("target") or "").strip()
-                                if target:
-                                    self._device_id = target
-                                    self._save_config()
-                                    break
+                            key = _task_merge_key(task)
+                            if not key:
+                                continue
+                            new_score = _source_score(task=task, task_type=task_type, probe_name=probe_name)
+                            old_score = merged_scores.get(key, -1)
+                            if key not in merged_tasks or new_score >= old_score:
+                                merged_tasks[key] = task
+                                merged_scores[key] = new_score
+                        if not device_id:
+                            for task in tasks:
+                                if isinstance(task, dict):
+                                    params = task.get("params") if isinstance(task.get("params"), dict) else {}
+                                    target = str(params.get("target") or task.get("target") or "").strip()
+                                    if target:
+                                        self._device_id = target
+                                        self._save_config()
+                                        break
             if merged_tasks:
                 logger.info(
                     f"XunleiHijack[v{self.plugin_version}] list tasks merged: "
                     f"total={len(merged_tasks)}, hit_probes={'; '.join(probe_stats[:8])}"
                 )
-                return merged_tasks
+                return list(merged_tasks.values())
             if last_err:
                 logger.info(
                     f"XunleiHijack[v{self.plugin_version}] list tasks empty after all spaces: "
@@ -2144,10 +2167,7 @@ class XunleiHijackDownloader(_PluginBase):
             "download_speed_text",
             "speed_text",
         ]
-        speed_text = self._task_text_by_keys(task=task, keys=speed_text_keys)
-        if speed_text and re.search(r"/s", speed_text, flags=re.IGNORECASE):
-            return speed_text.replace(" ", "")
-        value = self._task_number_by_keys(task=task, keys=speed_text_keys)
+        value = self._task_speed_number(task=task, key=key)
         if value is None:
             return None
         try:
@@ -2162,6 +2182,78 @@ class XunleiHijackDownloader(_PluginBase):
             return f"{size:.1f}{units[idx]}"
         except Exception:
             return None
+
+    def _task_speed_number(self, task: Dict[str, Any], key: str) -> Optional[float]:
+        speed_keys = [
+            key,
+            "download_speed" if key != "upload_speed" else "upload_speed",
+            "speed",
+            "dl_speed" if key != "upload_speed" else "up_speed",
+            "current_speed",
+            "downloadspeed" if key != "upload_speed" else "uploadspeed",
+            "speed_download" if key != "upload_speed" else "speed_upload",
+            "download_speed_text" if key != "upload_speed" else "upload_speed_text",
+            "speed_text",
+        ]
+        values = self._task_lookup_values(task=task, keys=speed_keys)
+        if not values:
+            return None
+        parsed: List[float] = []
+        for value in values:
+            speed_num = self._parse_speed_value(value)
+            if speed_num is None:
+                continue
+            parsed.append(float(speed_num))
+        if not parsed:
+            return None
+        for value in reversed(parsed):
+            if value > 0:
+                return value
+        return parsed[-1]
+
+    @staticmethod
+    def _parse_speed_value(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                return float(value)
+            except Exception:
+                return None
+        text = str(value or "").strip().replace(" ", "")
+        if not text:
+            return None
+        matched = re.search(r"(-?\d+(?:\.\d+)?)\s*([kmgtep]?i?b|[kmgtep]?b|[kmgtep])?/s", text, flags=re.IGNORECASE)
+        if matched:
+            try:
+                number = float(matched.group(1))
+            except Exception:
+                return None
+            unit = str(matched.group(2) or "b").lower()
+            unit = unit.replace("ib", "b")
+            factor_map = {
+                "b": 1,
+                "k": 1024,
+                "kb": 1024,
+                "m": 1024 ** 2,
+                "mb": 1024 ** 2,
+                "g": 1024 ** 3,
+                "gb": 1024 ** 3,
+                "t": 1024 ** 4,
+                "tb": 1024 ** 4,
+                "p": 1024 ** 5,
+                "pb": 1024 ** 5,
+                "e": 1024 ** 6,
+                "eb": 1024 ** 6,
+            }
+            factor = factor_map.get(unit)
+            if factor is None:
+                return number
+            return number * factor
+        number = XunleiHijackDownloader._coerce_float(text)
+        if number is None:
+            return None
+        return float(number)
 
     def _task_left_time(self, task: Dict[str, Any], progress: float) -> Optional[str]:
         left_time_keys = [
