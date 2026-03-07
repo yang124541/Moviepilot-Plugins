@@ -51,11 +51,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.0.58",
+    "version": "1.0.59",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.59": "迅雷自动搬运复用 MoviePilot 下载目录拼接规则（get_dir + download_type_folder/download_category_folder）；仅使用下载历史中的 type/media_category，不再做插件侧分析或兜底。",
       "v1.0.58": "修复搬运稳定性：已完成缓存改为持久化，重启不丢；空任务名不再写入 '-'；缓存增加过期清理与 source_not_found 退避/失败淘汰，减少无效重试。",
       "v1.0.57": "优化自动搬运闭环：记录已完成任务缓存（完成时间+任务名），即使后续任务列表为空，仍按完成后等待秒数继续尝试搬运，避免“完成即消失”导致漏搬。",
       "v1.0.56": "调整自动搬运等待逻辑：改为按“迅雷任务完成态时间/首次识别为完成的时间”计时，达到完成后等待秒数再搬运，不再依赖源文件修改时间。",
