@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.3.7"
+    plugin_version = "1.3.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -456,6 +456,14 @@ class GyingIndexer(_PluginBase):
                     parent_title=str(parent_meta.get("title") or "").strip(),
                     parent_year=parent_year
                 )
+                if not self._is_keyword_related(
+                    keyword,
+                    title_for_match,
+                    detail_title,
+                    str(parent_meta.get("title") or "").strip(),
+                    title
+                ):
+                    continue
                 desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
                 description = " | ".join(desc_parts[:3])
                 if parent_year and not re.search(r"(19|20)\d{2}", description):
@@ -564,6 +572,14 @@ class GyingIndexer(_PluginBase):
                         parent_title=str(parent_meta.get("title") or "").strip(),
                         parent_year=parent_year
                     )
+                    if not self._is_keyword_related(
+                        keyword,
+                        title_for_match,
+                        detail_title,
+                        str(parent_meta.get("title") or "").strip(),
+                        child_title
+                    ):
+                        continue
                     desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
                     description = " | ".join(desc_parts[:3])
                     if parent_year and not re.search(r"(19|20)\d{2}", description):
@@ -863,6 +879,48 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _normalize_text(text: Any) -> str:
         return re.sub(r"\s+", "", str(text or "")).lower()
+
+    @staticmethod
+    def _normalize_match_text(text: Any) -> str:
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(text or "").lower())
+
+    @staticmethod
+    def _keyword_tokens(keyword: str) -> List[str]:
+        text = str(keyword or "").strip().lower()
+        if not text:
+            return []
+        raw_parts = re.split(r"[\s\-\._\[\]\(\)\{\}/\\|:]+", text)
+        tokens: List[str] = []
+        seen: Set[str] = set()
+        for raw in raw_parts:
+            token = GyingIndexer._normalize_match_text(raw)
+            if not token:
+                continue
+            if token.isdigit():
+                # 年份等纯数字不作为强制命中条件，避免误杀结果
+                continue
+            if len(token) < 2:
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+        return tokens
+
+    @staticmethod
+    def _is_keyword_related(keyword: str, *texts: Any) -> bool:
+        keyword_norm = GyingIndexer._normalize_match_text(keyword)
+        if not keyword_norm:
+            return True
+        merged_norm = GyingIndexer._normalize_match_text(" ".join([str(x or "") for x in texts]))
+        if not merged_norm:
+            return False
+        if keyword_norm in merged_norm:
+            return True
+        tokens = GyingIndexer._keyword_tokens(keyword)
+        if not tokens:
+            return False
+        return all(token in merged_norm for token in tokens)
 
     def _has_chinese_subtitle(self, quality_label: str = "", title: str = "") -> bool:
         label_norm = self._normalize_text(quality_label)
