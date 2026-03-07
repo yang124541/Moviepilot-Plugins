@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.3.12"
+    plugin_version = "1.3.13"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -341,7 +341,7 @@ class GyingIndexer(_PluginBase):
             parent_down_entries_cache: Dict[str, List[Dict[str, Any]]] = {}
             parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
             bt_parent_cache: Dict[str, str] = {}
-            result_ids: Set[str] = set()
+            result_keys: Set[str] = set()
             for entry in search_entries:
                 res_id = str(entry.get("id") or "").strip()
                 if not res_id:
@@ -511,7 +511,9 @@ class GyingIndexer(_PluginBase):
                     downloadvolumefactor=0,
                     uploadvolumefactor=1,
                 ))
-                result_ids.add(res_id)
+                res_key = self._result_key(resource_dir=res_dir, resource_id=res_id, title=title)
+                if res_key:
+                    result_keys.add(res_key)
 
             # 站点搜索页可能漏掉同父级下的部分条目，补充抓取父级 downlist 全量条目。
             for cache_key, down_entries in parent_down_entries_cache.items():
@@ -528,7 +530,10 @@ class GyingIndexer(_PluginBase):
 
                 for down_item in down_entries:
                     child_id = str(down_item.get("id") or "").strip()
-                    if not child_id or child_id in result_ids:
+                    child_key = self._result_key(resource_dir=str(down_item.get("dir") or default_dir),
+                                                 resource_id=child_id,
+                                                 title=str(down_item.get("title") or ""))
+                    if not child_id or (child_key and child_key in result_keys):
                         continue
 
                     child_title = str(down_item.get("title") or "").strip()
@@ -627,7 +632,9 @@ class GyingIndexer(_PluginBase):
                         downloadvolumefactor=0,
                         uploadvolumefactor=1,
                     ))
-                    result_ids.add(child_id)
+                    child_key = self._result_key(resource_dir=child_dir, resource_id=child_id, title=child_title)
+                    if child_key:
+                        result_keys.add(child_key)
 
             cost = (datetime.now() - start_at).seconds
             logger.info(
@@ -722,7 +729,11 @@ class GyingIndexer(_PluginBase):
 
                 new_count = 0
                 for item in page_entries:
-                    key = str(item.get("id") or "").strip()
+                    key = self._result_key(
+                        resource_dir=str(item.get("dir") or "bt"),
+                        resource_id=str(item.get("id") or ""),
+                        title=str(item.get("title") or "")
+                    )
                     if key and key not in entry_map:
                         entry_map[key] = item
                         new_count += 1
@@ -1173,6 +1184,15 @@ class GyingIndexer(_PluginBase):
         if re.match(r"^(19|20)\d{2}$", year):
             return f"{base}.{year}"
         return base
+
+    @staticmethod
+    def _result_key(resource_dir: str, resource_id: str, title: str) -> str:
+        rid = str(resource_id or "").strip()
+        if not rid:
+            return ""
+        rdir = str(resource_dir or "bt").strip().lower() or "bt"
+        tkey = GyingIndexer._normalize_match_text(title)
+        return f"{rdir}:{rid}:{tkey}"
 
     @staticmethod
     def _strip_release_group_year_noise(base: str, parent_year: str) -> str:
