@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.4.4"
+    plugin_version = "1.4.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -289,9 +289,9 @@ class GyingIndexer(_PluginBase):
         referer = base_url
 
         logger.info(
-            f"GYing search start: {keyword} "
-            f"[1080={self._enable_1080}, zh1080={self._enable_zh1080}, "
-            f"4k={self._enable_4k}, zh4k={self._enable_zh4k}, original={self._include_original}]"
+            f"观影(GYing)开始搜索：关键词='{keyword}'，"
+            f"过滤开关[1080={self._enable_1080}, 中字1080={self._enable_zh1080}, "
+            f"4K={self._enable_4k}, 中字4K={self._enable_zh4k}, 原盘={self._include_original}]"
         )
 
         try:
@@ -316,7 +316,7 @@ class GyingIndexer(_PluginBase):
                 fetcher=guarded_get
             )
             if not search_entries:
-                logger.warn("GYing search empty after paging")
+                logger.warn(f"观影(GYing)搜索结果为空：关键词='{keyword}'，分页后无可用条目")
                 return []
 
             results: List[TorrentInfo] = []
@@ -615,12 +615,12 @@ class GyingIndexer(_PluginBase):
 
             cost = (datetime.now() - start_at).seconds
             logger.info(
-                f"GYing search done: {len(results)} result(s), cost={cost}s, "
-                f"http={request_state.get('http')}, cache_hit={request_state.get('cache_hit')}"
+                f"观影(GYing)搜索完成：关键词='{keyword}'，返回条数={len(results)}，耗时={cost}s，"
+                f"请求次数={request_state.get('http')}，缓存命中={request_state.get('cache_hit')}"
             )
             return results
         except Exception as err:
-            logger.error(f"GYing search error: {err}")
+            logger.error(f"观影(GYing)搜索异常：关键词='{keyword}'，错误={err}")
             return []
 
     @staticmethod
@@ -680,7 +680,7 @@ class GyingIndexer(_PluginBase):
                                 fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
         entry_map: Dict[str, Dict[str, Any]] = {}
         keyword_plan = self._expand_search_keywords(client=client, base_url=base_url, keyword=keyword)
-        logger.info(f"GYing keyword plan: {keyword_plan}")
+        logger.info(f"观影(GYing)关键词计划：原词='{keyword}'，计划={keyword_plan}")
         getter = fetcher or client.get
 
         for query_keyword in keyword_plan:
@@ -714,7 +714,7 @@ class GyingIndexer(_PluginBase):
                 if page_no > 1 and new_count == 0:
                     break
 
-        logger.info(f"GYing entries collected: {len(entry_map)}")
+        logger.info(f"观影(GYing)分页采集完成：关键词='{keyword}'，去重后条目数={len(entry_map)}")
         return list(entry_map.values())
 
     def _expand_search_keywords(self, client: RequestUtils, base_url: str, keyword: str) -> List[str]:
@@ -782,8 +782,8 @@ class GyingIndexer(_PluginBase):
             try:
                 SitesHelper().add_indexer(domain=host, indexer=indexer)
             except Exception as err:
-                logger.warn(f"GYing indexer register failed for {host}: {err}")
-        logger.info(f"GYing indexer registered for hosts: {', '.join(hosts)}")
+                logger.warn(f"观影(GYing)索引器注册失败：域名={host}，错误={err}")
+        logger.info(f"观影(GYing)索引器注册完成：域名列表={', '.join(hosts)}")
 
     @staticmethod
     def _build_indexer_schema(primary_host: str, all_hosts: List[str]) -> Dict[str, Any]:
@@ -1420,7 +1420,7 @@ class GyingIndexer(_PluginBase):
             if isinstance(obj, dict):
                 return obj
         except Exception as err:
-            logger.debug(f"GYing json parse failed for {marker}: {err}")
+            logger.debug(f"观影(GYing)JSON解析失败：标记={marker}，错误={err}")
         return None
 
     @staticmethod
