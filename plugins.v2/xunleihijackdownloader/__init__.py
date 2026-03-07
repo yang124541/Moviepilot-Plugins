@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.63"
+    plugin_version = "1.0.64"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -492,19 +492,19 @@ class XunleiHijackDownloader(_PluginBase):
                                 {"component": "VCol", "props": {"cols": 1, "md": 1, "class": "py-0"}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 6, "md": 6, "class": "py-0"},
+                                    "props": {"cols": 5, "md": 5, "class": "py-0"},
                                     "content": [{"component": "VListItem", "props": {"title": task_name, "density": "compact"}}],
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 3, "md": 3, "class": "py-0"},
+                                    "props": {"cols": 4, "md": 4, "class": "py-0"},
                                     "content": [
                                         {
                                             "component": "VListItem",
                                             "props": {
                                                 "density": "compact",
                                                 "class": "py-0",
-                                                "style": "min-height:18px;font-size:11px;line-height:1.15;",
+                                                "style": "min-height:18px;font-size:5px;line-height:1.15;",
                                                 "title": f"{size_text}    {left_time}    {speed_text}",
                                             },
                                         },
