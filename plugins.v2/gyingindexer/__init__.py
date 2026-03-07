@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.3.8"
+    plugin_version = "1.3.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -885,6 +885,19 @@ class GyingIndexer(_PluginBase):
         return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(text or "").lower())
 
     @staticmethod
+    def _is_season_token(token: str) -> bool:
+        t = str(token or "").strip().lower()
+        if not t:
+            return False
+        if re.match(r"^s\d{1,3}$", t):
+            return True
+        if re.match(r"^season\d{1,3}$", t):
+            return True
+        if re.match(r"^第[0-9一二三四五六七八九十百零两壹贰叁肆伍陆柒捌玖拾]+季$", t):
+            return True
+        return False
+
+    @staticmethod
     def _keyword_tokens(keyword: str) -> List[str]:
         text = str(keyword or "").strip().lower()
         if not text:
@@ -899,6 +912,9 @@ class GyingIndexer(_PluginBase):
             if token.isdigit():
                 # 年份等纯数字不作为强制命中条件，避免误杀结果
                 continue
+            if GyingIndexer._is_season_token(token):
+                # 季词仅用于提升相关性，不作为硬性过滤条件
+                continue
             if len(token) < 2:
                 continue
             if token in seen:
@@ -909,6 +925,10 @@ class GyingIndexer(_PluginBase):
 
     @staticmethod
     def _is_keyword_related(keyword: str, *texts: Any) -> bool:
+        raw_keyword = str(keyword or "").strip().lower()
+        if re.match(r"^(tmdb|douban|imdb)[:：]?[a-z0-9]+$", raw_keyword):
+            # 元数据 ID 关键词场景（如 tmdb:95479）不做文本强匹配
+            return True
         keyword_norm = GyingIndexer._normalize_match_text(keyword)
         if not keyword_norm:
             return True
@@ -919,7 +939,7 @@ class GyingIndexer(_PluginBase):
             return True
         tokens = GyingIndexer._keyword_tokens(keyword)
         if not tokens:
-            return False
+            return True
         return all(token in merged_norm for token in tokens)
 
     def _has_chinese_subtitle(self, quality_label: str = "", title: str = "") -> bool:
