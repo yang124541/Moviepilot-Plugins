@@ -3,11 +3,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.3.11",
+    "version": "1.3.12",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.3.12": "增强关键词匹配的中日汉字变体归一化（如 咒术回战/呪術廻戦），降低同名不同字形资源被误过滤导致只显示 1 条的问题。",
       "v1.3.11": "增强 downurl 下载链接解析：支持 down.php/res/download 等相对路径候选，修复官网可见 2 条但插件仅出 1 条的漏抓问题。",
       "v1.3.10": "修复标签存在但未标“中字”时的误过滤：分辨率仍按站点标签判定，但字幕属性允许由标题中的 CHT/CHS/简繁 等信号补充，避免官网有 2 条而插件仅显示 1 条。",
       "v1.3.9": "优化关键词相关性过滤：忽略“第三季/S03/Season3”等季词硬匹配，并兼容 tmdb/douban/imdb 关键词，修复同剧资源被误过滤只显示 1 条的问题。",

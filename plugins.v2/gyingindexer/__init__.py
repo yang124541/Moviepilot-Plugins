@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.3.11"
+    plugin_version = "1.3.12"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -87,6 +87,22 @@ class GyingIndexer(_PluginBase):
         "x264",
         "x265",
     )
+    _cjk_variant_map: Dict[int, str] = str.maketrans({
+        "術": "术",
+        "戰": "战",
+        "戦": "战",
+        "廻": "回",
+        "迴": "回",
+        "呪": "咒",
+        "蓮": "莲",
+        "蘭": "兰",
+        "亞": "亚",
+        "馬": "马",
+        "風": "风",
+        "聖": "圣",
+        "殻": "壳",
+        "鎧": "铠",
+    })
 
     def init_plugin(self, config: dict = None):
         if config:
@@ -882,7 +898,10 @@ class GyingIndexer(_PluginBase):
 
     @staticmethod
     def _normalize_match_text(text: Any) -> str:
-        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(text or "").lower())
+        raw = str(text or "").lower()
+        if raw:
+            raw = raw.translate(GyingIndexer._cjk_variant_map)
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", raw)
 
     @staticmethod
     def _is_season_token(token: str) -> bool:
