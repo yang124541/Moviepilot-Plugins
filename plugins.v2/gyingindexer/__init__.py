@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.4.8"
+    plugin_version = "1.4.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -339,6 +339,29 @@ class GyingIndexer(_PluginBase):
                     continue
                 search_quality_code = str(entry.get("quality") or "").strip().lower()
                 search_tag_label = str(entry.get("tag") or "").strip()
+
+                # 父级搜索路由返回 mv/ac 条目，直接按父级 downlist 拉取子资源，避免逐条请求 bt 详情页。
+                if res_dir in ("ac", "mv"):
+                    cache_key = f"{res_dir}/{res_id}"
+                    parent_default_dir.setdefault(cache_key, "bt")
+                    if cache_key not in parent_down_entries_cache:
+                        _down_entries = self._fetch_parent_down_entries(
+                            client=client,
+                            base_url=base_url,
+                            parent_dir=res_dir,
+                            parent_id=res_id,
+                            fetcher=guarded_get
+                        )
+                        parent_down_entries_cache[cache_key] = _down_entries
+                        _id_map: Dict[str, Dict[str, Any]] = {}
+                        for _item in _down_entries:
+                            _cid = str(_item.get("id") or "").strip()
+                            if not _cid:
+                                continue
+                            _id_map[_cid] = _item
+                            bt_parent_cache[_cid] = cache_key
+                        parent_down_entry_map_cache[cache_key] = _id_map
+                    continue
 
                 detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
                 detail_data: Dict[str, Any] = {}
@@ -673,8 +696,8 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _build_search_url(base_url: str, keyword: str,
                           page_no: int = 1, quality_code: Optional[str] = None) -> str:
-        # 使用精准搜索路由：s/2-4--{page_no}/{keyword}
-        return urljoin(base_url, f"s/2-4--{page_no}/{quote(keyword)}")
+        # 使用父级搜索路由：s/2---{page_no}/{keyword}
+        return urljoin(base_url, f"s/2---{page_no}/{quote(keyword)}")
 
     def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str,
                                 fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:

@@ -3,11 +3,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.4.8",
+    "version": "1.4.9",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.4.9": "搜索路由切换为 s/2---{page}/{keyword} 父级搜索；对 mv/ac 条目直接请求父级 downurl 拉取子资源，减少逐条 bt 详情请求。",
       "v1.4.8": "回退父级补全开关改动，恢复到 94ffaf4 的搜索逻辑，并提升版本号用于触发 MoviePilot 识别升级。",
       "v1.4.6": "修正观影搜索分页路由为 s/2-4--{page_no}/{keyword}，避免将模式位当作页码导致漏检结果。",
       "v1.4.5": "日志文案统一改为中文，搜索日志明确输出搜索词与返回条数。",
