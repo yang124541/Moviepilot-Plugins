@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.5.0"
+    plugin_version = "1.5.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -695,9 +695,13 @@ class GyingIndexer(_PluginBase):
 
     @staticmethod
     def _build_search_url(base_url: str, keyword: str,
-                          page_no: int = 1, quality_code: Optional[str] = None) -> str:
-        # 使用父级搜索路由：s/2---{page_no}/{keyword}
-        return urljoin(base_url, f"s/2---{page_no}/{quote(keyword)}")
+                          mode: str = "precise", page_no: int = 1,
+                          quality_code: Optional[str] = None) -> str:
+        if mode == "fuzzy":
+            # 模糊匹配只请求一次
+            return urljoin(base_url, f"s/1---1/{quote(keyword)}")
+        # 默认精准匹配只请求一次
+        return urljoin(base_url, f"s/2-0--1/{quote(keyword)}")
 
     def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str,
                                 fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
@@ -707,35 +711,43 @@ class GyingIndexer(_PluginBase):
         getter = fetcher or client.get
 
         for query_keyword in keyword_plan:
-            for page_no in range(1, self._max_search_pages + 1):
-                search_url = self._build_search_url(
-                    base_url=base_url,
-                    keyword=query_keyword,
-                    page_no=page_no,
-                    quality_code=None
-                )
-                html = getter(search_url)
-                if not html:
-                    break
-                search_data = self._extract_js_object(html, "_obj.search")
-                if not isinstance(search_data, dict):
-                    break
-                page_entries = self._extract_entries_from_search(
-                    search_data=search_data,
-                    forced_quality=None
-                )
-                if not page_entries:
-                    break
+            precise_url = self._build_search_url(
+                base_url=base_url,
+                keyword=query_keyword,
+                mode="precise"
+            )
+            precise_html = getter(precise_url)
+            precise_data = self._extract_js_object(precise_html, "_obj.search") if precise_html else None
+            precise_entries = self._extract_entries_from_search(
+                search_data=precise_data if isinstance(precise_data, dict) else {},
+                forced_quality=None
+            )
 
-                new_count = 0
-                for item in page_entries:
-                    key = str(item.get("id") or "").strip()
-                    if key and key not in entry_map:
-                        entry_map[key] = item
-                        new_count += 1
+            for item in precise_entries:
+                key = str(item.get("id") or "").strip()
+                if key and key not in entry_map:
+                    entry_map[key] = item
 
-                if page_no > 1 and new_count == 0:
-                    break
+            if precise_entries:
+                continue
+
+            fuzzy_url = self._build_search_url(
+                base_url=base_url,
+                keyword=query_keyword,
+                mode="fuzzy"
+            )
+            fuzzy_html = getter(fuzzy_url)
+            fuzzy_data = self._extract_js_object(fuzzy_html, "_obj.search") if fuzzy_html else None
+            fuzzy_entries = self._extract_entries_from_search(
+                search_data=fuzzy_data if isinstance(fuzzy_data, dict) else {},
+                forced_quality=None
+            )
+            if fuzzy_entries:
+                logger.info(f"观影(GYing)精准无结果，已回退模糊匹配：关键词='{query_keyword}'")
+            for item in fuzzy_entries:
+                key = str(item.get("id") or "").strip()
+                if key and key not in entry_map:
+                    entry_map[key] = item
 
         logger.info(f"观影(GYing)分页采集完成：关键词='{keyword}'，去重后条目数={len(entry_map)}")
         return list(entry_map.values())
