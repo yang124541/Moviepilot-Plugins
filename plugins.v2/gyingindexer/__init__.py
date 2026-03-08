@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.4.9"
+    plugin_version = "1.4.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -340,8 +340,8 @@ class GyingIndexer(_PluginBase):
                 search_quality_code = str(entry.get("quality") or "").strip().lower()
                 search_tag_label = str(entry.get("tag") or "").strip()
 
-                # 父级搜索路由返回 mv/ac 条目，直接按父级 downlist 拉取子资源，避免逐条请求 bt 详情页。
-                if res_dir in ("ac", "mv"):
+                # 父级搜索路由返回 tv/mv/ac 条目，直接按父级 downlist 拉取子资源，避免逐条请求 bt 详情页。
+                if res_dir in ("tv", "ac", "mv"):
                     cache_key = f"{res_dir}/{res_id}"
                     parent_default_dir.setdefault(cache_key, "bt")
                     if cache_key not in parent_down_entries_cache:
