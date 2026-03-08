@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.5.1"
+    plugin_version = "1.5.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -325,6 +325,7 @@ class GyingIndexer(_PluginBase):
             parent_down_entries_cache: Dict[str, List[Dict[str, Any]]] = {}
             parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
             bt_parent_cache: Dict[str, str] = {}
+            skip_keyword_parent_keys: Set[str] = set()
             result_ids: Set[str] = set()
             for entry in search_entries:
                 res_id = str(entry.get("id") or "").strip()
@@ -333,6 +334,7 @@ class GyingIndexer(_PluginBase):
                 res_dir = str(entry.get("dir") or "bt").strip().lower()
                 if not res_dir:
                     res_dir = "bt"
+                skip_keyword_match = bool(entry.get("__skip_keyword_match"))
 
                 title = str(entry.get("title") or "").strip()
                 if not title:
@@ -344,6 +346,12 @@ class GyingIndexer(_PluginBase):
                 if res_dir in ("tv", "ac", "mv"):
                     cache_key = f"{res_dir}/{res_id}"
                     parent_default_dir.setdefault(cache_key, "bt")
+                    if skip_keyword_match and cache_key not in skip_keyword_parent_keys:
+                        skip_keyword_parent_keys.add(cache_key)
+                        logger.info(
+                            f"观影(GYing)父类直出：关键词='{keyword}'，父级='{cache_key}'，"
+                            f"已跳过关键词二次匹配"
+                        )
                     if cache_key not in parent_down_entries_cache:
                         _down_entries = self._fetch_parent_down_entries(
                             client=client,
@@ -479,14 +487,15 @@ class GyingIndexer(_PluginBase):
                     parent_title=str(parent_meta.get("title") or "").strip(),
                     parent_year=parent_year
                 )
-                if not self._is_keyword_related(
-                    keyword,
-                    title_for_match,
-                    detail_title,
-                    str(parent_meta.get("title") or "").strip(),
-                    title
-                ):
-                    continue
+                if cache_key not in skip_keyword_parent_keys:
+                    if not self._is_keyword_related(
+                        keyword,
+                        title_for_match,
+                        detail_title,
+                        str(parent_meta.get("title") or "").strip(),
+                        title
+                    ):
+                        continue
                 desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
                 description = " | ".join(desc_parts[:3])
                 if parent_year and not re.search(r"(19|20)\d{2}", description):
@@ -595,14 +604,15 @@ class GyingIndexer(_PluginBase):
                         parent_title=str(parent_meta.get("title") or "").strip(),
                         parent_year=parent_year
                     )
-                    if not self._is_keyword_related(
-                        keyword,
-                        title_for_match,
-                        detail_title,
-                        str(parent_meta.get("title") or "").strip(),
-                        child_title
-                    ):
-                        continue
+                    if cache_key not in skip_keyword_parent_keys:
+                        if not self._is_keyword_related(
+                            keyword,
+                            title_for_match,
+                            detail_title,
+                            str(parent_meta.get("title") or "").strip(),
+                            child_title
+                        ):
+                            continue
                     desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
                     description = " | ".join(desc_parts[:3])
                     if parent_year and not re.search(r"(19|20)\d{2}", description):
@@ -726,7 +736,9 @@ class GyingIndexer(_PluginBase):
             for item in precise_entries:
                 key = str(item.get("id") or "").strip()
                 if key and key not in entry_map:
-                    entry_map[key] = item
+                    row = dict(item)
+                    row["__skip_keyword_match"] = False
+                    entry_map[key] = row
 
             if precise_entries:
                 continue
@@ -747,7 +759,10 @@ class GyingIndexer(_PluginBase):
             for item in fuzzy_entries:
                 key = str(item.get("id") or "").strip()
                 if key and key not in entry_map:
-                    entry_map[key] = item
+                    row = dict(item)
+                    row_dir = str(row.get("dir") or "").strip().lower()
+                    row["__skip_keyword_match"] = row_dir in ("tv", "ac", "mv")
+                    entry_map[key] = row
 
         logger.info(f"观影(GYing)分页采集完成：关键词='{keyword}'，去重后条目数={len(entry_map)}")
         return list(entry_map.values())
