@@ -3,11 +3,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.4.5",
+    "version": "1.4.6",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.4.6": "修正观影搜索分页路由为 s/2-4--{page_no}/{keyword}，避免将模式位当作页码导致漏检结果。",
       "v1.4.5": "日志文案统一改为中文，搜索日志明确输出搜索词与返回条数。",
       "v1.4.4": "版本号升级到 1.4.4，用于触发 MoviePilot 识别并刷新观影插件更新。",
       "v1.3.8": "修复关键词相关性过滤：搜索“国色芳华”时不再混入“锦绣芳华”等模糊结果；父级 downlist 补全结果也强制执行关键词匹配，避免结果数量异常膨胀。",

@@ -21,7 +21,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.4.5"
+    plugin_version = "1.4.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -673,8 +673,8 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _build_search_url(base_url: str, keyword: str,
                           page_no: int = 1, quality_code: Optional[str] = None) -> str:
-        # 站点新版搜索路由不再支持 i5/i9 分类码，固定使用 s/{page}-4--1
-        return urljoin(base_url, f"s/{page_no}-4--1/{quote(keyword)}")
+        # 使用精准搜索路由：s/2-4--{page_no}/{keyword}
+        return urljoin(base_url, f"s/2-4--{page_no}/{quote(keyword)}")
 
     def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str,
                                 fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
