@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.6.6"
+    plugin_version = "1.6.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -449,6 +449,9 @@ class XunleiHijackDownloader(_PluginBase):
                 speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
                 items.append({
                     "key": dom_key,
+                    "size_text": size_text,
+                    "left_time": left_time,
+                    "speed_text": speed_text,
                     "metric": f"{size_text}    {left_time}    {speed_text}",
                 })
             return {"success": True, "items": items}
@@ -558,14 +561,31 @@ class XunleiHijackDownloader(_PluginBase):
                                             "component": "div",
                                             "props": {
                                                 "class": "py-0",
-                                                "style": "min-height:18px;font-size:5px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
+                                                "style": "min-height:18px;font-size:10px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
                                             },
                                             "content": [
                                                 {
                                                     "component": "span",
                                                     "props": {
-                                                        "id": f"xunlei-metric-{dom_key}",
-                                                        "textContent": f"{size_text}    {left_time}    {speed_text}",
+                                                        "id": f"xunlei-metric-size-{dom_key}",
+                                                        "textContent": size_text,
+                                                        "style": "display:inline-block;margin-right:14px;",
+                                                    },
+                                                },
+                                                {
+                                                    "component": "span",
+                                                    "props": {
+                                                        "id": f"xunlei-metric-left-{dom_key}",
+                                                        "textContent": left_time,
+                                                        "style": "display:inline-block;margin-right:14px;",
+                                                    },
+                                                },
+                                                {
+                                                    "component": "span",
+                                                    "props": {
+                                                        "id": f"xunlei-metric-speed-{dom_key}",
+                                                        "textContent": speed_text,
+                                                        "style": "display:inline-block;",
                                                     },
                                                 }
                                             ],
@@ -679,8 +699,12 @@ class XunleiHijackDownloader(_PluginBase):
             "for(const it of j.items){"
             "const k=(it&&it.key)?String(it.key):'';"
             "if(!k){continue;}"
-            "const el=document.getElementById('xunlei-metric-'+k);"
-            "if(el){el.textContent=(it&&it.metric)?String(it.metric):'--';}"
+            "const sizeEl=document.getElementById('xunlei-metric-size-'+k);"
+            "if(sizeEl){sizeEl.textContent=(it&&it.size_text)?String(it.size_text):'--';}"
+            "const leftEl=document.getElementById('xunlei-metric-left-'+k);"
+            "if(leftEl){leftEl.textContent=(it&&it.left_time)?String(it.left_time):'--';}"
+            "const speedEl=document.getElementById('xunlei-metric-speed-'+k);"
+            "if(speedEl){speedEl.textContent=(it&&it.speed_text)?String(it.speed_text):'0B/s';}"
             "}"
             "}catch(e){}"
             "};"
