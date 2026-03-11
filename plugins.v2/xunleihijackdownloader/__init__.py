@@ -510,8 +510,6 @@ class XunleiHijackDownloader(_PluginBase):
         size_text = self._format_bytes(self._task_size(task))
         left_time = self._task_left_time(task, progress) or "--"
         speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
-        image_url = self._task_image_url(task)
-
         can_start = bool(task_id)
         can_pause = bool(task_id)
         can_delete = bool(task_id)
@@ -522,18 +520,15 @@ class XunleiHijackDownloader(_PluginBase):
         delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}"
         progress_color = "success" if task_done else ("warning" if task_paused else ("error" if task_failed else "primary"))
 
-        image_node: Dict[str, Any]
-        if image_url:
-            image_node = {
-                "component": "VImg",
-                "props": {"src": image_url, "width": 72, "height": 40, "cover": True},
-            }
-        else:
-            image_node = {
-                "component": "VAvatar",
-                "props": {"size": 40, "rounded": "sm", "color": "grey-lighten-3"},
-                "content": [{"component": "VIcon", "props": {"icon": "mdi-image-off-outline", "size": 20}}],
-            }
+        image_node: Dict[str, Any] = {
+            "component": "VImg",
+            "props": {
+                "src": "https://backstage-img-ssl.a.88cdn.com/65d616355857aef8af40b89f187a8cf2770cb0ce",
+                "width": 72,
+                "height": 40,
+                "cover": True,
+            },
+        }
 
         return {
             "component": "VCard",
