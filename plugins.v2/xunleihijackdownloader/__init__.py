@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.6.7"
+    plugin_version = "1.6.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -329,8 +329,12 @@ class XunleiHijackDownloader(_PluginBase):
                             {
                                 "component": "img",
                                 "props": {
-                                    "src": "/__xunlei_metrics_poller__.png",
+                                    "src": "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
                                     "style": "display:none;width:0;height:0;",
+                                    "onload": self._build_page_metrics_poller_onerror(
+                                        plugin_id=plugin_id,
+                                        interval_ms=1000,
+                                    ),
                                     "onerror": self._build_page_metrics_poller_onerror(
                                         plugin_id=plugin_id,
                                         interval_ms=1000,
@@ -688,7 +692,7 @@ class XunleiHijackDownloader(_PluginBase):
             f"const u='{metrics_api}';"
             "const f=async()=>{"
             "try{"
-            "const r=await fetch(u,{method:'GET',credentials:'same-origin'});"
+            "const r=await fetch(u,{method:'GET',credentials:'same-origin',cache:'no-store'});"
             "const j=await r.json().catch(()=>null);"
             "if(!r.ok||!j||j.success===false||!Array.isArray(j.items)){return;}"
             "for(const it of j.items){"
