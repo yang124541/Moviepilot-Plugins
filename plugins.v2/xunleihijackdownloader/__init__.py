@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.0.64"
+    plugin_version = "1.0.65"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -310,6 +310,25 @@ class XunleiHijackDownloader(_PluginBase):
 
     def get_page(self) -> List[dict]:
         page: List[dict] = [
+            {
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [
+                            {
+                                "component": "img",
+                                "props": {
+                                    "src": "/__xunlei_auto_refresh__.png",
+                                    "style": "display:none;width:0;height:0;",
+                                    "onerror": self._build_page_auto_refresh_onerror(interval_ms=1000),
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
             {
                 "component": "VRow",
                 "props": {"align": "center"},
@@ -591,6 +610,23 @@ class XunleiHijackDownloader(_PluginBase):
             "if(r.ok&&(!j||j.success!==false)){window.location.reload();return;}"
             "alert((j&&j.message)?j.message:'操作失败，请查看日志');"
             "}catch(e){alert('请求失败，请检查网络或权限');}"
+            "})();"
+        )
+
+    @staticmethod
+    def _build_page_auto_refresh_onerror(interval_ms: int = 1000) -> str:
+        try:
+            ms = int(interval_ms)
+        except Exception:
+            ms = 1000
+        if ms < 300:
+            ms = 300
+        return (
+            "(function(){"
+            "try{"
+            "if(window.__xunleiPageAutoRefreshTimer){return;}"
+            f"window.__xunleiPageAutoRefreshTimer=setTimeout(function(){{window.location.reload();}},{ms});"
+            "}catch(e){}"
             "})();"
         )
 
