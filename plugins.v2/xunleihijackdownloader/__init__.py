@@ -142,6 +142,14 @@ class XunleiHijackDownloader(_PluginBase):
                 "summary": "删除迅雷任务",
                 "description": "在插件数据页手动删除指定任务",
             },
+            {
+                "path": "/task/metrics",
+                "endpoint": self.api_task_metrics,
+                "methods": ["GET"],
+                "allow_anonymous": True,
+                "summary": "获取迅雷任务速率信息",
+                "description": "用于数据页局部刷新“大小/剩余时间/速度”",
+            },
         ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
@@ -309,6 +317,7 @@ class XunleiHijackDownloader(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
+        plugin_id = self.__class__.__name__
         page: List[dict] = [
             {
                 "component": "VRow",
@@ -320,9 +329,12 @@ class XunleiHijackDownloader(_PluginBase):
                             {
                                 "component": "img",
                                 "props": {
-                                    "src": "/__xunlei_auto_refresh__.png",
+                                    "src": "/__xunlei_metrics_poller__.png",
                                     "style": "display:none;width:0;height:0;",
-                                    "onerror": self._build_page_auto_refresh_onerror(interval_ms=1000),
+                                    "onerror": self._build_page_metrics_poller_onerror(
+                                        plugin_id=plugin_id,
+                                        interval_ms=1000,
+                                    ),
                                 },
                             }
                         ],
@@ -421,6 +433,29 @@ class XunleiHijackDownloader(_PluginBase):
     def api_delete_task(self, task_id: str = "", hash: str = "", delete_file: bool = True, space: str = "") -> schemas.Response:
         return self._api_task_action(task_id=task_id or hash, action="delete", delete_file=delete_file, space=space)
 
+    def api_task_metrics(self) -> Dict[str, Any]:
+        try:
+            tasks = self._list_download_tasks(include_runner=False)
+            items: List[Dict[str, str]] = []
+            for task in tasks:
+                if self._is_moved_task(task):
+                    continue
+                dom_key = self._task_dom_key(task)
+                if not dom_key:
+                    continue
+                progress = self._task_progress(task)
+                size_text = self._format_bytes(self._task_size(task))
+                left_time = self._task_left_time(task, progress) or "--"
+                speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
+                items.append({
+                    "key": dom_key,
+                    "metric": f"{size_text}    {left_time}    {speed_text}",
+                })
+            return {"success": True, "items": items}
+        except Exception as err:
+            logger.warn(f"XunleiHijack api_task_metrics failed: {err}")
+            return {"success": False, "items": []}
+
     def _api_task_action(self, task_id: str, action: str, delete_file: bool = True, space: str = "") -> schemas.Response:
         task_key = str(task_id or "").strip()
         if not task_key:
@@ -463,6 +498,7 @@ class XunleiHijackDownloader(_PluginBase):
         plugin_id = self.__class__.__name__
         task_id = self._task_key(task)
         task_name = self._task_name(task) or task_id or "xunlei-task"
+        dom_key = self._task_dom_key(task)
         task_done = self._is_task_completed(task)
         task_paused = self._is_task_paused(task)
         task_failed = self._is_task_failed(task)
@@ -519,13 +555,20 @@ class XunleiHijackDownloader(_PluginBase):
                                     "props": {"cols": 4, "md": 4, "class": "py-0"},
                                     "content": [
                                         {
-                                            "component": "VListItem",
+                                            "component": "div",
                                             "props": {
-                                                "density": "compact",
                                                 "class": "py-0",
-                                                "style": "min-height:18px;font-size:5px;line-height:1.15;",
-                                                "title": f"{size_text}    {left_time}    {speed_text}",
+                                                "style": "min-height:18px;font-size:5px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
                                             },
+                                            "content": [
+                                                {
+                                                    "component": "span",
+                                                    "props": {
+                                                        "id": f"xunlei-metric-{dom_key}",
+                                                        "textContent": f"{size_text}    {left_time}    {speed_text}",
+                                                    },
+                                                }
+                                            ],
                                         },
                                         {
                                             "component": "VProgressLinear",
@@ -614,21 +657,49 @@ class XunleiHijackDownloader(_PluginBase):
         )
 
     @staticmethod
-    def _build_page_auto_refresh_onerror(interval_ms: int = 1000) -> str:
+    def _build_page_metrics_poller_onerror(plugin_id: str, interval_ms: int = 1000) -> str:
+        plugin = str(plugin_id or "").strip().replace("\\", "\\\\").replace("'", "\\'")
         try:
             ms = int(interval_ms)
         except Exception:
             ms = 1000
         if ms < 300:
             ms = 300
+        metrics_api = f"/api/v1/plugin/{plugin}/task/metrics"
         return (
             "(function(){"
             "try{"
-            "if(window.__xunleiPageAutoRefreshTimer){return;}"
-            f"window.__xunleiPageAutoRefreshTimer=setTimeout(function(){{window.location.reload();}},{ms});"
+            "if(window.__xunleiMetricsPollerTimer){return;}"
+            f"const u='{metrics_api}';"
+            "const f=async()=>{"
+            "try{"
+            "const r=await fetch(u,{method:'GET',credentials:'same-origin'});"
+            "const j=await r.json().catch(()=>null);"
+            "if(!r.ok||!j||j.success===false||!Array.isArray(j.items)){return;}"
+            "for(const it of j.items){"
+            "const k=(it&&it.key)?String(it.key):'';"
+            "if(!k){continue;}"
+            "const el=document.getElementById('xunlei-metric-'+k);"
+            "if(el){el.textContent=(it&&it.metric)?String(it.metric):'--';}"
+            "}"
+            "}catch(e){}"
+            "};"
+            "f();"
+            f"window.__xunleiMetricsPollerTimer=setInterval(f,{ms});"
             "}catch(e){}"
             "})();"
         )
+
+    def _task_dom_key(self, task: Dict[str, Any]) -> str:
+        task_id = self._task_key(task)
+        if task_id:
+            key = f"id_{task_id}"
+        else:
+            key = self._task_move_key(task)
+        key = str(key or "").strip()
+        if not key:
+            return ""
+        return re.sub(r"[^a-zA-Z0-9_\\-]+", "_", key)[:120]
 
     def get_module(self) -> Dict[str, Any]:
         if not self._enabled:
