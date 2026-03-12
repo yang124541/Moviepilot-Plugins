@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.9.23",
+    "version": "1.9.24",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.24": "优化页面加载性能：UI 任务请求改为短超时(4s)且不重试，UI 使用 5 秒缓存并且不主动探测 device_id，减少插件页长时间加载阻塞。",
       "v1.9.23": "按需求回退进度条实现：恢复 Vuetify VProgressLinear，并固定使用 normal/primary 颜色，不再随开始/暂停状态变色。",
       "v1.9.22": "修复开始态仍显示橘黄：前端轮询渲染中 downloading 状态强制使用正常色 primary，不再沿用旧 progress_color。",
       "v1.9.21": "修复进度条颜色不切换：改为自绘进度条并在轮询时直接更新填充色与宽度，确保开始/暂停状态切换时颜色实时变化。",

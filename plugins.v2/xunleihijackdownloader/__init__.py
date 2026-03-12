@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.23"
+    plugin_version = "1.9.24"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -74,6 +74,7 @@ class XunleiHijackDownloader(_PluginBase):
     _last_request_error = ""
     _task_list_cache: Dict[str, Dict[str, Any]] = {}
     _task_list_cache_ttl_seconds = 1.0
+    _task_list_cache_ttl_ui_seconds = 5.0
     _ui_last_active_ts = 0.0
     _ui_keepalive_seconds = 20.0
 
@@ -1830,6 +1831,7 @@ class XunleiHijackDownloader(_PluginBase):
         purpose_token = str(purpose or "external").strip().lower()
         if purpose_token not in ("ui", "move", "control", "external"):
             purpose_token = "external"
+        ui_mode = (purpose_token == "ui")
         if purpose_token not in ("ui", "move", "control") and not self._is_ui_active():
             return []
         mode = str(phase_mode or "active").strip().lower()
@@ -1843,13 +1845,21 @@ class XunleiHijackDownloader(_PluginBase):
                 ts = float(cache_obj.get("ts") or 0.0)
             except Exception:
                 ts = 0.0
-            if ts > 0 and (now_ts - ts) < float(self._task_list_cache_ttl_seconds):
+            cache_ttl = float(self._task_list_cache_ttl_ui_seconds if ui_mode else self._task_list_cache_ttl_seconds)
+            if ts > 0 and (now_ts - ts) < cache_ttl:
                 cached_tasks = cache_obj.get("tasks")
                 if isinstance(cached_tasks, list):
                     return [x for x in cached_tasks if isinstance(x, dict)]
         try:
             headers = self._get_headers()
-            device_id = str(self._fetch_device_id() or self._device_id or "").strip()
+            # UI 场景不做主动探测，避免页面加载被长超时请求阻塞。
+            if ui_mode:
+                device_id = str(self._device_id or "").strip()
+            else:
+                device_id = str(self._fetch_device_id() or self._device_id or "").strip()
+            req_timeout = 4 if ui_mode else 20
+            req_retry_count = 0 if ui_mode else 2
+            req_retry_auth = False if ui_mode else True
 
             def _extract_tasks(data: Any) -> List[Dict[str, Any]]:
                 if not isinstance(data, dict):
@@ -1940,8 +1950,9 @@ class XunleiHijackDownloader(_PluginBase):
                     method="GET",
                     url=url,
                     headers={**headers, "device-space": ""},
-                    timeout=20,
-                    retry_auth=True
+                    timeout=req_timeout,
+                    retry_auth=req_retry_auth,
+                    retry_count=req_retry_count
                 )
                 if not resp or not resp.ok:
                     last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
