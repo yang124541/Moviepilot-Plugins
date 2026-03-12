@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.17"
+    plugin_version = "1.9.18"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -818,7 +818,7 @@ class XunleiHijackDownloader(_PluginBase):
             "const state=(it&&it.state)?String(it.state):'downloading';"
             "let leftText=(it&&it.left_time)?String(it.left_time):'--';"
             "let speedText=(it&&it.speed_text)?String(it.speed_text):'0B/s';"
-            "if(state==='paused'){leftText='已暂停';speedText='已暂停';}"
+            "if(state==='paused'){leftText='已暂停';speedText='';}"
             "else if(state==='queued'){leftText='排队中';speedText='排队中';}"
             "else if(state==='failed'){leftText='失败';speedText='失败';}"
             "if(leftEl){leftEl.textContent=leftText;}"
@@ -2792,7 +2792,7 @@ class XunleiHijackDownloader(_PluginBase):
     def _task_metric_texts(self, task: Dict[str, Any], progress: float) -> Tuple[str, str]:
         state = self._task_progress_state(task)
         if state == "paused":
-            return "已暂停", "已暂停"
+            return "已暂停", ""
         if state == "queued":
             return "排队中", "排队中"
         if state == "failed":
