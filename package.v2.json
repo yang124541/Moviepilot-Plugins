@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.8.2",
+    "version": "1.8.3",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.8.3": "任务拉取路径对齐迅雷前端：改用 space/page_token/filters/limit/pan_auth/device_space 参数组合，并保留失活空间降噪处理。",
       "v1.8.2": "修复禁用后仍刷日志：enabled=false 时页面不再挂轮询，任务指标/任务列表/操作接口全部短路，不再继续执行插件逻辑。",
       "v1.8.1": "降低 device_space_not_active 刷屏：同一空间命中未激活后，本轮立即停止该空间后续探针并尝试刷新 device_id。",
       "v1.7.10": "日志文案统一中文化：迅雷接管插件的初始化、任务拉取、搬运汇总与异常日志全部改为中文输出。",

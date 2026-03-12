@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.2"
+    plugin_version = "1.8.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1747,18 +1747,29 @@ class XunleiHijackDownloader(_PluginBase):
             if device_id and device_id not in spaces:
                 spaces.append(device_id)
 
-            completed_probes: List[Tuple[str, Dict[str, str]]] = [
-                ("default", {}),
-                ("phase_complete", {"phase": "PHASE_TYPE_COMPLETE"}),
-                ("phase_finished", {"phase": "PHASE_TYPE_FINISHED"}),
-                ("phase_complete_lc", {"phase": "phase_type_complete"}),
-                ("status_completed", {"status": "completed"}),
-                ("state_completed", {"state": "completed"}),
-            ]
-            task_type_probes: List[Tuple[str, List[Tuple[str, Dict[str, str]]]]] = []
+            probe_filters: List[Tuple[str, Dict[str, Any]]] = []
             if include_runner:
-                task_type_probes.append(("user%23runner", [("default", {})]))
-            task_type_probes.append(("user%23download-url", completed_probes))
+                probe_filters.append((
+                    "runner_active",
+                    {
+                        "phase": {"in": "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR"},
+                        "type": {"in": "user#runner"},
+                    }
+                ))
+            probe_filters.append((
+                "download_active",
+                {
+                    "phase": {"in": "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR"},
+                    "type": {"in": "user#download-url,user#download"},
+                }
+            ))
+            probe_filters.append((
+                "download_completed",
+                {
+                    "phase": {"in": "PHASE_TYPE_COMPLETE,PHASE_TYPE_FINISHED,PHASE_TYPE_SEEDING"},
+                    "type": {"in": "user#download-url,user#download"},
+                }
+            ))
 
             merged_tasks: Dict[str, Dict[str, Any]] = {}
             merged_scores: Dict[str, int] = {}
@@ -1773,18 +1784,16 @@ class XunleiHijackDownloader(_PluginBase):
                 progress = str(task.get("progress") or "").strip()
                 return f"name:{name}|phase:{phase}|progress:{progress}"
 
-            def _source_score(task: Dict[str, Any], task_type: str, probe_name: str) -> int:
+            def _source_score(task: Dict[str, Any], probe_name: str) -> int:
                 score = 0
-                if task_type == "user%23runner":
+                if probe_name.startswith("runner"):
                     score += 200
                 completed = self._is_task_completed(task)
                 if completed:
                     score += 120
                 else:
                     score += 10
-                if probe_name == "default":
-                    score += 10
-                elif probe_name in ("phase_complete", "phase_finished", "phase_complete_lc", "status_completed", "state_completed"):
+                if probe_name.endswith("completed"):
                     score += 40
                 speed_value = float(self._task_speed_number(task=task, key="download_speed") or 0)
                 if speed_value > 0 and not completed:
@@ -1793,81 +1802,83 @@ class XunleiHijackDownloader(_PluginBase):
                 return score
 
             last_err = ""
+            pan_auth = str(self._pan_auth or headers.get("pan-auth") or "").strip()
             for space in spaces:
                 space_inactive = False
-                for task_type, probes in task_type_probes:
+                for probe_name, filter_obj in probe_filters:
                     if space_inactive:
                         break
-                    for probe_name, extra_params in probes:
-                        query = [
-                            f"type={task_type}",
-                            f"device_space={quote(space) if space else ''}",
-                        ]
-                        for k, v in extra_params.items():
-                            token = str(v or "").strip()
-                            if token:
-                                query.append(f"{k}={quote(token)}")
-                        url = (
-                            f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                            f"?{'&'.join(query)}"
+                    filters_text = json.dumps(filter_obj, ensure_ascii=False, separators=(",", ":"))
+                    query = [
+                        f"space={quote(space) if space else ''}",
+                        "page_token=",
+                        f"filters={quote(filters_text)}",
+                        "limit=100",
+                        "device_space=",
+                    ]
+                    if pan_auth:
+                        query.append(f"pan_auth={quote(pan_auth)}")
+                    url = (
+                        f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                        f"?{'&'.join(query)}"
+                    )
+                    resp, obj = self._request_json(
+                        method="GET",
+                        url=url,
+                        headers={**headers, "device-space": ""},
+                        timeout=20,
+                        retry_auth=True
+                    )
+                    if not resp or not resp.ok:
+                        last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
+                        inactive_space = bool(space) and self._is_device_space_not_active(
+                            obj=obj, error_text=self._last_request_error
                         )
-                        resp, obj = self._request_json(
-                            method="GET",
-                            url=url,
-                            headers={**headers, "device-space": space},
-                            timeout=20,
-                            retry_auth=True
-                        )
-                        if not resp or not resp.ok:
-                            last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
-                            inactive_space = bool(space) and self._is_device_space_not_active(
+                        if inactive_space:
+                            refreshed = self._refresh_device_id_on_inactive_space(
                                 obj=obj, error_text=self._last_request_error
                             )
-                            if inactive_space:
-                                refreshed = self._refresh_device_id_on_inactive_space(
-                                    obj=obj, error_text=self._last_request_error
-                                )
-                                if refreshed:
-                                    new_space = str(self._device_id or "").strip()
-                                    if new_space and new_space not in spaces:
-                                        spaces.append(new_space)
-                                logger.info(
-                                    f"检测到空间未激活，停止该空间后续探针："
-                                    f"space={space or 'EMPTY'}，type={task_type}，probe={probe_name}，{last_err}"
-                                )
-                                space_inactive = True
-                                break
-                            logger.warn(
-                                f"拉取任务失败[v{self.plugin_version}]："
-                                f"space={space or 'EMPTY'}，type={task_type}，probe={probe_name}，{last_err}"
+                            if refreshed:
+                                new_space = str(self._device_id or "").strip()
+                                if new_space and new_space not in spaces:
+                                    spaces.append(new_space)
+                            logger.info(
+                                f"检测到空间未激活，停止该空间后续探针："
+                                f"space={space or 'EMPTY'}，probe={probe_name}，{last_err}"
                             )
-                            continue
-                        tasks = _extract_tasks(obj)
-                        logger.info(
-                            f"拉取任务结果[v{self.plugin_version}]："
-                            f"space={space or 'EMPTY'}，type={task_type}，probe={probe_name}，数量={len(tasks)}"
+                            space_inactive = True
+                            break
+                        logger.warn(
+                            f"拉取任务失败[v{self.plugin_version}]："
+                            f"space={space or 'EMPTY'}，probe={probe_name}，{last_err}"
                         )
-                        if not tasks:
+                        continue
+                    tasks = _extract_tasks(obj)
+                    logger.info(
+                        f"拉取任务结果[v{self.plugin_version}]："
+                        f"space={space or 'EMPTY'}，probe={probe_name}，数量={len(tasks)}"
+                    )
+                    if not tasks:
+                        continue
+                    probe_stats.append(f"{space or 'EMPTY'}:{probe_name}={len(tasks)}")
+                    for task in tasks:
+                        key = _task_merge_key(task)
+                        if not key:
                             continue
-                        probe_stats.append(f"{space or 'EMPTY'}:{task_type}:{probe_name}={len(tasks)}")
+                        new_score = _source_score(task=task, probe_name=probe_name)
+                        old_score = merged_scores.get(key, -1)
+                        if key not in merged_tasks or new_score >= old_score:
+                            merged_tasks[key] = task
+                            merged_scores[key] = new_score
+                    if not device_id:
                         for task in tasks:
-                            key = _task_merge_key(task)
-                            if not key:
-                                continue
-                            new_score = _source_score(task=task, task_type=task_type, probe_name=probe_name)
-                            old_score = merged_scores.get(key, -1)
-                            if key not in merged_tasks or new_score >= old_score:
-                                merged_tasks[key] = task
-                                merged_scores[key] = new_score
-                        if not device_id:
-                            for task in tasks:
-                                if isinstance(task, dict):
-                                    params = task.get("params") if isinstance(task.get("params"), dict) else {}
-                                    target = str(params.get("target") or task.get("target") or "").strip()
-                                    if target:
-                                        self._device_id = target
-                                        self._save_config()
-                                        break
+                            if isinstance(task, dict):
+                                params = task.get("params") if isinstance(task.get("params"), dict) else {}
+                                target = str(params.get("target") or task.get("target") or "").strip()
+                                if target:
+                                    self._device_id = target
+                                    self._save_config()
+                                    break
             if merged_tasks:
                 logger.info(
                     f"任务合并结果[v{self.plugin_version}]："
