@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.7.8",
+    "version": "1.7.9",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.7.9": "移除顶部轮询占位行：轮询触发器改为内嵌到提示条容器内，彻底消除首条上方留白。",
       "v1.7.8": "修复数据页首条上方空白：隐藏轮询节点容器改为 0 高度并清零边距，不再占据顶部留白。",
       "v1.7.7": "修复已完成任务误判为 running：任务合并改为完成态优先；完成判定仅依据迅雷状态字段，不再按 progress 推断。",
       "v1.7.6": "样式微调：进一步加大首图标与标题之间的横向间距（pr-2 调整为 pr-4）。",
