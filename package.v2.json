@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.9.3",
+    "version": "1.9.4",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.4": "修复控制按钮图标与显隐：按钮改为显式 VIcon 渲染并默认隐藏，仅在任务行 hover 时显示，解决空白方块与光晕错位。",
       "v1.9.3": "修复控制按钮样式：开始/暂停/删除改为固定 28px 方形图标按钮，hover 光晕与图标居中，避免扁长显示。",
       "v1.9.2": "任务控制改为单次请求：开始/暂停点击后仅向迅雷 method/patch 控制接口发送 1 次请求，避免多重重试导致卡顿。",
       "v1.9.1": "版本号升级到 1.9.1，用于触发 MoviePilot 识别升级。",
