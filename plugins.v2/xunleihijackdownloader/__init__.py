@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.4"
+    plugin_version = "1.8.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -380,7 +380,7 @@ class XunleiHijackDownloader(_PluginBase):
             },
         ]
 
-        tasks = self._list_download_tasks(include_runner=False)
+        tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
         visible_tasks = [task for task in tasks if not self._is_moved_task(task)]
         if not visible_tasks:
             page.append({
@@ -437,7 +437,7 @@ class XunleiHijackDownloader(_PluginBase):
         if not self._enabled:
             return {"success": True, "items": []}
         try:
-            tasks = self._list_download_tasks(include_runner=False)
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
             items: List[Dict[str, Any]] = []
             for task in tasks:
                 if self._is_moved_task(task):
@@ -812,10 +812,13 @@ class XunleiHijackDownloader(_PluginBase):
         if status not in (TorrentStatus.TRANSFER, TorrentStatus.DOWNLOADING):
             return None
 
-        tasks = self._list_download_tasks()
+        hash_set = self._normalize_hashs(hashs)
+        if status == TorrentStatus.TRANSFER:
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="completed")
+        else:
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
         if not tasks:
             return []
-        hash_set = self._normalize_hashs(hashs)
 
         results: List[Union[schemas.TransferTorrent, schemas.DownloadingTorrent]] = []
         for task in tasks:
@@ -905,7 +908,7 @@ class XunleiHijackDownloader(_PluginBase):
     def downloader_info(self, downloader: Optional[str] = None) -> Optional[List[schemas.DownloaderInfo]]:
         if downloader and not self._is_xunlei_downloader(downloader):
             return None
-        tasks = self._list_download_tasks(include_runner=True)
+        tasks = self._list_download_tasks(include_runner=True, phase_mode="active")
         dl_speed = 0.0
         up_speed = 0.0
         for task in tasks:
@@ -1542,7 +1545,7 @@ class XunleiHijackDownloader(_PluginBase):
                 )
                 return
             target_root.mkdir(parents=True, exist_ok=True)
-            tasks = self._list_download_tasks()
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="completed")
             now_ts = time.time()
             stats = {
                 "moved": 0,
@@ -1730,10 +1733,13 @@ class XunleiHijackDownloader(_PluginBase):
         finally:
             self._move_lock.release()
 
-    def _list_download_tasks(self, include_runner: bool = False) -> List[Dict[str, Any]]:
+    def _list_download_tasks(self, include_runner: bool = False, phase_mode: str = "active") -> List[Dict[str, Any]]:
         if not self._enabled:
             return []
-        cache_key = "runner" if include_runner else "download"
+        mode = str(phase_mode or "active").strip().lower()
+        if mode not in ("active", "completed", "all"):
+            mode = "active"
+        cache_key = ("runner" if include_runner else "download") + f":{mode}"
         now_ts = time.time()
         cache_obj = self._task_list_cache.get(cache_key) if isinstance(self._task_list_cache, dict) else None
         if isinstance(cache_obj, dict):
@@ -1764,23 +1770,22 @@ class XunleiHijackDownloader(_PluginBase):
             if device_id and device_id not in spaces:
                 spaces.append(device_id)
 
-            all_phases = "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR,PHASE_TYPE_COMPLETE,PHASE_TYPE_FINISHED,PHASE_TYPE_SEEDING"
-            probe_filters: List[Tuple[str, Dict[str, Any]]] = []
+            active_phases = "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR"
+            complete_phase = "PHASE_TYPE_COMPLETE"
+            if mode == "completed":
+                phase_in = complete_phase
+            elif mode == "all":
+                phase_in = f"{active_phases},{complete_phase}"
+            else:
+                phase_in = active_phases
+            type_in = "user#download-url,user#download"
             if include_runner:
-                probe_filters.append((
-                    "runner_active",
-                    {
-                        "phase": {"in": "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR"},
-                        "type": {"in": "user#runner"},
-                    }
-                ))
-            probe_filters.append((
-                "download_all",
-                {
-                    "phase": {"in": all_phases},
-                    "type": {"in": "user#download-url,user#download"},
-                }
-            ))
+                type_in = f"user#runner,{type_in}"
+            probe_name = f"{'runner+' if include_runner else ''}download_{mode}"
+            filter_obj: Dict[str, Any] = {
+                "phase": {"in": phase_in},
+                "type": {"in": type_in},
+            }
 
             merged_tasks: Dict[str, Dict[str, Any]] = {}
             merged_scores: Dict[str, int] = {}
@@ -1815,81 +1820,76 @@ class XunleiHijackDownloader(_PluginBase):
             last_err = ""
             pan_auth = str(self._pan_auth or headers.get("pan-auth") or "").strip()
             for space in spaces:
-                space_inactive = False
-                for probe_name, filter_obj in probe_filters:
-                    if space_inactive:
-                        break
-                    filters_text = json.dumps(filter_obj, ensure_ascii=False, separators=(",", ":"))
-                    query = [
-                        f"space={quote(space) if space else ''}",
-                        "page_token=",
-                        f"filters={quote(filters_text)}",
-                        "limit=100",
-                        "device_space=",
-                    ]
-                    if pan_auth:
-                        query.append(f"pan_auth={quote(pan_auth)}")
-                    url = (
-                        f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
-                        f"?{'&'.join(query)}"
+                filters_text = json.dumps(filter_obj, ensure_ascii=False, separators=(",", ":"))
+                query = [
+                    f"space={quote(space) if space else ''}",
+                    "page_token=",
+                    f"filters={quote(filters_text)}",
+                    "limit=100",
+                    "device_space=",
+                ]
+                if pan_auth:
+                    query.append(f"pan_auth={quote(pan_auth)}")
+                url = (
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks"
+                    f"?{'&'.join(query)}"
+                )
+                resp, obj = self._request_json(
+                    method="GET",
+                    url=url,
+                    headers={**headers, "device-space": ""},
+                    timeout=20,
+                    retry_auth=True
+                )
+                if not resp or not resp.ok:
+                    last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
+                    inactive_space = bool(space) and self._is_device_space_not_active(
+                        obj=obj, error_text=self._last_request_error
                     )
-                    resp, obj = self._request_json(
-                        method="GET",
-                        url=url,
-                        headers={**headers, "device-space": ""},
-                        timeout=20,
-                        retry_auth=True
-                    )
-                    if not resp or not resp.ok:
-                        last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
-                        inactive_space = bool(space) and self._is_device_space_not_active(
+                    if inactive_space:
+                        refreshed = self._refresh_device_id_on_inactive_space(
                             obj=obj, error_text=self._last_request_error
                         )
-                        if inactive_space:
-                            refreshed = self._refresh_device_id_on_inactive_space(
-                                obj=obj, error_text=self._last_request_error
-                            )
-                            if refreshed:
-                                new_space = str(self._device_id or "").strip()
-                                if new_space and new_space not in spaces:
-                                    spaces.append(new_space)
-                            logger.info(
-                                f"检测到空间未激活，停止该空间后续探针："
-                                f"space={space or 'EMPTY'}，probe={probe_name}，{last_err}"
-                            )
-                            space_inactive = True
-                            break
-                        logger.warn(
-                            f"拉取任务失败[v{self.plugin_version}]："
+                        if refreshed:
+                            new_space = str(self._device_id or "").strip()
+                            if new_space and new_space not in spaces:
+                                spaces.append(new_space)
+                        logger.info(
+                            f"检测到空间未激活，停止该空间后续请求："
                             f"space={space or 'EMPTY'}，probe={probe_name}，{last_err}"
                         )
                         continue
-                    tasks = _extract_tasks(obj)
-                    logger.debug(
-                        f"拉取任务结果[v{self.plugin_version}]："
-                        f"space={space or 'EMPTY'}，probe={probe_name}，数量={len(tasks)}"
+                    logger.warn(
+                        f"拉取任务失败[v{self.plugin_version}]："
+                        f"space={space or 'EMPTY'}，probe={probe_name}，{last_err}"
                     )
-                    if not tasks:
+                    continue
+                tasks = _extract_tasks(obj)
+                logger.debug(
+                    f"拉取任务结果[v{self.plugin_version}]："
+                    f"space={space or 'EMPTY'}，probe={probe_name}，数量={len(tasks)}"
+                )
+                if not tasks:
+                    continue
+                probe_stats.append(f"{space or 'EMPTY'}:{probe_name}={len(tasks)}")
+                for task in tasks:
+                    key = _task_merge_key(task)
+                    if not key:
                         continue
-                    probe_stats.append(f"{space or 'EMPTY'}:{probe_name}={len(tasks)}")
+                    new_score = _source_score(task=task, probe_name=probe_name)
+                    old_score = merged_scores.get(key, -1)
+                    if key not in merged_tasks or new_score >= old_score:
+                        merged_tasks[key] = task
+                        merged_scores[key] = new_score
+                if not device_id:
                     for task in tasks:
-                        key = _task_merge_key(task)
-                        if not key:
-                            continue
-                        new_score = _source_score(task=task, probe_name=probe_name)
-                        old_score = merged_scores.get(key, -1)
-                        if key not in merged_tasks or new_score >= old_score:
-                            merged_tasks[key] = task
-                            merged_scores[key] = new_score
-                    if not device_id:
-                        for task in tasks:
-                            if isinstance(task, dict):
-                                params = task.get("params") if isinstance(task.get("params"), dict) else {}
-                                target = str(params.get("target") or task.get("target") or "").strip()
-                                if target:
-                                    self._device_id = target
-                                    self._save_config()
-                                    break
+                        if isinstance(task, dict):
+                            params = task.get("params") if isinstance(task.get("params"), dict) else {}
+                            target = str(params.get("target") or task.get("target") or "").strip()
+                            if target:
+                                self._device_id = target
+                                self._save_config()
+                                break
             if merged_tasks:
                 merged_list = list(merged_tasks.values())
                 self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": merged_list}
@@ -2932,7 +2932,7 @@ class XunleiHijackDownloader(_PluginBase):
             return False
         if downloader:
             return True
-        tasks = self._list_download_tasks()
+        tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
         if not tasks:
             return None
         task_ids = {self._task_key(x) for x in tasks if isinstance(x, dict) and self._task_key(x)}
