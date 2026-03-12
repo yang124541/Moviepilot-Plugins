@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.15"
+    plugin_version = "1.9.16"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -465,8 +465,7 @@ class XunleiHijackDownloader(_PluginBase):
                     continue
                 progress = self._task_progress(task)
                 size_text = self._format_bytes(self._task_size(task))
-                left_time = self._task_left_time(task, progress) or "--"
-                speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
+                left_time, speed_text = self._task_metric_texts(task=task, progress=progress)
                 progress_color = self._task_progress_color(task)
                 task_state = self._task_progress_state(task)
                 items.append({
@@ -533,8 +532,7 @@ class XunleiHijackDownloader(_PluginBase):
 
         progress = self._task_progress(task)
         size_text = self._format_bytes(self._task_size(task))
-        left_time = self._task_left_time(task, progress) or "--"
-        speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
+        left_time, speed_text = self._task_metric_texts(task=task, progress=progress)
         can_start = bool(task_id)
         can_pause = bool(task_id)
         can_delete = bool(task_id)
@@ -2627,16 +2625,34 @@ class XunleiHijackDownloader(_PluginBase):
     @staticmethod
     def _task_status_values(task: Dict[str, Any]) -> List[str]:
         values: List[str] = []
-        for key in ("phase", "status", "state", "phase_name", "status_text", "state_text"):
+        for key in ("phase", "status", "state", "phase_name", "status_text", "state_text", "message"):
             value = task.get(key)
             if value is not None:
                 values.append(str(value).strip().lower())
         params = task.get("params")
         if isinstance(params, dict):
-            for key in ("phase", "status", "state", "phase_name", "status_text", "state_text"):
+            for key in ("phase", "status", "state", "phase_name", "status_text", "state_text", "message"):
                 value = params.get(key)
                 if value is not None:
                     values.append(str(value).strip().lower())
+            spec_obj = None
+            spec_raw = params.get("spec")
+            if isinstance(spec_raw, dict):
+                spec_obj = spec_raw
+            elif isinstance(spec_raw, str):
+                spec_text = str(spec_raw or "").strip()
+                if spec_text.startswith("{") and spec_text.endswith("}"):
+                    try:
+                        parsed = json.loads(spec_text)
+                        if isinstance(parsed, dict):
+                            spec_obj = parsed
+                    except Exception:
+                        spec_obj = None
+            if isinstance(spec_obj, dict):
+                for key in ("phase", "status", "state", "phase_name", "status_text", "state_text", "message"):
+                    value = spec_obj.get(key)
+                    if value is not None:
+                        values.append(str(value).strip().lower())
         return values
 
     def _task_speed_text(self, task: Dict[str, Any], key: str) -> Optional[str]:
@@ -2780,6 +2796,20 @@ class XunleiHijackDownloader(_PluginBase):
             return "00:00:00"
         return self._format_seconds(left_bytes / speed)
 
+    def _task_metric_texts(self, task: Dict[str, Any], progress: float) -> Tuple[str, str]:
+        state = self._task_progress_state(task)
+        if state == "paused":
+            return "已暂停", "已暂停"
+        if state == "queued":
+            return "排队中", "排队中"
+        if state == "failed":
+            return "失败", "失败"
+        if state == "completed":
+            return "已完成", "0B/s"
+        left_time = self._task_left_time(task, progress) or "--"
+        speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
+        return left_time, speed_text
+
     def _task_state_text(self, task: Dict[str, Any]) -> str:
         if self._is_task_completed(task):
             return "已完成"
@@ -2788,7 +2818,7 @@ class XunleiHijackDownloader(_PluginBase):
         if self._is_task_paused(task):
             return "已暂停"
         for text in self._task_status_values(task):
-            if any(k in text for k in ("waiting", "wait", "pending", "queue")):
+            if any(k in text for k in ("waiting", "wait", "pending", "queue", "排队", "等待")):
                 return "排队中"
         return "下载中"
 
@@ -2800,7 +2830,7 @@ class XunleiHijackDownloader(_PluginBase):
         if self._is_task_paused(task):
             return "paused"
         for text in self._task_status_values(task):
-            if any(k in text for k in ("waiting", "wait", "pending", "queue")):
+            if any(k in text for k in ("waiting", "wait", "pending", "queue", "排队", "等待")):
                 return "queued"
         return "downloading"
 
@@ -2818,13 +2848,13 @@ class XunleiHijackDownloader(_PluginBase):
 
     def _is_task_paused(self, task: Dict[str, Any]) -> bool:
         for text in self._task_status_values(task):
-            if any(k in text for k in ("pause", "paused", "suspend", "stop", "stopped", "halt")):
+            if any(k in text for k in ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")):
                 return True
         return False
 
     def _is_task_failed(self, task: Dict[str, Any]) -> bool:
         for text in self._task_status_values(task):
-            if any(k in text for k in ("fail", "failed", "error", "invalid")):
+            if any(k in text for k in ("fail", "failed", "error", "invalid", "失败", "错误")):
                 return True
         return False
 
