@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.10"
+    plugin_version = "1.9.11"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -694,7 +694,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "density": "compact",
                 "variant": "text",
                 "color": color,
-                "text": " ",
+                "text": "",
                 "prependIcon": icon,
                 "title": text,
                 "disabled": bool(disabled),
@@ -745,6 +745,12 @@ class XunleiHijackDownloader(_PluginBase):
             "for(const node of nodes){"
             "if(!node||node.dataset.xunleiBound==='1'){continue;}"
             "node.dataset.xunleiBound='1';"
+            "try{"
+            "const prep=node.querySelector('.v-btn__prepend');"
+            "if(prep){prep.style.marginInlineStart='0';prep.style.marginInlineEnd='0';}"
+            "const content=node.querySelector('.v-btn__content');"
+            "if(content){content.style.justifyContent='center';content.style.gap='0';}"
+            "}catch(_e){}"
             "node.addEventListener('click',async(ev)=>{"
             "try{if(ev){ev.preventDefault();ev.stopPropagation();}}catch(_e){}"
             "if(node.getAttribute('aria-disabled')==='true'||node.disabled===true){return;}"
