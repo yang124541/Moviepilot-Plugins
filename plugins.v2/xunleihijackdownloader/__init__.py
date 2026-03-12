@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.8"
+    plugin_version = "1.9.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -692,13 +692,13 @@ class XunleiHijackDownloader(_PluginBase):
             "props": {
                 "size": "x-small",
                 "density": "compact",
-                "variant": "tonal",
+                "variant": "text",
                 "color": color,
                 "title": text,
                 "disabled": bool(disabled),
                 "class": "ml-1 xunlei-action-btn",
                 "rounded": "sm",
-                "style": "min-width:28px;width:28px;height:28px;padding:0;transition:box-shadow .15s ease;",
+                "style": "min-width:28px;width:28px;height:28px;padding:0;background:transparent;transition:box-shadow .15s ease;",
                 "id": str(button_id or ""),
                 "data-xunlei-api": str(api_path or ""),
                 "data-xunlei-success": str(success_message or ""),
@@ -710,6 +710,7 @@ class XunleiHijackDownloader(_PluginBase):
                     "props": {
                         "icon": icon,
                         "size": 14,
+                        "color": color,
                     },
                 }
             ],
