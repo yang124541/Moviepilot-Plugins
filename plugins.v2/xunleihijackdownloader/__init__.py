@@ -576,7 +576,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 {"component": "VCol", "props": {"cols": "auto", "class": "py-0 pr-4 d-flex align-center"}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"class": "py-0", "style": "flex:1 1 auto;min-width:0;padding-right:16px;"},
+                                    "props": {"cols": 5, "md": 5, "class": "py-0", "style": "min-width:0;"},
                                     "content": [
                                         {
                                             "component": "VListItem",
@@ -586,7 +586,13 @@ class XunleiHijackDownloader(_PluginBase):
                                                 "class": "px-0",
                                                 "style": "padding-inline-start:0;padding-inline-end:0;",
                                             },
-                                        },
+                                        }
+                                    ],
+                                },
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 4, "md": 4, "class": "py-0", "style": "min-width:0;"},
+                                    "content": [
                                         {
                                             "component": "div",
                                             "props": {
@@ -620,12 +626,6 @@ class XunleiHijackDownloader(_PluginBase):
                                                 }
                                             ],
                                         },
-                                    ],
-                                },
-                                {
-                                    "component": "VCol",
-                                    "props": {"class": "py-0 d-flex align-center", "style": "flex:0 1 360px;min-width:220px;max-width:520px;"},
-                                    "content": [
                                         {
                                             "component": "VProgressLinear",
                                             "props": {
@@ -634,7 +634,6 @@ class XunleiHijackDownloader(_PluginBase):
                                                 "height": 5,
                                                 "rounded": True,
                                                 "color": "primary",
-                                                "style": "width:100%;",
                                             },
                                         },
                                     ],
