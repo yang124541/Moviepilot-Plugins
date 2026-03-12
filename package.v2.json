@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.9.11",
+    "version": "1.9.12",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.12": "进一步修复按钮图标居中：将 prepend 图标绝对定位到按钮中心并隐藏空内容容器，确保图标与光晕严格重合。",
       "v1.9.11": "修复按钮图标居中：清除 prepend 默认边距并强制内容居中，图标对齐到光晕正中间。",
       "v1.9.10": "修复控制按钮图标不显示：回退为 VBtn 的 prependIcon 渲染路径，保持图标常显与 hover 光晕。",
       "v1.9.9": "修复控制按钮显示：图标常显、默认无底色，仅在 hover 时显示光晕反馈。",
