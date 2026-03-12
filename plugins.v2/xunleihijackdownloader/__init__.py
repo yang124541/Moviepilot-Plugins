@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.9"
+    plugin_version = "1.8.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1993,6 +1993,7 @@ class XunleiHijackDownloader(_PluginBase):
                 headers,
             ]
             local_hints: List[str] = []
+            verify_budget = 2
             query_texts: List[str] = []
             base_query = []
             if pan_auth:
@@ -2090,7 +2091,16 @@ class XunleiHijackDownloader(_PluginBase):
                                         if hint:
                                             local_hints.append(hint)
                                         continue
-                                    if self._is_operation_success(obj=obj, ids=set(id_list), resp=resp):
+                                    op_success = self._is_operation_success(obj=obj, ids=set(id_list), resp=resp)
+                                    http_status_zero = self._is_http_status_zero(obj=obj)
+                                    if op_success or http_status_zero:
+                                        if self._action_needs_state_verify(action=action):
+                                            if verify_budget > 0:
+                                                verify_budget -= 1
+                                                if self._verify_task_action_effect(task_id=first_id, action=action):
+                                                    return True, local_hints
+                                            local_hints.append("控制回执成功但任务状态未变化，继续尝试其它控制报文")
+                                            continue
                                         return True, local_hints
                                     hint = str(self._extract_api_error(obj) or "").strip()
                                     if not hint:
@@ -2123,7 +2133,16 @@ class XunleiHijackDownloader(_PluginBase):
                                     if hint:
                                         local_hints.append(hint)
                                     continue
-                                if self._is_operation_success(obj=obj, ids=set(id_list), resp=resp):
+                                op_success = self._is_operation_success(obj=obj, ids=set(id_list), resp=resp)
+                                http_status_zero = self._is_http_status_zero(obj=obj)
+                                if op_success or http_status_zero:
+                                    if self._action_needs_state_verify(action=action):
+                                        if verify_budget > 0:
+                                            verify_budget -= 1
+                                            if self._verify_task_action_effect(task_id=first_id, action=action):
+                                                return True, local_hints
+                                        local_hints.append("控制回执成功但任务状态未变化，继续尝试其它控制报文")
+                                        continue
                                     return True, local_hints
                                 hint = str(self._extract_api_error(obj) or "").strip()
                                 if not hint:
@@ -2181,19 +2200,66 @@ class XunleiHijackDownloader(_PluginBase):
     def _phase_candidates_for_action(action: str) -> List[str]:
         token = str(action or "").strip().lower()
         if token in ("start", "resume", "continue", "unpause"):
-            return ["phase_type_running", "PHASE_TYPE_RUNNING", "running", "RUNNING"]
+            return ["phase_type_running", "PHASE_TYPE_RUNNING", "running", "RUNNING", "start", "START"]
         if token in ("pause", "stop", "suspend"):
-            return ["phase_type_paused", "PHASE_TYPE_PAUSED", "paused", "PAUSED"]
+            return ["phase_type_paused", "PHASE_TYPE_PAUSED", "pause", "PAUSE", "paused", "PAUSED"]
         return []
 
     @staticmethod
     def _phase_spec_candidates_for_action(action: str) -> List[str]:
         token = str(action or "").strip().lower()
         if token in ("start", "resume", "continue", "unpause"):
-            return ["running", "RUNNING"]
+            return ["running", "RUNNING", "start", "START"]
         if token in ("pause", "stop", "suspend"):
-            return ["paused", "PAUSED"]
+            return ["pause", "PAUSE", "paused", "PAUSED"]
         return []
+
+    @staticmethod
+    def _action_needs_state_verify(action: str) -> bool:
+        token = str(action or "").strip().lower()
+        return token in ("start", "resume", "continue", "unpause", "pause", "stop", "suspend")
+
+    @staticmethod
+    def _is_http_status_zero(obj: Any) -> bool:
+        if not isinstance(obj, dict):
+            return False
+        value = obj.get("HttpStatus")
+        if value is None:
+            return False
+        try:
+            return int(value) == 0
+        except Exception:
+            return False
+
+    def _verify_task_action_effect(self, task_id: str, action: str, timeout_seconds: float = 1.8) -> bool:
+        key = str(task_id or "").strip()
+        if not key:
+            return False
+        if not self._action_needs_state_verify(action=action):
+            return True
+        deadline = time.time() + max(0.6, float(timeout_seconds or 1.8))
+        while time.time() <= deadline:
+            self._task_list_cache = {}
+            tasks = self._list_download_tasks(include_runner=True, phase_mode="all")
+            target = None
+            for task in tasks:
+                if self._task_key(task) == key:
+                    target = task
+                    break
+            if target is not None:
+                action_token = str(action or "").strip().lower()
+                if action_token in ("pause", "stop", "suspend"):
+                    if self._is_task_paused(target):
+                        return True
+                elif action_token in ("start", "resume", "continue", "unpause"):
+                    if not self._is_task_paused(target) and not self._is_task_failed(target):
+                        return True
+                else:
+                    return True
+            if time.time() >= deadline:
+                break
+            time.sleep(0.35)
+        return False
 
     @staticmethod
     def _is_operation_success(obj: Any, ids: Set[str], resp: Optional[requests.Response] = None) -> bool:
@@ -2208,13 +2274,6 @@ class XunleiHijackDownloader(_PluginBase):
             return False
         if obj.get("error") or obj.get("err"):
             return False
-        http_status = obj.get("HttpStatus")
-        if http_status is not None:
-            try:
-                if int(http_status) == 0:
-                    return True
-            except Exception:
-                pass
 
         code_ok = False
         if isinstance(obj.get("success"), bool):
