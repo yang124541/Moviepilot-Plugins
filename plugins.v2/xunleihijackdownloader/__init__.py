@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.5"
+    plugin_version = "1.8.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1766,9 +1766,15 @@ class XunleiHijackDownloader(_PluginBase):
                     return [x for x in list_obj if isinstance(x, dict)]
                 return []
 
-            spaces: List[str] = [""]
-            if device_id and device_id not in spaces:
+            spaces: List[str] = []
+            if device_id:
                 spaces.append(device_id)
+            else:
+                logger.info(
+                    f"跳过任务请求[v{self.plugin_version}]：未获取到 device_id，不再使用 EMPTY 空间探测。"
+                )
+                self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": []}
+                return []
 
             active_phases = "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR"
             complete_phase = "PHASE_TYPE_COMPLETE"
