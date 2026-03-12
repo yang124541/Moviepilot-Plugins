@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.7.10"
+    plugin_version = "1.7.11"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1786,7 +1786,10 @@ class XunleiHijackDownloader(_PluginBase):
 
             last_err = ""
             for space in spaces:
+                space_inactive = False
                 for task_type, probes in task_type_probes:
+                    if space_inactive:
+                        break
                     for probe_name, extra_params in probes:
                         query = [
                             f"type={task_type}",
@@ -1809,6 +1812,23 @@ class XunleiHijackDownloader(_PluginBase):
                         )
                         if not resp or not resp.ok:
                             last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
+                            inactive_space = bool(space) and self._is_device_space_not_active(
+                                obj=obj, error_text=self._last_request_error
+                            )
+                            if inactive_space:
+                                refreshed = self._refresh_device_id_on_inactive_space(
+                                    obj=obj, error_text=self._last_request_error
+                                )
+                                if refreshed:
+                                    new_space = str(self._device_id or "").strip()
+                                    if new_space and new_space not in spaces:
+                                        spaces.append(new_space)
+                                logger.info(
+                                    f"检测到空间未激活，停止该空间后续探针："
+                                    f"space={space or 'EMPTY'}，type={task_type}，probe={probe_name}，{last_err}"
+                                )
+                                space_inactive = True
+                                break
                             logger.warn(
                                 f"拉取任务失败[v{self.plugin_version}]："
                                 f"space={space or 'EMPTY'}，type={task_type}，probe={probe_name}，{last_err}"
