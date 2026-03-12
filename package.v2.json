@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v2.0.3": "增强按钮交互反馈：加重 hover 光晕，并将按钮图标严格居中显示。",
       "v2.0.2": "开始/暂停合并为单按钮并按状态自动切换；点击后轮询提速到 1 秒，状态落盘后恢复 5 秒。",
       "v2.0.1": "基于 dbebc2d 版本恢复迅雷插件并发布 2.0.1。",
       "v1.9.31": "恢复上版按钮固定定位并微调进度条位置：按钮绝对定位在右侧预留区，主列占满按钮左侧，进度条贴近按钮且标题超出省略。",

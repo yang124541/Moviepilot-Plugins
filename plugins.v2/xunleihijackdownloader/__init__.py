@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.0.2"
+    plugin_version = "2.0.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -699,13 +699,12 @@ class XunleiHijackDownloader(_PluginBase):
                 "density": "compact",
                 "variant": "text",
                 "color": color,
-                "text": "",
-                "prependIcon": icon,
+                "icon": icon,
                 "title": text,
                 "disabled": bool(disabled),
-                "class": "ml-1 xunlei-action-btn",
+                "class": "ml-1 xunlei-action-btn d-inline-flex align-center justify-center",
                 "rounded": "sm",
-                "style": "min-width:28px;width:28px;height:28px;padding:0;background:transparent;transition:box-shadow .15s ease;",
+                "style": "min-width:28px;width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;transition:box-shadow .15s ease;",
                 "id": str(button_id or ""),
                 "data-xunlei-api": str(api_path or ""),
                 "data-xunlei-success": str(success_message or ""),
@@ -789,10 +788,10 @@ class XunleiHijackDownloader(_PluginBase):
             "try{"
             "const hoverShadow=(c)=>{"
             "const k=String(c||'').toLowerCase();"
-            "if(k==='success'){return '0 0 0 8px rgba(76,175,80,.35)';}"
-            "if(k==='warning'){return '0 0 0 8px rgba(251,140,0,.35)';}"
-            "if(k==='error'){return '0 0 0 8px rgba(255,82,82,.35)';}"
-            "return '0 0 0 8px rgba(25,118,210,.35)';"
+            "if(k==='success'){return '0 0 0 10px rgba(76,175,80,.48),0 0 18px rgba(76,175,80,.42)';}"
+            "if(k==='warning'){return '0 0 0 10px rgba(251,140,0,.48),0 0 18px rgba(251,140,0,.42)';}"
+            "if(k==='error'){return '0 0 0 10px rgba(255,82,82,.48),0 0 18px rgba(255,82,82,.42)';}"
+            "return '0 0 0 10px rgba(25,118,210,.48),0 0 18px rgba(25,118,210,.42)';"
             "};"
             "const nodes=document.querySelectorAll('[id^=\"xunlei-action-\"]');"
             "if(!nodes||!nodes.length){return;}"
