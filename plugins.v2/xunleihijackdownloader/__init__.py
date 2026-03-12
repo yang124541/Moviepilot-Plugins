@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.7.6"
+    plugin_version = "1.7.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1780,12 +1780,17 @@ class XunleiHijackDownloader(_PluginBase):
                 score = 0
                 if task_type == "user%23runner":
                     score += 200
+                completed = self._is_task_completed(task)
+                if completed:
+                    score += 120
+                else:
+                    score += 10
                 if probe_name == "default":
-                    score += 20
-                if not self._is_task_completed(task):
-                    score += 50
+                    score += 10
+                elif probe_name in ("phase_complete", "phase_finished", "phase_complete_lc", "status_completed", "state_completed"):
+                    score += 40
                 speed_value = float(self._task_speed_number(task=task, key="download_speed") or 0)
-                if speed_value > 0:
+                if speed_value > 0 and not completed:
                     score += 30
                 score += int(float(self._task_progress(task) or 0) / 25)
                 return score
@@ -2154,6 +2159,9 @@ class XunleiHijackDownloader(_PluginBase):
                 "seeding",
             )):
                 return True
+            # 兼容中文完成态文本
+            if ("下载完成" in text or "已完成" in text or "任务完成" in text or "完成下载" in text) and "未完成" not in text:
+                return True
         for key in ("completed", "is_completed", "finished", "is_finished", "done", "is_done", "success"):
             value = task.get(key)
             if value is None and isinstance(params, dict):
@@ -2165,17 +2173,6 @@ class XunleiHijackDownloader(_PluginBase):
             text = str(value or "").strip().lower()
             if text in ("1", "true", "yes", "ok", "success", "completed", "done", "finished"):
                 return True
-        progress = task.get("progress")
-        if progress is None and isinstance(params, dict):
-            progress = params.get("progress")
-        if progress is not None:
-            try:
-                p = float(progress)
-                if p <= 1:
-                    return p >= 0.999
-                return p >= 100
-            except Exception:
-                pass
         return False
 
     def _task_name(self, task: Dict[str, Any]) -> str:
@@ -2308,13 +2305,13 @@ class XunleiHijackDownloader(_PluginBase):
     @staticmethod
     def _task_status_values(task: Dict[str, Any]) -> List[str]:
         values: List[str] = []
-        for key in ("phase", "status", "state"):
+        for key in ("phase", "status", "state", "phase_name", "status_text", "state_text"):
             value = task.get(key)
             if value is not None:
                 values.append(str(value).strip().lower())
         params = task.get("params")
         if isinstance(params, dict):
-            for key in ("phase", "status", "state"):
+            for key in ("phase", "status", "state", "phase_name", "status_text", "state_text"):
                 value = params.get(key)
                 if value is not None:
                     values.append(str(value).strip().lower())
