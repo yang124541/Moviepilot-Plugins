@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.9.16",
+    "version": "1.9.17",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.17": "修复开始/暂停状态渲染：状态判定加入运行/暂停冲突裁决并去除 spec 状态干扰；前端按 state 强制进度条颜色（暂停=黄）与文案（暂停显示“已暂停”）。",
       "v1.9.16": "修复暂停态显示：增强暂停状态识别（含 message/spec/中文状态词），暂停时进度条自动切换 warning 黄条，剩余时间与速度统一显示“已暂停”。",
       "v1.9.15": "修复按钮位置跳动并收紧留白：移除运行时图标重定位逻辑，按钮列改为 auto，避免页面打开后按钮二次位移及进度条与按钮间固定空白。",
       "v1.9.14": "增强按钮 hover 光晕：按按钮颜色应用更明显的外发光效果（success/warning/error）。",

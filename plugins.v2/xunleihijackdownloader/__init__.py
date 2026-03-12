@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.16"
+    plugin_version = "1.9.17"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -782,17 +782,22 @@ class XunleiHijackDownloader(_PluginBase):
             "const applyProgress=(k,it)=>{"
             "const pRaw=(it&&it.progress!=null)?Number(it.progress):NaN;"
             "const p=Number.isFinite(pRaw)?Math.max(0,Math.min(100,pRaw)):0;"
-            "const token=(it&&it.progress_color)?String(it.progress_color):'primary';"
-            "const color=colorMap[token]||colorMap.primary;"
             "const state=(it&&it.state)?String(it.state):'downloading';"
+            "let token=(it&&it.progress_color)?String(it.progress_color):'';"
+            "if(state==='paused'){token='warning';}"
+            "else if(state==='completed'){token=token||'success';}"
+            "else if(state==='failed'){token=token||'error';}"
+            "else if(state==='queued'){token=token||'secondary';}"
+            "else{token=token||'primary';}"
+            "const color=colorMap[token]||colorMap.primary;"
             "const bar=document.getElementById('xunlei-progress-'+k);"
             "if(!bar){return;}"
             "bar.setAttribute('aria-valuenow',String(p));"
             "bar.setAttribute('data-xunlei-state',state);"
             "const det=bar.querySelector('.v-progress-linear__determinate');"
-            "if(det){det.style.width=p+'%';det.style.backgroundColor=color;det.style.opacity='1';}"
+            "if(det){det.style.width=p+'%';det.style.setProperty('background-color',color,'important');det.style.opacity='1';}"
             "const bg=bar.querySelector('.v-progress-linear__background');"
-            "if(bg){bg.style.backgroundColor=color;bg.style.opacity='0.2';}"
+            "if(bg){bg.style.setProperty('background-color',color,'important');bg.style.opacity='0.2';}"
             "};"
             "const f=async()=>{"
             "try{"
@@ -809,9 +814,15 @@ class XunleiHijackDownloader(_PluginBase):
             "const sizeEl=document.getElementById('xunlei-metric-size-'+k);"
             "if(sizeEl){sizeEl.textContent=(it&&it.size_text)?String(it.size_text):'--';}"
             "const leftEl=document.getElementById('xunlei-metric-left-'+k);"
-            "if(leftEl){leftEl.textContent=(it&&it.left_time)?String(it.left_time):'--';}"
             "const speedEl=document.getElementById('xunlei-metric-speed-'+k);"
-            "if(speedEl){speedEl.textContent=(it&&it.speed_text)?String(it.speed_text):'0B/s';}"
+            "const state=(it&&it.state)?String(it.state):'downloading';"
+            "let leftText=(it&&it.left_time)?String(it.left_time):'--';"
+            "let speedText=(it&&it.speed_text)?String(it.speed_text):'0B/s';"
+            "if(state==='paused'){leftText='已暂停';speedText='已暂停';}"
+            "else if(state==='queued'){leftText='排队中';speedText='排队中';}"
+            "else if(state==='failed'){leftText='失败';speedText='失败';}"
+            "if(leftEl){leftEl.textContent=leftText;}"
+            "if(speedEl){speedEl.textContent=speedText;}"
             "applyProgress(k,it);"
             "}"
             "}catch(e){}"
@@ -2635,24 +2646,6 @@ class XunleiHijackDownloader(_PluginBase):
                 value = params.get(key)
                 if value is not None:
                     values.append(str(value).strip().lower())
-            spec_obj = None
-            spec_raw = params.get("spec")
-            if isinstance(spec_raw, dict):
-                spec_obj = spec_raw
-            elif isinstance(spec_raw, str):
-                spec_text = str(spec_raw or "").strip()
-                if spec_text.startswith("{") and spec_text.endswith("}"):
-                    try:
-                        parsed = json.loads(spec_text)
-                        if isinstance(parsed, dict):
-                            spec_obj = parsed
-                    except Exception:
-                        spec_obj = None
-            if isinstance(spec_obj, dict):
-                for key in ("phase", "status", "state", "phase_name", "status_text", "state_text", "message"):
-                    value = spec_obj.get(key)
-                    if value is not None:
-                        values.append(str(value).strip().lower())
         return values
 
     def _task_speed_text(self, task: Dict[str, Any], key: str) -> Optional[str]:
@@ -2827,8 +2820,15 @@ class XunleiHijackDownloader(_PluginBase):
             return "completed"
         if self._is_task_failed(task):
             return "failed"
-        if self._is_task_paused(task):
+        paused = self._is_task_paused(task)
+        running = self._is_task_running(task)
+        if paused and not running:
             return "paused"
+        if running and not paused:
+            return "downloading"
+        if paused and running:
+            speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
+            return "downloading" if speed > 0 else "paused"
         for text in self._task_status_values(task):
             if any(k in text for k in ("waiting", "wait", "pending", "queue", "排队", "等待")):
                 return "queued"
@@ -2847,10 +2847,63 @@ class XunleiHijackDownloader(_PluginBase):
         return "primary"
 
     def _is_task_paused(self, task: Dict[str, Any]) -> bool:
-        for text in self._task_status_values(task):
-            if any(k in text for k in ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")):
+        paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
+        running_words = ("running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")
+        phase_values: List[str] = []
+        for key in ("phase", "phase_name"):
+            value = task.get(key)
+            if value is not None:
+                phase_values.append(str(value).strip().lower())
+        params = task.get("params")
+        if isinstance(params, dict):
+            for key in ("phase", "phase_name"):
+                value = params.get(key)
+                if value is not None:
+                    phase_values.append(str(value).strip().lower())
+        for text in phase_values:
+            if any(k in text for k in paused_words):
                 return True
-        return False
+            if any(k in text for k in running_words):
+                return False
+        values = self._task_status_values(task)
+        paused = any(any(k in text for k in paused_words) for text in values)
+        if not paused:
+            return False
+        running = any(any(k in text for k in running_words) for text in values)
+        if running:
+            speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
+            if speed > 0:
+                return False
+        return True
+
+    def _is_task_running(self, task: Dict[str, Any]) -> bool:
+        running_words = ("running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")
+        paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
+        phase_values: List[str] = []
+        for key in ("phase", "phase_name"):
+            value = task.get(key)
+            if value is not None:
+                phase_values.append(str(value).strip().lower())
+        params = task.get("params")
+        if isinstance(params, dict):
+            for key in ("phase", "phase_name"):
+                value = params.get(key)
+                if value is not None:
+                    phase_values.append(str(value).strip().lower())
+        for text in phase_values:
+            if any(k in text for k in running_words):
+                return True
+            if any(k in text for k in paused_words):
+                return False
+        values = self._task_status_values(task)
+        running = any(any(k in text for k in running_words) for text in values)
+        if not running:
+            return False
+        paused = any(any(k in text for k in paused_words) for text in values)
+        if paused:
+            speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
+            return speed > 0
+        return True
 
     def _is_task_failed(self, task: Dict[str, Any]) -> bool:
         for text in self._task_status_values(task):
