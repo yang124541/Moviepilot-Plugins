@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.1"
+    plugin_version = "1.9.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -477,15 +477,7 @@ class XunleiHijackDownloader(_PluginBase):
         )
         if action != "delete" and f"id:{task_key}" in self._moved_task_keys:
             return schemas.Response(success=False, message="任务已迁移，无法继续操作。")
-        action_candidates: List[str]
-        if action == "start":
-            action_candidates = ["start", "resume", "continue", "unpause"]
-        elif action == "pause":
-            action_candidates = ["pause", "stop", "suspend"]
-        elif action == "delete":
-            action_candidates = ["delete", "remove"]
-        else:
-            action_candidates = [action]
+        action_candidates: List[str] = [action]
 
         ok = False
         for act in action_candidates:
@@ -695,8 +687,6 @@ class XunleiHijackDownloader(_PluginBase):
                 "data-xunlei-failure": str(failure_message or ""),
             },
         }
-        if not disabled:
-            button["props"]["onclick"] = XunleiHijackDownloader._build_action_onclick(api_path=api_path)
         return button
 
     @staticmethod
@@ -1987,6 +1977,54 @@ class XunleiHijackDownloader(_PluginBase):
         pan_auth = str(self._pan_auth or headers.get("pan-auth") or "").strip()
 
         first_id = id_list[0]
+        action_token = str(action or "").strip().lower()
+        single_phase = ""
+        if action_token in ("start", "resume", "continue", "unpause"):
+            single_phase = "running"
+        elif action_token in ("pause", "stop", "suspend"):
+            single_phase = "pause"
+        if single_phase:
+            device_space = str(preferred_space or self._device_id or "").strip()
+            task_type = str(preferred_type or "user#download-url").strip()
+            spec_text = json.dumps({"phase": single_phase}, ensure_ascii=False, separators=(",", ":"))
+            query_parts = []
+            if pan_auth:
+                query_parts.append(f"pan_auth={quote(pan_auth)}")
+            query_parts.append("device_space=")
+            url = (
+                f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/method/patch/drive/v1/task"
+                f"?{'&'.join(query_parts)}"
+            )
+            payload: Dict[str, Any] = {
+                "id": first_id,
+                "set_params": {"spec": spec_text},
+                "spec": spec_text,
+            }
+            if device_space:
+                payload["space"] = device_space
+            if task_type:
+                payload["type"] = task_type
+            resp, obj = self._request_json(
+                method="POST",
+                url=url,
+                headers={**headers, "device-space": ""},
+                payload=payload,
+                timeout=8,
+                retry_auth=False,
+                retry_count=0,
+            )
+            if resp and resp.ok:
+                if self._is_http_status_zero(obj) or self._is_operation_success(obj=obj, ids={first_id}, resp=resp):
+                    return True
+                if isinstance(obj, dict) and not obj.get("error") and not obj.get("err"):
+                    return True
+            detail = str(self._extract_api_error(obj) or "").strip()
+            if detail:
+                self._last_request_error = detail
+            if not self._last_request_error:
+                self._last_request_error = f"action={action} 单次请求未成功"
+            return False
+
         payload_templates: List[Dict[str, Any]] = [
             {"action": action, "ids": id_list},
             {"action": action, "task_ids": id_list},

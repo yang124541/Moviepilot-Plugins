@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.9.1",
+    "version": "1.9.2",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.2": "任务控制改为单次请求：开始/暂停点击后仅向迅雷 method/patch 控制接口发送 1 次请求，避免多重重试导致卡顿。",
       "v1.9.1": "版本号升级到 1.9.1，用于触发 MoviePilot 识别升级。",
       "v1.8.11": "修复按钮点击无响应：新增页面脚本绑定按钮点击兜底通道（不依赖内联 onclick），并增加任务控制入口日志，便于确认前端点击是否到达后端。",
       "v1.8.10": "修复开始/暂停“回执成功但无实际效果”：控制后新增任务状态回查校验，仅状态实际变更才判定成功；并补充 phase=pause/start 取值兼容。",
