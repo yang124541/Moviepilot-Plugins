@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.7.0",
+    "version": "1.7.1",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.7.1": "修复下载行前置图标显示不完整：图标改为 1:1 尺寸并关闭裁切，完整展示 BT 图标。",
       "v1.7.0": "增强实时状态刷新：轮询更新大小/剩余时间/速度时，同步更新进度条进度与状态样式（下载中/暂停/完成/失败）。",
       "v1.6.9": "样式微调：缩小迅雷下载任务行前置图标尺寸，降低视觉占比，保持信息区更紧凑。",
       "v1.6.8": "修复进度指标偶发不更新：轮询触发改为 onload/onerror 双保险，并对 metrics 请求禁用缓存，确保每秒局部刷新稳定生效。",
