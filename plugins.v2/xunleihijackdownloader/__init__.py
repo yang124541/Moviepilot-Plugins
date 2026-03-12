@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.7"
+    plugin_version = "1.8.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -358,11 +358,11 @@ class XunleiHijackDownloader(_PluginBase):
                                     "style": "display:none;width:0;height:0;",
                                     "onload": self._build_page_metrics_poller_onerror(
                                         plugin_id=plugin_id,
-                                        interval_ms=1000,
+                                        interval_ms=5000,
                                     ),
                                     "onerror": self._build_page_metrics_poller_onerror(
                                         plugin_id=plugin_id,
-                                        interval_ms=1000,
+                                        interval_ms=5000,
                                     ),
                                 },
                             },
@@ -693,12 +693,12 @@ class XunleiHijackDownloader(_PluginBase):
         )
 
     @staticmethod
-    def _build_page_metrics_poller_onerror(plugin_id: str, interval_ms: int = 1000) -> str:
+    def _build_page_metrics_poller_onerror(plugin_id: str, interval_ms: int = 5000) -> str:
         plugin = str(plugin_id or "").strip().replace("\\", "\\\\").replace("'", "\\'")
         try:
             ms = int(interval_ms)
         except Exception:
-            ms = 1000
+            ms = 5000
         if ms < 300:
             ms = 300
         metrics_api = f"/api/v1/plugin/{plugin}/task/metrics"

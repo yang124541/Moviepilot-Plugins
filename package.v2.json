@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.8.7",
+    "version": "1.8.8",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.8.8": "数据页实时轮询间隔由 1 秒调整为 5 秒，降低任务接口请求频率与日志噪声。",
       "v1.8.7": "修复任务列表异常：补回 json 模块导入，解决日志持续报错“name 'json' is not defined”。",
       "v1.8.6": "移除 EMPTY 空间探测：任务请求必须使用有效 device_id，未获取 device_id 时直接跳过并缓存空结果，减少无效请求与刷屏日志。",
       "v1.8.5": "修正完成态请求：已完成任务改为单独使用 PHASE_TYPE_COMPLETE；任务拉取收敛为单探针单请求并保留 1 秒缓存，避免多 probe 高频重复请求。",
