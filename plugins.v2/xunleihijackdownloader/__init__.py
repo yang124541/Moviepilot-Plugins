@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.3"
+    plugin_version = "1.8.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -71,12 +71,15 @@ class XunleiHijackDownloader(_PluginBase):
     _completed_seen_ttl_seconds = 86400
     _completed_seen_max_missing = 20
     _last_request_error = ""
+    _task_list_cache: Dict[str, Dict[str, Any]] = {}
+    _task_list_cache_ttl_seconds = 1.0
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
         self._moved_task_order = self._load_moved_task_keys()
         self._moved_task_keys = set(self._moved_task_order)
         self._task_name_cache = {}
+        self._task_list_cache = {}
         self._completed_seen_at = {}
         self._completed_seen_order = []
         self._completed_seen_name = {}
@@ -491,6 +494,8 @@ class XunleiHijackDownloader(_PluginBase):
                 break
         if ok and action == "delete":
             self._remember_moved_key(task_key)
+        if ok:
+            self._task_list_cache = {}
         action_name = {"start": "开始", "pause": "暂停", "delete": "删除"}.get(action, action)
         if ok:
             return schemas.Response(success=True, message=f"{action_name}任务成功。")
@@ -1728,6 +1733,18 @@ class XunleiHijackDownloader(_PluginBase):
     def _list_download_tasks(self, include_runner: bool = False) -> List[Dict[str, Any]]:
         if not self._enabled:
             return []
+        cache_key = "runner" if include_runner else "download"
+        now_ts = time.time()
+        cache_obj = self._task_list_cache.get(cache_key) if isinstance(self._task_list_cache, dict) else None
+        if isinstance(cache_obj, dict):
+            try:
+                ts = float(cache_obj.get("ts") or 0.0)
+            except Exception:
+                ts = 0.0
+            if ts > 0 and (now_ts - ts) < float(self._task_list_cache_ttl_seconds):
+                cached_tasks = cache_obj.get("tasks")
+                if isinstance(cached_tasks, list):
+                    return [x for x in cached_tasks if isinstance(x, dict)]
         try:
             headers = self._get_headers()
             device_id = str(self._fetch_device_id() or self._device_id or "").strip()
@@ -1747,6 +1764,7 @@ class XunleiHijackDownloader(_PluginBase):
             if device_id and device_id not in spaces:
                 spaces.append(device_id)
 
+            all_phases = "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR,PHASE_TYPE_COMPLETE,PHASE_TYPE_FINISHED,PHASE_TYPE_SEEDING"
             probe_filters: List[Tuple[str, Dict[str, Any]]] = []
             if include_runner:
                 probe_filters.append((
@@ -1757,16 +1775,9 @@ class XunleiHijackDownloader(_PluginBase):
                     }
                 ))
             probe_filters.append((
-                "download_active",
+                "download_all",
                 {
-                    "phase": {"in": "PHASE_TYPE_PENDING,PHASE_TYPE_RUNNING,PHASE_TYPE_PAUSED,PHASE_TYPE_ERROR"},
-                    "type": {"in": "user#download-url,user#download"},
-                }
-            ))
-            probe_filters.append((
-                "download_completed",
-                {
-                    "phase": {"in": "PHASE_TYPE_COMPLETE,PHASE_TYPE_FINISHED,PHASE_TYPE_SEEDING"},
+                    "phase": {"in": all_phases},
                     "type": {"in": "user#download-url,user#download"},
                 }
             ))
@@ -1854,7 +1865,7 @@ class XunleiHijackDownloader(_PluginBase):
                         )
                         continue
                     tasks = _extract_tasks(obj)
-                    logger.info(
+                    logger.debug(
                         f"拉取任务结果[v{self.plugin_version}]："
                         f"space={space or 'EMPTY'}，probe={probe_name}，数量={len(tasks)}"
                     )
@@ -1880,11 +1891,13 @@ class XunleiHijackDownloader(_PluginBase):
                                     self._save_config()
                                     break
             if merged_tasks:
+                merged_list = list(merged_tasks.values())
+                self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": merged_list}
                 logger.info(
                     f"任务合并结果[v{self.plugin_version}]："
                     f"总数={len(merged_tasks)}，命中探针={'; '.join(probe_stats[:8])}"
                 )
-                return list(merged_tasks.values())
+                return merged_list
             if last_err:
                 logger.info(
                     f"任务列表为空（已遍历全部空间）[v{self.plugin_version}]："
@@ -1894,8 +1907,10 @@ class XunleiHijackDownloader(_PluginBase):
                 logger.info(
                     f"任务列表为空[v{self.plugin_version}]：device_id={device_id or 'EMPTY'}"
                 )
+            self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": []}
         except Exception as err:
             logger.warn(f"拉取任务列表异常[v{self.plugin_version}]：{err}")
+            self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": []}
         return []
 
     def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True, preferred_space: str = "") -> bool:
