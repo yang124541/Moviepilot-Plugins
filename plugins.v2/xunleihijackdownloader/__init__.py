@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.28"
+    plugin_version = "1.9.30"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -571,28 +571,21 @@ class XunleiHijackDownloader(_PluginBase):
                     "content": [
                         {
                             "component": "VRow",
-                            "props": {"align": "center", "noGutters": True, "class": "my-0 py-0", "style": "position:relative;flex-wrap:nowrap;padding-right:186px;"},
+                            "props": {"align": "center", "noGutters": True, "class": "my-0 py-0", "style": "position:relative;flex-wrap:nowrap;padding-right:76px;"},
                             "content": [
                                 {"component": "VCol", "props": {"cols": "auto", "class": "py-0 pr-4 d-flex align-center"}, "content": [image_node]},
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 5, "md": 5, "class": "py-0", "style": "min-width:0;"},
+                                    "props": {"class": "py-0", "style": "flex:1 1 0;min-width:0;"},
                                     "content": [
                                         {
-                                            "component": "VListItem",
+                                            "component": "div",
                                             "props": {
-                                                "title": task_name,
-                                                "density": "compact",
+                                                "textContent": task_name,
                                                 "class": "px-0",
-                                                "style": "padding-inline-start:0;padding-inline-end:0;",
+                                                "style": "height:24px;line-height:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
                                             },
-                                        }
-                                    ],
-                                },
-                                {
-                                    "component": "VCol",
-                                    "props": {"cols": 4, "md": 4, "class": "py-0", "style": "min-width:0;"},
-                                    "content": [
+                                        },
                                         {
                                             "component": "div",
                                             "props": {
@@ -640,7 +633,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": "auto", "class": "d-flex justify-end ga-1 py-0", "style": "position:absolute;right:76px;top:50%;transform:translateY(-50%);width:102px;max-width:102px;flex:0 0 102px;z-index:1;"},
+                                    "props": {"cols": "auto", "class": "d-flex justify-end ga-1 py-0", "style": "flex:0 0 102px;max-width:102px;"},
                                     "content": [
                                         self._build_task_action_button(
                                             text="开始",
