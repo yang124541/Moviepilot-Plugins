@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.13"
+    plugin_version = "1.9.14"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -705,6 +705,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "data-xunlei-api": str(api_path or ""),
                 "data-xunlei-success": str(success_message or ""),
                 "data-xunlei-failure": str(failure_message or ""),
+                "data-xunlei-hover-color": str(color or "primary"),
             },
         }
         return button
@@ -740,6 +741,13 @@ class XunleiHijackDownloader(_PluginBase):
             "const colorMap={primary:'#1976d2',warning:'#fb8c00',success:'#4caf50',error:'#ff5252',info:'#0288d1',secondary:'#9e9e9e'};"
             "const bindActionButtons=()=>{"
             "try{"
+            "const hoverShadow=(c)=>{"
+            "const k=String(c||'').toLowerCase();"
+            "if(k==='success'){return '0 0 0 8px rgba(76,175,80,.35)';}"
+            "if(k==='warning'){return '0 0 0 8px rgba(251,140,0,.35)';}"
+            "if(k==='error'){return '0 0 0 8px rgba(255,82,82,.35)';}"
+            "return '0 0 0 8px rgba(25,118,210,.35)';"
+            "};"
             "const nodes=document.querySelectorAll('[id^=\"xunlei-action-\"]');"
             "if(!nodes||!nodes.length){return;}"
             "for(const node of nodes){"
@@ -758,6 +766,13 @@ class XunleiHijackDownloader(_PluginBase):
             "const content=node.querySelector('.v-btn__content');"
             "if(content){content.style.display='none';}"
             "}catch(_e){}"
+            "node.addEventListener('mouseenter',()=>{"
+            "try{if(node.disabled===true||node.getAttribute('aria-disabled')==='true'){return;}"
+            "node.style.boxShadow=hoverShadow(node.getAttribute('data-xunlei-hover-color'));}catch(_e){}"
+            "},true);"
+            "node.addEventListener('mouseleave',()=>{"
+            "try{node.style.boxShadow='none';}catch(_e){}"
+            "},true);"
             "node.addEventListener('click',async(ev)=>{"
             "try{if(ev){ev.preventDefault();ev.stopPropagation();}}catch(_e){}"
             "if(node.getAttribute('aria-disabled')==='true'||node.disabled===true){return;}"
