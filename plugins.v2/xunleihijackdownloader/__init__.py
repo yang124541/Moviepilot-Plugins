@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.20"
+    plugin_version = "1.9.21"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -549,6 +549,7 @@ class XunleiHijackDownloader(_PluginBase):
         pause_btn_id = f"xunlei-action-pause-{btn_key}"
         delete_btn_id = f"xunlei-action-delete-{btn_key}"
         progress_color = self._task_progress_color(task)
+        progress_color_hex = self._progress_color_hex(progress_color)
 
         image_node: Dict[str, Any] = {
             "component": "VImg",
@@ -626,14 +627,25 @@ class XunleiHijackDownloader(_PluginBase):
                                             ],
                                         },
                                         {
-                                            "component": "VProgressLinear",
+                                            "component": "div",
                                             "props": {
-                                                "id": f"xunlei-progress-{dom_key}",
-                                                "modelValue": progress,
-                                                "height": 5,
-                                                "rounded": True,
-                                                "color": progress_color,
+                                                "id": f"xunlei-progress-track-{dom_key}",
+                                                "style": "height:5px;border-radius:999px;overflow:hidden;background:#e6e6e6;",
                                             },
+                                            "content": [
+                                                {
+                                                    "component": "div",
+                                                    "props": {
+                                                        "id": f"xunlei-progress-fill-{dom_key}",
+                                                        "style": (
+                                                            f"height:100%;width:{max(0.0, min(100.0, float(progress or 0))):.2f}%;"
+                                                            f"background:{progress_color_hex};"
+                                                            "border-radius:999px;"
+                                                            "transition:width .2s linear, background-color .2s linear;"
+                                                        ),
+                                                    },
+                                                }
+                                            ],
                                         },
                                     ],
                                 },
@@ -795,14 +807,19 @@ class XunleiHijackDownloader(_PluginBase):
             "else if(state==='queued'){token=token||'secondary';}"
             "else{token=token||'primary';}"
             "const color=colorMap[token]||colorMap.primary;"
+            "const track=document.getElementById('xunlei-progress-track-'+k);"
+            "const fill=document.getElementById('xunlei-progress-fill-'+k);"
+            "if(track){track.setAttribute('data-xunlei-state',state);}"
+            "if(fill){fill.style.width=p+'%';fill.style.backgroundColor=color;fill.style.opacity='1';}"
             "const bar=document.getElementById('xunlei-progress-'+k);"
-            "if(!bar){return;}"
+            "if(bar){"
             "bar.setAttribute('aria-valuenow',String(p));"
             "bar.setAttribute('data-xunlei-state',state);"
             "const det=bar.querySelector('.v-progress-linear__determinate');"
             "if(det){det.style.width=p+'%';det.style.setProperty('background-color',color,'important');det.style.opacity='1';}"
             "const bg=bar.querySelector('.v-progress-linear__background');"
             "if(bg){bg.style.setProperty('background-color',color,'important');bg.style.opacity='0.2';}"
+            "}"
             "};"
             "const f=async()=>{"
             "try{"
@@ -2904,6 +2921,19 @@ class XunleiHijackDownloader(_PluginBase):
         if state == "queued":
             return "secondary"
         return "primary"
+
+    @staticmethod
+    def _progress_color_hex(token: str) -> str:
+        key = str(token or "").strip().lower()
+        mapping = {
+            "primary": "#1976d2",
+            "warning": "#fb8c00",
+            "success": "#4caf50",
+            "error": "#ff5252",
+            "info": "#0288d1",
+            "secondary": "#9e9e9e",
+        }
+        return mapping.get(key, "#1976d2")
 
     def _is_task_paused(self, task: Dict[str, Any]) -> bool:
         phase_state = self._task_phase_state(task)
