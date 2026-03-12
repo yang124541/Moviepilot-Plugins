@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.4"
+    plugin_version = "1.9.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -680,12 +680,11 @@ class XunleiHijackDownloader(_PluginBase):
                 "disabled": bool(disabled),
                 "class": "ml-1 xunlei-action-btn",
                 "rounded": "sm",
-                "style": "min-width:28px;width:28px;height:28px;padding:0;opacity:0;pointer-events:none;transition:opacity .15s ease;",
+                "style": "min-width:28px;width:28px;height:28px;padding:0;transition:box-shadow .15s ease;",
                 "id": str(button_id or ""),
                 "data-xunlei-api": str(api_path or ""),
                 "data-xunlei-success": str(success_message or ""),
                 "data-xunlei-failure": str(failure_message or ""),
-                "data-xunlei-visible": "0",
             },
             "content": [
                 {
@@ -749,24 +748,6 @@ class XunleiHijackDownloader(_PluginBase):
             "alert((j&&j.message)?j.message:failMsg);"
             "}catch(e){alert('请求失败，请检查网络或权限');}"
             "},true);"
-            "const card=node.closest('.v-card');"
-            "if(card&&card.dataset.xunleiHoverBound!=='1'){"
-            "card.dataset.xunleiHoverBound='1';"
-            "const setVisible=(show)=>{"
-            "try{"
-            "const btns=card.querySelectorAll('[id^=\"xunlei-action-\"]');"
-            "for(const b of btns){"
-            "if(!b){continue;}"
-            "const disabled=(b.getAttribute('aria-disabled')==='true'||b.disabled===true);"
-            "if(show){b.style.opacity=disabled?'0.45':'1';b.style.pointerEvents=disabled?'none':'auto';b.dataset.xunleiVisible='1';}"
-            "else{b.style.opacity='0';b.style.pointerEvents='none';b.dataset.xunleiVisible='0';}"
-            "}"
-            "}catch(_e){}"
-            "};"
-            "card.addEventListener('mouseenter',()=>setVisible(true),true);"
-            "card.addEventListener('mouseleave',()=>setVisible(false),true);"
-            "setVisible(false);"
-            "}"
             "}"
             "}catch(e){}"
             "};"
