@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.8"
+    plugin_version = "1.8.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -419,20 +419,20 @@ class XunleiHijackDownloader(_PluginBase):
             })
         return page
 
-    def api_start_task(self, task_id: str = "", hash: str = "", space: str = "") -> schemas.Response:
+    def api_start_task(self, task_id: str = "", hash: str = "", space: str = "", task_type: str = "") -> schemas.Response:
         if not self._enabled:
             return schemas.Response(success=False, message="插件未启用。")
-        return self._api_task_action(task_id=task_id or hash, action="start", space=space)
+        return self._api_task_action(task_id=task_id or hash, action="start", space=space, task_type=task_type)
 
-    def api_pause_task(self, task_id: str = "", hash: str = "", space: str = "") -> schemas.Response:
+    def api_pause_task(self, task_id: str = "", hash: str = "", space: str = "", task_type: str = "") -> schemas.Response:
         if not self._enabled:
             return schemas.Response(success=False, message="插件未启用。")
-        return self._api_task_action(task_id=task_id or hash, action="pause", space=space)
+        return self._api_task_action(task_id=task_id or hash, action="pause", space=space, task_type=task_type)
 
-    def api_delete_task(self, task_id: str = "", hash: str = "", delete_file: bool = True, space: str = "") -> schemas.Response:
+    def api_delete_task(self, task_id: str = "", hash: str = "", delete_file: bool = True, space: str = "", task_type: str = "") -> schemas.Response:
         if not self._enabled:
             return schemas.Response(success=False, message="插件未启用。")
-        return self._api_task_action(task_id=task_id or hash, action="delete", delete_file=delete_file, space=space)
+        return self._api_task_action(task_id=task_id or hash, action="delete", delete_file=delete_file, space=space, task_type=task_type)
 
     def api_task_metrics(self) -> Dict[str, Any]:
         if not self._enabled:
@@ -467,7 +467,7 @@ class XunleiHijackDownloader(_PluginBase):
             logger.warn(f"迅雷任务指标接口失败：{err}")
             return {"success": False, "items": []}
 
-    def _api_task_action(self, task_id: str, action: str, delete_file: bool = True, space: str = "") -> schemas.Response:
+    def _api_task_action(self, task_id: str, action: str, delete_file: bool = True, space: str = "", task_type: str = "") -> schemas.Response:
         task_key = str(task_id or "").strip()
         if not task_key:
             return schemas.Response(success=False, message="任务ID不能为空。")
@@ -490,6 +490,7 @@ class XunleiHijackDownloader(_PluginBase):
                 action=act,
                 delete_file=bool(delete_file),
                 preferred_space=space,
+                preferred_type=task_type,
             )
             if ok:
                 break
@@ -524,10 +525,13 @@ class XunleiHijackDownloader(_PluginBase):
         can_pause = bool(task_id)
         can_delete = bool(task_id)
         quoted_id = quote(task_id or "", safe="")
-        space_qs = "&space="
-        start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}{space_qs}"
-        pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}{space_qs}"
-        delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}"
+        task_space = self._task_space(task)
+        task_type = self._task_type(task)
+        space_qs = f"&space={quote(task_space or '', safe='')}"
+        type_qs = f"&task_type={quote(task_type or '', safe='')}"
+        start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}{space_qs}{type_qs}"
+        pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}{space_qs}{type_qs}"
+        delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}{type_qs}"
         progress_color = self._task_progress_color(task)
 
         image_node: Dict[str, Any] = {
@@ -1920,7 +1924,8 @@ class XunleiHijackDownloader(_PluginBase):
             self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": []}
         return []
 
-    def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True, preferred_space: str = "") -> bool:
+    def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True,
+                       preferred_space: str = "", preferred_type: str = "") -> bool:
         id_list = [str(item or "").strip() for item in ids if str(item or "").strip()]
         if not id_list:
             self._last_request_error = "task_id 为空"
@@ -1936,6 +1941,8 @@ class XunleiHijackDownloader(_PluginBase):
         if self._auto_refresh_pan_auth and not headers.get("pan-auth"):
             self._last_request_error = "pan_auth 自动获取失败"
             return False
+        preferred_type = str(preferred_type or "").strip()
+        pan_auth = str(self._pan_auth or headers.get("pan-auth") or "").strip()
 
         first_id = id_list[0]
         payload_templates: List[Dict[str, Any]] = [
@@ -1948,6 +1955,9 @@ class XunleiHijackDownloader(_PluginBase):
             {"type": action, "id": first_id},
             {"type": action, "task_id": first_id},
         ]
+        if preferred_type:
+            payload_templates.append({"action": action, "id": first_id, "type": preferred_type})
+            payload_templates.append({"action": action, "task_id": first_id, "type": preferred_type})
         methods = ["PATCH", "POST", "PUT", "DELETE"]
         urls = [
             f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task/action",
@@ -1983,14 +1993,40 @@ class XunleiHijackDownloader(_PluginBase):
                 headers,
             ]
             local_hints: List[str] = []
+            query_texts: List[str] = []
+            base_query = []
+            if pan_auth:
+                base_query.append(f"pan_auth={quote(pan_auth)}")
+            query_texts.append("&".join(base_query + ["device_space="]))
+            if device_space:
+                query_texts.append("&".join(base_query + [f"device_space={quote(device_space)}"]))
+            query_texts = [x for i, x in enumerate(query_texts) if x and x not in query_texts[:i]]
+            wrapper_update_urls: List[str] = []
+            wrapper_action_urls: List[str] = []
+            for query_text in query_texts:
+                wrapper_update_urls.extend([
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/method/patch/drive/v1/task?{query_text}",
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/method/patch/drive/v1/tasks?{query_text}",
+                ])
+                wrapper_action_urls.extend([
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/method/post/drive/v1/task/action?{query_text}",
+                    f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/method/post/drive/v1/tasks/action?{query_text}",
+                ])
             phase_candidates = self._phase_candidates_for_action(action=action)
+            phase_spec_candidates = self._phase_spec_candidates_for_action(action=action)
             if phase_candidates:
                 update_urls = [
+                    *wrapper_update_urls,
                     f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/task",
                     f"{self._base_url}/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/tasks",
                 ]
-                update_methods = ["PATCH", "PUT", "POST"]
+                update_methods = ["POST", "PATCH", "PUT"]
                 phase_payloads: List[Dict[str, Any]] = []
+                type_candidates: List[str] = []
+                if preferred_type:
+                    type_candidates.append(preferred_type)
+                type_candidates.extend(["user#download-url", "user#download", "user#runner"])
+                type_candidates = [x for i, x in enumerate(type_candidates) if x and x not in type_candidates[:i]]
                 for phase in phase_candidates:
                     per_phase = [
                         {"id": first_id, "phase": phase},
@@ -2003,13 +2039,41 @@ class XunleiHijackDownloader(_PluginBase):
                     for base in per_phase:
                         phase_payloads.append(dict(base))
                         phase_payloads.append({**base, "space": device_space})
-                        phase_payloads.append({**base, "space": device_space, "type": "user#download-url"})
-                        phase_payloads.append({**base, "space": device_space, "type": "user#runner"})
                         phase_payloads.append({**base, "space": device_space, "target": device_space})
                         phase_payloads.append({**base, "space": device_space, "device_space": device_space})
                         phase_payloads.append({**base, "target": device_space, "device_space": device_space})
+                        for task_type in type_candidates:
+                            phase_payloads.append({**base, "space": device_space, "type": task_type})
+                for phase_spec in phase_spec_candidates:
+                    spec_text = json.dumps({"phase": phase_spec}, ensure_ascii=False, separators=(",", ":"))
+                    per_spec = [
+                        {"id": first_id, "set_params": {"spec": spec_text}, "spec": spec_text},
+                        {"task_id": first_id, "set_params": {"spec": spec_text}, "spec": spec_text},
+                    ]
+                    for base in per_spec:
+                        phase_payloads.append(dict(base))
+                        phase_payloads.append({**base, "space": device_space})
+                        phase_payloads.append({**base, "space": device_space, "target": device_space})
+                        phase_payloads.append({**base, "space": device_space, "device_space": device_space})
+                        for task_type in type_candidates:
+                            phase_payloads.append({**base, "space": device_space, "type": task_type})
+                if phase_payloads:
+                    uniq_payloads: List[Dict[str, Any]] = []
+                    seen_payload_keys: Set[str] = set()
+                    for payload in phase_payloads:
+                        try:
+                            key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                        except Exception:
+                            key = str(payload)
+                        if key in seen_payload_keys:
+                            continue
+                        seen_payload_keys.add(key)
+                        uniq_payloads.append(payload)
+                    phase_payloads = uniq_payloads
                 for method in update_methods:
                     for url in update_urls:
+                        if "/method/patch/" in url and method not in ("POST", "PATCH"):
+                            continue
                         for request_headers in header_variants:
                             for payload in phase_payloads:
                                 try:
@@ -2038,8 +2102,11 @@ class XunleiHijackDownloader(_PluginBase):
                                 except Exception as err:
                                     local_hints.append(str(err))
                                     continue
+            action_urls = [*wrapper_action_urls, *urls]
             for method in methods:
-                for url in urls:
+                for url in action_urls:
+                    if "/method/post/" in url and method != "POST":
+                        continue
                     for request_headers in header_variants:
                         for payload in payloads:
                             try:
@@ -2120,6 +2187,15 @@ class XunleiHijackDownloader(_PluginBase):
         return []
 
     @staticmethod
+    def _phase_spec_candidates_for_action(action: str) -> List[str]:
+        token = str(action or "").strip().lower()
+        if token in ("start", "resume", "continue", "unpause"):
+            return ["running", "RUNNING"]
+        if token in ("pause", "stop", "suspend"):
+            return ["paused", "PAUSED"]
+        return []
+
+    @staticmethod
     def _is_operation_success(obj: Any, ids: Set[str], resp: Optional[requests.Response] = None) -> bool:
         if resp is not None and resp.ok:
             try:
@@ -2132,6 +2208,13 @@ class XunleiHijackDownloader(_PluginBase):
             return False
         if obj.get("error") or obj.get("err"):
             return False
+        http_status = obj.get("HttpStatus")
+        if http_status is not None:
+            try:
+                if int(http_status) == 0:
+                    return True
+            except Exception:
+                pass
 
         code_ok = False
         if isinstance(obj.get("success"), bool):
@@ -2669,6 +2752,22 @@ class XunleiHijackDownloader(_PluginBase):
         params = task.get("params")
         if isinstance(params, dict):
             for key in ("target", "space", "device_space", "deviceSpace"):
+                value = params.get(key)
+                if value:
+                    return str(value).strip()
+        return ""
+
+    @staticmethod
+    def _task_type(task: Dict[str, Any]) -> str:
+        if not isinstance(task, dict):
+            return ""
+        for key in ("type", "task_type", "taskType"):
+            value = task.get(key)
+            if value:
+                return str(value).strip()
+        params = task.get("params")
+        if isinstance(params, dict):
+            for key in ("type", "task_type", "taskType"):
                 value = params.get(key)
                 if value:
                     return str(value).strip()
