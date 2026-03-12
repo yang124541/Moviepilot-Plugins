@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.7.9"
+    plugin_version = "1.7.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -105,8 +105,8 @@ class XunleiHijackDownloader(_PluginBase):
             self._start_move_scheduler()
         self._save_config()
         logger.info(
-            f"XunleiHijack[v{self.plugin_version}] initialized: "
-            f"enabled={self._enabled}, base_url={self._base_url}, move_enabled={self._move_enabled}"
+            f"迅雷接管[v{self.plugin_version}]初始化完成："
+            f"启用={self._enabled}，地址={self._base_url}，自动搬运={self._move_enabled}"
         )
 
     def get_state(self) -> bool:
@@ -454,7 +454,7 @@ class XunleiHijackDownloader(_PluginBase):
                 })
             return {"success": True, "items": items}
         except Exception as err:
-            logger.warn(f"XunleiHijack api_task_metrics failed: {err}")
+            logger.warn(f"迅雷任务指标接口失败：{err}")
             return {"success": False, "items": []}
 
     def _api_task_action(self, task_id: str, action: str, delete_file: bool = True, space: str = "") -> schemas.Response:
@@ -780,13 +780,13 @@ class XunleiHijackDownloader(_PluginBase):
         magnet = self._normalize_magnet(content)
         if not magnet:
             if self._fallback_to_builtin:
-                logger.warn(f"XunleiHijack[v{self.plugin_version}] fallback builtin: 不支持当前下载内容类型，未解析出 magnet。")
+                logger.warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：不支持当前下载内容类型，未解析出磁力链接。")
                 return None
             return "xunlei", None, None, "迅雷接管失败：仅支持磁力链接。"
         task_id, err = self._add_task(magnet)
         if not task_id:
             if self._fallback_to_builtin:
-                logger.warn(f"XunleiHijack[v{self.plugin_version}] fallback builtin: {err or '迅雷添加任务失败'}")
+                logger.warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：{err or '迅雷添加任务失败'}")
                 return None
             return "xunlei", None, None, err or "迅雷添加任务失败。"
         return "xunlei", task_id, "NoSubfolder", "添加下载成功"
@@ -967,7 +967,7 @@ class XunleiHijackDownloader(_PluginBase):
         try:
             self.save_data("moved_task_keys", list(self._moved_task_order))
         except Exception as err:
-            logger.warn(f"XunleiHijack persist moved keys failed: {err}")
+            logger.warn(f"保存已搬运任务键失败：{err}")
 
     def _load_completed_seen_cache(self) -> None:
         self._completed_seen_at = {}
@@ -1030,7 +1030,7 @@ class XunleiHijackDownloader(_PluginBase):
                 })
             self.save_data("completed_seen_cache", items)
         except Exception as err:
-            logger.warn(f"XunleiHijack persist completed cache failed: {err}")
+            logger.warn(f"保存已完成缓存失败：{err}")
 
     def _remember_completed_seen(self, move_key: str, now_ts: float, task_name: str = "") -> float:
         token = str(move_key or "").strip()
@@ -1170,8 +1170,8 @@ class XunleiHijackDownloader(_PluginBase):
         )
         self._scheduler.start()
         logger.info(
-            f"XunleiHijack move scheduler started: interval={self._move_interval_minutes}m, "
-            f"source={self._source_download_dir}, target={self._target_watch_dir}"
+            f"迅雷自动搬运调度已启动：间隔={self._move_interval_minutes}分钟，"
+            f"源目录={self._source_download_dir}，目标目录={self._target_watch_dir}"
         )
 
     def _get_headers(self) -> Dict[str, str]:
@@ -1253,7 +1253,7 @@ class XunleiHijackDownloader(_PluginBase):
             if not self._last_request_error:
                 self._last_request_error = "unknown-request-error"
             logger.warn(
-                f"XunleiHijack[v{self.plugin_version}] request failed: {method.upper()} {url} -> {self._last_request_error}"
+                f"迅雷请求失败[v{self.plugin_version}]：{method.upper()} {url} -> {self._last_request_error}"
             )
         elif not resp.ok:
             body_hint = ""
@@ -1278,7 +1278,7 @@ class XunleiHijackDownloader(_PluginBase):
             if token:
                 return str(token).strip()
         except Exception as err:
-            logger.warn(f"XunleiHijack fetch pan_auth failed: {err}")
+            logger.warn(f"获取 pan_auth 失败：{err}")
         return None
 
     def _fetch_device_id(self, force_refresh: bool = False, exclude_device: str = "") -> Optional[str]:
@@ -1318,7 +1318,7 @@ class XunleiHijackDownloader(_PluginBase):
                     token = str(params.get("target") or task.get("target") or "").strip()
                     self._append_device_candidate(candidates, token)
         except Exception as err:
-            logger.warn(f"XunleiHijack[v{self.plugin_version}] fetch device_id failed: {err}")
+            logger.warn(f"获取 device_id 失败[v{self.plugin_version}]：{err}")
 
         for endpoint in (
             "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/devices",
@@ -1420,17 +1420,17 @@ class XunleiHijackDownloader(_PluginBase):
                 merged = self._merge_error_texts(data)
                 if "task_create_count_limit" in merged or "任务创建次数达到上限" in merged:
                     logger.warn(
-                        f"XunleiHijack[v{self.plugin_version}] add task limited: device={device_id}, {self._last_request_error}"
+                        f"添加任务触发次数限制[v{self.plugin_version}]：device={device_id}，{self._last_request_error}"
                     )
                     return "迅雷任务创建失败：任务创建次数达到上限，请稍后重试。", False
                 if "space_name_invalid" in merged:
                     logger.warn(
-                        f"XunleiHijack[v{self.plugin_version}] add task invalid space: device={device_id}, {self._last_request_error}"
+                        f"添加任务空间无效[v{self.plugin_version}]：device={device_id}，{self._last_request_error}"
                     )
                     return "迅雷任务创建失败：device_id 对应空间无效，请重新抓取参数。", False
                 if "device_space_not_active" in merged:
                     logger.warn(
-                        f"XunleiHijack[v{self.plugin_version}] add task inactive space: device={device_id}, {self._last_request_error}"
+                        f"添加任务空间未激活[v{self.plugin_version}]：device={device_id}，{self._last_request_error}"
                     )
                     return None, True
                 if not resp:
@@ -1461,7 +1461,7 @@ class XunleiHijackDownloader(_PluginBase):
             self._device_id = refresh_device
             self._save_config()
             logger.info(
-                f"XunleiHijack[v{self.plugin_version}] refresh submit device_id: {first_device or 'EMPTY'} -> {refresh_device}"
+                f"提交任务刷新 device_id[v{self.plugin_version}]：{first_device or 'EMPTY'} -> {refresh_device}"
             )
             resp2, data2 = _submit_once(refresh_device)
             if resp2 and resp2.ok:
@@ -1506,7 +1506,7 @@ class XunleiHijackDownloader(_PluginBase):
             result["total_size"] = total_size
             result["total_count"] = len(files)
         except Exception as err:
-            logger.warn(f"XunleiHijack analyze magnet failed: {err}")
+            logger.warn(f"解析磁力文件列表失败：{err}")
         return result
 
     def _move_completed_downloads(self):
@@ -1514,20 +1514,20 @@ class XunleiHijackDownloader(_PluginBase):
             return
         if not self._source_download_dir or not self._target_watch_dir:
             logger.warn(
-                f"XunleiHijack move skipped: source/target not configured, "
-                f"source={self._source_download_dir or 'EMPTY'}, target={self._target_watch_dir or 'EMPTY'}"
+                f"跳过自动搬运：源/目标目录未配置，"
+                f"源={self._source_download_dir or 'EMPTY'}，目标={self._target_watch_dir or 'EMPTY'}"
             )
             return
         if not self._move_lock.acquire(blocking=False):
-            logger.info("XunleiHijack move skipped: previous job still running.")
+            logger.info("跳过自动搬运：上一轮任务仍在执行。")
             return
         try:
             source_root = Path(self._source_download_dir)
             target_root = Path(self._target_watch_dir)
             if not source_root.exists() or not source_root.is_dir():
                 logger.warn(
-                    f"XunleiHijack move skipped: source path invalid, "
-                    f"source={source_root}, exists={source_root.exists()}, is_dir={source_root.is_dir()}"
+                    f"跳过自动搬运：源目录无效，"
+                    f"源={source_root}，exists={source_root.exists()}，is_dir={source_root.is_dir()}"
                 )
                 return
             target_root.mkdir(parents=True, exist_ok=True)
@@ -1571,11 +1571,11 @@ class XunleiHijackDownloader(_PluginBase):
                         cache_dirty = True
                         if fail_count >= int(self._completed_seen_max_missing):
                             self._drop_completed_seen(move_key)
-                            flag = "cache_source_not_found_drop"
+                            flag = "缓存源不存在_达到上限已丢弃"
                         else:
-                            flag = "cache_source_not_found"
+                            flag = "缓存源不存在"
                     add_sample(
-                        f"{task_tag} skip:{flag} source_root={source_root} task_name={task_name}"
+                        f"{task_tag} 跳过：{flag}，源目录={source_root}，任务名={task_name}"
                     )
                     return
                 try:
@@ -1588,7 +1588,7 @@ class XunleiHijackDownloader(_PluginBase):
                     if not dst:
                         stats["skip_target_unresolved"] += 1
                         add_sample(
-                            f"{task_tag} skip:target_unresolved task_id={task_id}"
+                            f"{task_tag} 跳过：目标目录解析失败，task_id={task_id}"
                         )
                         return
                     shutil.move(str(src), str(dst))
@@ -1599,20 +1599,20 @@ class XunleiHijackDownloader(_PluginBase):
                         self._remember_moved_key(task_id)
                     stats["moved"] += 1
                     if from_cache:
-                        logger.info(f"XunleiHijack moved(cache): {src} -> {dst}")
+                        logger.info(f"自动搬运成功(缓存)：{src} -> {dst}")
                     else:
-                        logger.info(f"XunleiHijack moved: {src} -> {dst}")
+                        logger.info(f"自动搬运成功：{src} -> {dst}")
                 except Exception as move_err:
                     stats["move_failed"] += 1
                     logger.warn(
-                        f"XunleiHijack move item failed: key={move_key}, "
-                        f"name={task_name}, err={move_err}"
+                        f"单任务搬运失败：key={move_key}，"
+                        f"name={task_name}，err={move_err}"
                     )
 
             if not tasks:
                 logger.info(
-                    f"XunleiHijack move scan: no tasks, source={source_root}, target={target_root}, "
-                    f"cached_completed={cached_total}"
+                    f"自动搬运扫描：当前无任务，源={source_root}，目标={target_root}，"
+                    f"缓存已完成数={cached_total}"
                 )
 
             for task in tasks:
@@ -1624,12 +1624,12 @@ class XunleiHijackDownloader(_PluginBase):
                 move_key = self._task_move_key(task)
                 if not move_key:
                     stats["skip_no_move_key"] += 1
-                    add_sample(f"{task_tag} skip:no_move_key status={task_status}")
+                    add_sample(f"{task_tag} 跳过：缺少搬运键，状态={task_status}")
                     continue
                 if not self._is_task_completed(task):
                     stats["skip_not_completed"] += 1
                     self._drop_completed_seen(move_key)
-                    add_sample(f"{task_tag} skip:not_completed status={task_status} progress={task_progress:.2f}")
+                    add_sample(f"{task_tag} 跳过：未完成，状态={task_status}，进度={task_progress:.2f}")
                     continue
                 if move_key in self._moved_task_keys:
                     stats["skip_already_moved"] += 1
@@ -1645,13 +1645,13 @@ class XunleiHijackDownloader(_PluginBase):
                     if elapsed < self._move_safe_seconds:
                         stats["skip_safe_wait"] += 1
                         add_sample(
-                            f"{task_tag} skip:safe_wait completed_elapsed={elapsed:.1f}s < {self._move_safe_seconds}s"
+                            f"{task_tag} 跳过：安全等待中，完成后已过{elapsed:.1f}s < {self._move_safe_seconds}s"
                         )
                         continue
                 task_name_for_move = task_name or Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
                 if not task_name_for_move:
                     stats["skip_cached_missing_name"] += 1
-                    add_sample(f"{task_tag} skip:missing_name key={move_key}")
+                    add_sample(f"{task_tag} 跳过：缺少任务名，key={move_key}")
                     continue
                 try_move_by_name(
                     move_key=move_key,
@@ -1681,14 +1681,14 @@ class XunleiHijackDownloader(_PluginBase):
                 task_tag = f"id=-,name={task_name or '-'}"
                 if not task_name:
                     stats["skip_cached_missing_name"] += 1
-                    add_sample(f"{task_tag} skip:cached_missing_name key={move_key}")
+                    add_sample(f"{task_tag} 跳过：缓存缺少任务名，key={move_key}")
                     continue
                 if self._move_safe_seconds > 0:
                     elapsed = now_ts - done_ts
                     if elapsed < self._move_safe_seconds:
                         stats["skip_safe_wait"] += 1
                         add_sample(
-                            f"{task_tag} skip:cache_safe_wait completed_elapsed={elapsed:.1f}s < {self._move_safe_seconds}s"
+                            f"{task_tag} 跳过：缓存安全等待中，完成后已过{elapsed:.1f}s < {self._move_safe_seconds}s"
                         )
                         continue
                 try_move_by_name(
@@ -1701,21 +1701,21 @@ class XunleiHijackDownloader(_PluginBase):
             if cache_dirty:
                 self._save_completed_seen_cache()
             logger.info(
-                f"XunleiHijack move scan summary: source={source_root}, target={target_root}, "
-                f"total={len(tasks)}, cached_completed={cached_total}, moved={stats['moved']}, "
-                f"skip_not_completed={stats['skip_not_completed']}, "
-                f"skip_no_move_key={stats['skip_no_move_key']}, skip_already_moved={stats['skip_already_moved']}, "
-                f"skip_source_not_found={stats['skip_source_not_found']}, "
-                f"skip_target_unresolved={stats['skip_target_unresolved']}, "
-                f"skip_safe_wait={stats['skip_safe_wait']}, "
-                f"skip_cached_missing_name={stats['skip_cached_missing_name']}, "
-                f"skip_cached_backoff={stats['skip_cached_backoff']}, skip_cached_expired={stats['skip_cached_expired']}, "
-                f"move_failed={stats['move_failed']}"
+                f"自动搬运扫描汇总：源={source_root}，目标={target_root}，"
+                f"总任务={len(tasks)}，缓存已完成={cached_total}，成功搬运={stats['moved']}，"
+                f"未完成跳过={stats['skip_not_completed']}，"
+                f"无搬运键跳过={stats['skip_no_move_key']}，已搬运跳过={stats['skip_already_moved']}，"
+                f"源不存在跳过={stats['skip_source_not_found']}，"
+                f"目标未解析跳过={stats['skip_target_unresolved']}，"
+                f"安全等待跳过={stats['skip_safe_wait']}，"
+                f"缓存缺名跳过={stats['skip_cached_missing_name']}，"
+                f"缓存退避跳过={stats['skip_cached_backoff']}，缓存过期跳过={stats['skip_cached_expired']}，"
+                f"搬运失败={stats['move_failed']}"
             )
             if samples:
-                logger.info("XunleiHijack move scan samples: " + " | ".join(samples))
+                logger.info("自动搬运扫描样本： " + " | ".join(samples))
         except Exception as err:
-            logger.error(f"XunleiHijack move job failed: {err}")
+            logger.error(f"自动搬运任务执行失败：{err}")
         finally:
             self._move_lock.release()
 
@@ -1810,14 +1810,14 @@ class XunleiHijackDownloader(_PluginBase):
                         if not resp or not resp.ok:
                             last_err = f"http={resp.status_code if resp else 'request-failed'} {self._last_request_error}"
                             logger.warn(
-                                f"XunleiHijack[v{self.plugin_version}] list tasks failed: "
-                                f"space={space or 'EMPTY'}, type={task_type}, probe={probe_name}, {last_err}"
+                                f"拉取任务失败[v{self.plugin_version}]："
+                                f"space={space or 'EMPTY'}，type={task_type}，probe={probe_name}，{last_err}"
                             )
                             continue
                         tasks = _extract_tasks(obj)
                         logger.info(
-                            f"XunleiHijack[v{self.plugin_version}] list tasks: "
-                            f"space={space or 'EMPTY'}, type={task_type}, probe={probe_name}, count={len(tasks)}"
+                            f"拉取任务结果[v{self.plugin_version}]："
+                            f"space={space or 'EMPTY'}，type={task_type}，probe={probe_name}，数量={len(tasks)}"
                         )
                         if not tasks:
                             continue
@@ -1842,21 +1842,21 @@ class XunleiHijackDownloader(_PluginBase):
                                         break
             if merged_tasks:
                 logger.info(
-                    f"XunleiHijack[v{self.plugin_version}] list tasks merged: "
-                    f"total={len(merged_tasks)}, hit_probes={'; '.join(probe_stats[:8])}"
+                    f"任务合并结果[v{self.plugin_version}]："
+                    f"总数={len(merged_tasks)}，命中探针={'; '.join(probe_stats[:8])}"
                 )
                 return list(merged_tasks.values())
             if last_err:
                 logger.info(
-                    f"XunleiHijack[v{self.plugin_version}] list tasks empty after all spaces: "
-                    f"device_id={device_id or 'EMPTY'}, last_error={last_err}"
+                    f"任务列表为空（已遍历全部空间）[v{self.plugin_version}]："
+                    f"device_id={device_id or 'EMPTY'}，最后错误={last_err}"
                 )
             else:
                 logger.info(
-                    f"XunleiHijack[v{self.plugin_version}] list tasks empty: device_id={device_id or 'EMPTY'}"
+                    f"任务列表为空[v{self.plugin_version}]：device_id={device_id or 'EMPTY'}"
                 )
         except Exception as err:
-            logger.warn(f"XunleiHijack[v{self.plugin_version}] list tasks failed: {err}")
+            logger.warn(f"拉取任务列表异常[v{self.plugin_version}]：{err}")
         return []
 
     def _operate_tasks(self, ids: Set[str], action: str, delete_file: bool = True, preferred_space: str = "") -> bool:
@@ -2777,13 +2777,13 @@ class XunleiHijackDownloader(_PluginBase):
         new_device = self._fetch_device_id(force_refresh=True, exclude_device=old_device)
         if new_device:
             logger.warn(
-                f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, "
-                f"refresh device_id: {old_device or 'EMPTY'} -> {new_device}"
+                f"检测到 device_space 未激活[v{self.plugin_version}]，"
+                f"已刷新 device_id：{old_device or 'EMPTY'} -> {new_device}"
             )
             return True
         logger.warn(
-            f"XunleiHijack[v{self.plugin_version}] detect inactive device_space, "
-            f"but refresh device_id failed."
+            f"检测到 device_space 未激活[v{self.plugin_version}]，"
+            f"但刷新 device_id 失败。"
         )
         return False
 
@@ -2897,13 +2897,13 @@ class XunleiHijackDownloader(_PluginBase):
             history_dir = self._resolve_history_download_dir(task_id=task_id)
             if not history_dir:
                 logger.warn(
-                    f"XunleiHijack move skipped: unresolved target by MoviePilot rules, "
-                    f"task_id={task_id or '-'}, task_name={task_name or '-'}"
+                    f"跳过搬运：按 MoviePilot 规则无法解析目标目录，"
+                    f"task_id={task_id or '-'}，task_name={task_name or '-'}"
                 )
                 return None
             base_dir = history_dir
         except Exception as err:
-            logger.warn(f"XunleiHijack build move target path failed: task={task_name}, err={err}")
+            logger.warn(f"构建搬运目标路径失败：task={task_name}，err={err}")
             return None
         base_dir.mkdir(parents=True, exist_ok=True)
         return self._dedupe_target(base_dir / src.name)
@@ -2946,7 +2946,7 @@ class XunleiHijackDownloader(_PluginBase):
                 download_dir = download_dir / media_category
             return download_dir
         except Exception as err:
-            logger.debug(f"XunleiHijack resolve history download dir failed: task_id={task_id}, err={err}")
+            logger.debug(f"按下载历史解析目录失败：task_id={task_id}，err={err}")
         return None
 
     @staticmethod
