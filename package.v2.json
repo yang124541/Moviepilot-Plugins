@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "1.9.9",
+    "version": "1.9.10",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.10": "修复控制按钮图标不显示：回退为 VBtn 的 prependIcon 渲染路径，保持图标常显与 hover 光晕。",
       "v1.9.9": "修复控制按钮显示：图标常显、默认无底色，仅在 hover 时显示光晕反馈。",
       "v1.9.8": "修复已下载完成状态不显示：插件页与指标轮询改为查询 all phase，完成任务可及时显示为已完成状态。",
       "v1.9.7": "新增页面活跃门控：插件页未打开时不再轮询任务列表/剩余时间/下载速度；仅保留自动搬移所需任务轮询（且需插件与搬移开关均启用）。",
