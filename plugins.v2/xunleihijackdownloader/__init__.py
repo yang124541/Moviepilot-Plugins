@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.7"
+    plugin_version = "1.9.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -397,7 +397,7 @@ class XunleiHijackDownloader(_PluginBase):
             },
         ]
 
-        tasks = self._list_download_tasks(include_runner=False, phase_mode="active", purpose="ui")
+        tasks = self._list_download_tasks(include_runner=False, phase_mode="all", purpose="ui")
         visible_tasks = [task for task in tasks if not self._is_moved_task(task)]
         if not visible_tasks:
             page.append({
@@ -455,7 +455,7 @@ class XunleiHijackDownloader(_PluginBase):
             return {"success": True, "items": []}
         try:
             self._touch_ui_active()
-            tasks = self._list_download_tasks(include_runner=False, phase_mode="active", purpose="ui")
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="all", purpose="ui")
             items: List[Dict[str, Any]] = []
             for task in tasks:
                 if self._is_moved_task(task):
