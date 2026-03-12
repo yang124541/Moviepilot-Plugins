@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.10"
+    plugin_version = "1.8.11"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -471,6 +471,10 @@ class XunleiHijackDownloader(_PluginBase):
         task_key = str(task_id or "").strip()
         if not task_key:
             return schemas.Response(success=False, message="任务ID不能为空。")
+        logger.info(
+            f"收到任务控制请求[v{self.plugin_version}]：action={action}，task_id={task_key}，"
+            f"space={space or 'EMPTY'}，type={task_type or 'EMPTY'}"
+        )
         if action != "delete" and f"id:{task_key}" in self._moved_task_keys:
             return schemas.Response(success=False, message="任务已迁移，无法继续操作。")
         action_candidates: List[str]
@@ -532,6 +536,10 @@ class XunleiHijackDownloader(_PluginBase):
         start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}{space_qs}{type_qs}"
         pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}{space_qs}{type_qs}"
         delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}{type_qs}"
+        btn_key = dom_key or quoted_id or "unknown"
+        start_btn_id = f"xunlei-action-start-{btn_key}"
+        pause_btn_id = f"xunlei-action-pause-{btn_key}"
+        delete_btn_id = f"xunlei-action-delete-{btn_key}"
         progress_color = self._task_progress_color(task)
 
         image_node: Dict[str, Any] = {
@@ -631,6 +639,7 @@ class XunleiHijackDownloader(_PluginBase):
                                             icon="mdi-play",
                                             disabled=not can_start,
                                             api_path=start_api,
+                                            button_id=start_btn_id,
                                             success_message="开始任务成功，请点击刷新查看状态。",
                                             failure_message="开始任务失败。",
                                         ),
@@ -640,6 +649,7 @@ class XunleiHijackDownloader(_PluginBase):
                                             icon="mdi-pause",
                                             disabled=not can_pause,
                                             api_path=pause_api,
+                                            button_id=pause_btn_id,
                                             success_message="暂停任务成功，请点击刷新查看状态。",
                                             failure_message="暂停任务失败。",
                                         ),
@@ -649,6 +659,7 @@ class XunleiHijackDownloader(_PluginBase):
                                             icon="mdi-close",
                                             disabled=not can_delete,
                                             api_path=delete_api,
+                                            button_id=delete_btn_id,
                                             success_message="删除任务成功，请点击刷新查看状态。",
                                             failure_message="删除任务失败。",
                                         ),
@@ -664,6 +675,7 @@ class XunleiHijackDownloader(_PluginBase):
 
     @staticmethod
     def _build_task_action_button(text: str, color: str, icon: str, disabled: bool, api_path: str,
+                                  button_id: str,
                                   success_message: str, failure_message: str) -> Dict[str, Any]:
         button = {
             "component": "VBtn",
@@ -677,6 +689,10 @@ class XunleiHijackDownloader(_PluginBase):
                 "title": text,
                 "disabled": bool(disabled),
                 "class": "ml-1 px-1",
+                "id": str(button_id or ""),
+                "data-xunlei-api": str(api_path or ""),
+                "data-xunlei-success": str(success_message or ""),
+                "data-xunlei-failure": str(failure_message or ""),
             },
         }
         if not disabled:
@@ -712,6 +728,30 @@ class XunleiHijackDownloader(_PluginBase):
             "if(window.__xunleiMetricsPollerTimer){return;}"
             f"const u='{metrics_api}';"
             "const colorMap={primary:'#1976d2',warning:'#fb8c00',success:'#4caf50',error:'#ff5252',info:'#0288d1',secondary:'#9e9e9e'};"
+            "const bindActionButtons=()=>{"
+            "try{"
+            "const nodes=document.querySelectorAll('[id^=\"xunlei-action-\"]');"
+            "if(!nodes||!nodes.length){return;}"
+            "for(const node of nodes){"
+            "if(!node||node.dataset.xunleiBound==='1'){continue;}"
+            "node.dataset.xunleiBound='1';"
+            "node.addEventListener('click',async(ev)=>{"
+            "try{if(ev){ev.preventDefault();ev.stopPropagation();}}catch(_e){}"
+            "if(node.getAttribute('aria-disabled')==='true'||node.disabled===true){return;}"
+            "const api=node.getAttribute('data-xunlei-api')||'';"
+            "if(!api){return;}"
+            "const okMsg=node.getAttribute('data-xunlei-success')||'操作成功';"
+            "const failMsg=node.getAttribute('data-xunlei-failure')||'操作失败';"
+            "try{"
+            "const r=await fetch(api,{method:'GET',credentials:'same-origin',cache:'no-store'});"
+            "const j=await r.json().catch(()=>null);"
+            "if(r.ok&&(!j||j.success!==false)){window.location.reload();return;}"
+            "alert((j&&j.message)?j.message:failMsg);"
+            "}catch(e){alert('请求失败，请检查网络或权限');}"
+            "},true);"
+            "}"
+            "}catch(e){}"
+            "};"
             "const applyProgress=(k,it)=>{"
             "const pRaw=(it&&it.progress!=null)?Number(it.progress):NaN;"
             "const p=Number.isFinite(pRaw)?Math.max(0,Math.min(100,pRaw)):0;"
@@ -729,6 +769,7 @@ class XunleiHijackDownloader(_PluginBase):
             "};"
             "const f=async()=>{"
             "try{"
+            "bindActionButtons();"
             "const r=await fetch(u,{method:'GET',credentials:'same-origin',cache:'no-store'});"
             "const j=await r.json().catch(()=>null);"
             "if(!r.ok||!j||j.success===false||!Array.isArray(j.items)){return;}"
@@ -745,6 +786,7 @@ class XunleiHijackDownloader(_PluginBase):
             "}"
             "}catch(e){}"
             "};"
+            "bindActionButtons();"
             "f();"
             f"window.__xunleiMetricsPollerTimer=setInterval(f,{ms});"
             "}catch(e){}"
