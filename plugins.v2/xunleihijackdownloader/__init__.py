@@ -546,10 +546,16 @@ class XunleiHijackDownloader(_PluginBase):
         pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}{space_qs}{type_qs}"
         delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}{type_qs}"
         btn_key = dom_key or quoted_id or "unknown"
-        start_btn_id = f"xunlei-action-start-{btn_key}"
-        pause_btn_id = f"xunlei-action-pause-{btn_key}"
+        toggle_btn_id = f"xunlei-action-toggle-{btn_key}"
         delete_btn_id = f"xunlei-action-delete-{btn_key}"
         progress_color = "primary"
+        toggle_is_start = bool(task_paused)
+        toggle_text = "开始" if toggle_is_start else "暂停"
+        toggle_color = "success" if toggle_is_start else "warning"
+        toggle_icon = "mdi-play" if toggle_is_start else "mdi-pause"
+        toggle_api = start_api if toggle_is_start else pause_api
+        toggle_success_message = "开始任务成功，请点击刷新查看状态。" if toggle_is_start else "暂停任务成功，请点击刷新查看状态。"
+        toggle_failure_message = "开始任务失败。" if toggle_is_start else "暂停任务失败。"
 
         image_node: Dict[str, Any] = {
             "component": "VImg",
@@ -560,6 +566,24 @@ class XunleiHijackDownloader(_PluginBase):
                 "cover": False,
             },
         }
+        toggle_button = self._build_task_action_button(
+            text=toggle_text,
+            color=toggle_color,
+            icon=toggle_icon,
+            disabled=not (can_start or can_pause),
+            api_path=toggle_api,
+            button_id=toggle_btn_id,
+            success_message=toggle_success_message,
+            failure_message=toggle_failure_message,
+        )
+        toggle_button["props"].update({
+            "data-xunlei-api-start": str(start_api or ""),
+            "data-xunlei-api-pause": str(pause_api or ""),
+            "data-xunlei-start-success": "开始任务成功，请点击刷新查看状态。",
+            "data-xunlei-pause-success": "暂停任务成功，请点击刷新查看状态。",
+            "data-xunlei-start-failure": "开始任务失败。",
+            "data-xunlei-pause-failure": "暂停任务失败。",
+        })
 
         return {
             "component": "VCard",
@@ -571,7 +595,7 @@ class XunleiHijackDownloader(_PluginBase):
                     "content": [
                         {
                             "component": "VRow",
-                            "props": {"align": "center", "noGutters": True, "class": "my-0 py-0", "style": "position:relative;flex-wrap:nowrap;padding-right:186px;"},
+                            "props": {"align": "center", "noGutters": True, "class": "my-0 py-0", "style": "position:relative;flex-wrap:nowrap;padding-right:152px;"},
                             "content": [
                                 {"component": "VCol", "props": {"cols": "auto", "class": "py-0 pr-4 d-flex align-center"}, "content": [image_node]},
                                 {
@@ -641,28 +665,9 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": "auto", "class": "d-flex justify-end ga-1 py-0", "style": "position:absolute;right:76px;top:50%;transform:translateY(-50%);width:102px;max-width:102px;flex:0 0 102px;z-index:1;"},
+                                    "props": {"cols": "auto", "class": "d-flex justify-end ga-1 py-0", "style": "position:absolute;right:76px;top:50%;transform:translateY(-50%);width:68px;max-width:68px;flex:0 0 68px;z-index:1;"},
                                     "content": [
-                                        self._build_task_action_button(
-                                            text="开始",
-                                            color="success",
-                                            icon="mdi-play",
-                                            disabled=not can_start,
-                                            api_path=start_api,
-                                            button_id=start_btn_id,
-                                            success_message="开始任务成功，请点击刷新查看状态。",
-                                            failure_message="开始任务失败。",
-                                        ),
-                                        self._build_task_action_button(
-                                            text="暂停",
-                                            color="warning",
-                                            icon="mdi-pause",
-                                            disabled=not can_pause,
-                                            api_path=pause_api,
-                                            button_id=pause_btn_id,
-                                            success_message="暂停任务成功，请点击刷新查看状态。",
-                                            failure_message="暂停任务失败。",
-                                        ),
+                                        toggle_button,
                                         self._build_task_action_button(
                                             text="删除",
                                             color="error",
@@ -785,6 +790,26 @@ class XunleiHijackDownloader(_PluginBase):
             "if(!s){s='downloading';}"
             "return s;"
             "};"
+            "const applyToggleAction=(k,state)=>{"
+            "const btn=document.getElementById('xunlei-action-toggle-'+k);"
+            "if(!btn){return;}"
+            "const useStart=String(state||'')==='paused';"
+            "const apiStart=btn.getAttribute('data-xunlei-api-start')||'';"
+            "const apiPause=btn.getAttribute('data-xunlei-api-pause')||'';"
+            "const okStart=btn.getAttribute('data-xunlei-start-success')||'开始任务成功，请点击刷新查看状态。';"
+            "const okPause=btn.getAttribute('data-xunlei-pause-success')||'暂停任务成功，请点击刷新查看状态。';"
+            "const failStart=btn.getAttribute('data-xunlei-start-failure')||'开始任务失败。';"
+            "const failPause=btn.getAttribute('data-xunlei-pause-failure')||'暂停任务失败。';"
+            "btn.setAttribute('title',useStart?'开始':'暂停');"
+            "btn.setAttribute('data-xunlei-api',useStart?apiStart:apiPause);"
+            "btn.setAttribute('data-xunlei-success',useStart?okStart:okPause);"
+            "btn.setAttribute('data-xunlei-failure',useStart?failStart:failPause);"
+            "btn.setAttribute('data-xunlei-hover-color',useStart?'success':'warning');"
+            "btn.classList.remove('text-success','text-warning');"
+            "btn.classList.add(useStart?'text-success':'text-warning');"
+            "const iconEl=btn.querySelector('.v-icon');"
+            "if(iconEl){iconEl.classList.remove('mdi-play','mdi-pause');iconEl.classList.add(useStart?'mdi-play':'mdi-pause');}"
+            "};"
             "const applyProgress=(k,it)=>{"
             "const pRaw=(it&&it.progress!=null)?Number(it.progress):NaN;"
             "const p=Number.isFinite(pRaw)?Math.max(0,Math.min(100,pRaw)):0;"
@@ -822,6 +847,7 @@ class XunleiHijackDownloader(_PluginBase):
             "else if(state==='failed'){leftText='失败';speedText='失败';}"
             "if(leftEl){leftEl.textContent=leftText;}"
             "if(speedEl){speedEl.textContent=speedText;}"
+            "applyToggleAction(k,state);"
             "applyProgress(k,it);"
             "}"
             "}catch(e){}"
