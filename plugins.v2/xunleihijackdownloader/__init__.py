@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.8.1"
+    plugin_version = "1.8.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -318,6 +318,26 @@ class XunleiHijackDownloader(_PluginBase):
 
     def get_page(self) -> List[dict]:
         plugin_id = self.__class__.__name__
+        if not self._enabled:
+            return [{
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [
+                            {
+                                "component": "VAlert",
+                                "props": {
+                                    "type": "warning",
+                                    "variant": "tonal",
+                                    "text": "插件未启用，请先在配置页开启“启用插件”。",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }]
         page: List[dict] = [
             {
                 "component": "VRow",
@@ -356,28 +376,6 @@ class XunleiHijackDownloader(_PluginBase):
                 ],
             },
         ]
-
-        if not self._enabled:
-            page.append({
-                "component": "VRow",
-                "content": [
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12},
-                        "content": [
-                            {
-                                "component": "VAlert",
-                                "props": {
-                                    "type": "warning",
-                                    "variant": "tonal",
-                                    "text": "插件未启用，请先在配置页开启“启用插件”。",
-                                },
-                            }
-                        ],
-                    }
-                ],
-            })
-            return page
 
         tasks = self._list_download_tasks(include_runner=False)
         visible_tasks = [task for task in tasks if not self._is_moved_task(task)]
@@ -418,15 +416,23 @@ class XunleiHijackDownloader(_PluginBase):
         return page
 
     def api_start_task(self, task_id: str = "", hash: str = "", space: str = "") -> schemas.Response:
+        if not self._enabled:
+            return schemas.Response(success=False, message="插件未启用。")
         return self._api_task_action(task_id=task_id or hash, action="start", space=space)
 
     def api_pause_task(self, task_id: str = "", hash: str = "", space: str = "") -> schemas.Response:
+        if not self._enabled:
+            return schemas.Response(success=False, message="插件未启用。")
         return self._api_task_action(task_id=task_id or hash, action="pause", space=space)
 
     def api_delete_task(self, task_id: str = "", hash: str = "", delete_file: bool = True, space: str = "") -> schemas.Response:
+        if not self._enabled:
+            return schemas.Response(success=False, message="插件未启用。")
         return self._api_task_action(task_id=task_id or hash, action="delete", delete_file=delete_file, space=space)
 
     def api_task_metrics(self) -> Dict[str, Any]:
+        if not self._enabled:
+            return {"success": True, "items": []}
         try:
             tasks = self._list_download_tasks(include_runner=False)
             items: List[Dict[str, Any]] = []
@@ -1720,6 +1726,8 @@ class XunleiHijackDownloader(_PluginBase):
             self._move_lock.release()
 
     def _list_download_tasks(self, include_runner: bool = False) -> List[Dict[str, Any]]:
+        if not self._enabled:
+            return []
         try:
             headers = self._get_headers()
             device_id = str(self._fetch_device_id() or self._device_id or "").strip()
