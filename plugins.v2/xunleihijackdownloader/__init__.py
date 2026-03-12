@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.19"
+    plugin_version = "1.9.20"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -781,13 +781,7 @@ class XunleiHijackDownloader(_PluginBase):
             "};"
             "const resolveState=(it)=>{"
             "let s=(it&&it.state)?String(it.state):'downloading';"
-            "const speedText=(it&&it.speed_text)?String(it.speed_text):'';"
-            "const leftText=(it&&it.left_time)?String(it.left_time):'';"
-            "let speedNum=0;"
-            "try{const m=speedText.match(/-?\\d+(?:\\.\\d+)?/);if(m){speedNum=Number(m[0])||0;}}catch(_e){}"
-            "const hasSpeed=speedNum>0;"
-            "if(s==='paused'&&hasSpeed){s='downloading';}"
-            "if(s==='downloading'&&!hasSpeed&&leftText==='已暂停'){s='paused';}"
+            "if(!s){s='downloading';}"
             "return s;"
             "};"
             "const applyProgress=(k,it)=>{"
@@ -2844,18 +2838,34 @@ class XunleiHijackDownloader(_PluginBase):
         return ""
 
     def _task_phase_state(self, task: Dict[str, Any]) -> str:
+        # 第一优先级：迅雷 phase 字段
         phase_values: List[str] = []
-        for key in ("phase", "phase_name", "status", "state"):
+        for key in ("phase", "phase_name"):
             value = task.get(key)
             if value is not None:
                 phase_values.append(str(value).strip())
         params = task.get("params")
         if isinstance(params, dict):
-            for key in ("phase", "phase_name", "status", "state"):
+            for key in ("phase", "phase_name"):
                 value = params.get(key)
                 if value is not None:
                     phase_values.append(str(value).strip())
         for text in phase_values:
+            state = self._phase_token_to_state(text)
+            if state:
+                return state
+        # 第二优先级：兼容 status/state 文本
+        fallback_values: List[str] = []
+        for key in ("status", "state"):
+            value = task.get(key)
+            if value is not None:
+                fallback_values.append(str(value).strip())
+        if isinstance(params, dict):
+            for key in ("status", "state"):
+                value = params.get(key)
+                if value is not None:
+                    fallback_values.append(str(value).strip())
+        for text in fallback_values:
             state = self._phase_token_to_state(text)
             if state:
                 return state
@@ -2864,9 +2874,6 @@ class XunleiHijackDownloader(_PluginBase):
     def _task_progress_state(self, task: Dict[str, Any]) -> str:
         phase_state = self._task_phase_state(task)
         if phase_state:
-            if phase_state == "paused":
-                speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
-                return "downloading" if speed > 0 else "paused"
             return phase_state
         if self._is_task_completed(task):
             return "completed"
@@ -2901,8 +2908,7 @@ class XunleiHijackDownloader(_PluginBase):
     def _is_task_paused(self, task: Dict[str, Any]) -> bool:
         phase_state = self._task_phase_state(task)
         if phase_state == "paused":
-            speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
-            return speed <= 0
+            return True
         if phase_state == "downloading":
             return False
         paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
@@ -2922,8 +2928,7 @@ class XunleiHijackDownloader(_PluginBase):
         if phase_state == "downloading":
             return True
         if phase_state == "paused":
-            speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
-            return speed > 0
+            return False
         running_words = ("running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")
         paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
         values = self._task_status_values(task)
