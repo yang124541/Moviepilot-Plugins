@@ -33,7 +33,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.6.9"
+    plugin_version = "1.7.0"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -440,7 +440,7 @@ class XunleiHijackDownloader(_PluginBase):
     def api_task_metrics(self) -> Dict[str, Any]:
         try:
             tasks = self._list_download_tasks(include_runner=False)
-            items: List[Dict[str, str]] = []
+            items: List[Dict[str, Any]] = []
             for task in tasks:
                 if self._is_moved_task(task):
                     continue
@@ -451,11 +451,16 @@ class XunleiHijackDownloader(_PluginBase):
                 size_text = self._format_bytes(self._task_size(task))
                 left_time = self._task_left_time(task, progress) or "--"
                 speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
+                progress_color = self._task_progress_color(task)
+                task_state = self._task_progress_state(task)
                 items.append({
                     "key": dom_key,
                     "size_text": size_text,
                     "left_time": left_time,
                     "speed_text": speed_text,
+                    "progress": progress,
+                    "progress_color": progress_color,
+                    "state": task_state,
                     "metric": f"{size_text}    {left_time}    {speed_text}",
                 })
             return {"success": True, "items": items}
@@ -522,7 +527,7 @@ class XunleiHijackDownloader(_PluginBase):
         start_api = f"/api/v1/plugin/{plugin_id}/task/start?task_id={quoted_id}{space_qs}"
         pause_api = f"/api/v1/plugin/{plugin_id}/task/pause?task_id={quoted_id}{space_qs}"
         delete_api = f"/api/v1/plugin/{plugin_id}/task/delete?task_id={quoted_id}&delete_file=true{space_qs}"
-        progress_color = "success" if task_done else ("warning" if task_paused else ("error" if task_failed else "primary"))
+        progress_color = self._task_progress_color(task)
 
         image_node: Dict[str, Any] = {
             "component": "VImg",
@@ -592,6 +597,7 @@ class XunleiHijackDownloader(_PluginBase):
                                         {
                                             "component": "VProgressLinear",
                                             "props": {
+                                                "id": f"xunlei-progress-{dom_key}",
                                                 "modelValue": progress,
                                                 "height": 5,
                                                 "rounded": True,
@@ -690,6 +696,22 @@ class XunleiHijackDownloader(_PluginBase):
             "try{"
             "if(window.__xunleiMetricsPollerTimer){return;}"
             f"const u='{metrics_api}';"
+            "const colorMap={primary:'#1976d2',warning:'#fb8c00',success:'#4caf50',error:'#ff5252',info:'#0288d1',secondary:'#9e9e9e'};"
+            "const applyProgress=(k,it)=>{"
+            "const pRaw=(it&&it.progress!=null)?Number(it.progress):NaN;"
+            "const p=Number.isFinite(pRaw)?Math.max(0,Math.min(100,pRaw)):0;"
+            "const token=(it&&it.progress_color)?String(it.progress_color):'primary';"
+            "const color=colorMap[token]||colorMap.primary;"
+            "const state=(it&&it.state)?String(it.state):'downloading';"
+            "const bar=document.getElementById('xunlei-progress-'+k);"
+            "if(!bar){return;}"
+            "bar.setAttribute('aria-valuenow',String(p));"
+            "bar.setAttribute('data-xunlei-state',state);"
+            "const det=bar.querySelector('.v-progress-linear__determinate');"
+            "if(det){det.style.transform='scaleX('+(p/100)+')';det.style.transformOrigin='left center';det.style.backgroundColor=color;det.style.opacity='1';}"
+            "const bg=bar.querySelector('.v-progress-linear__background');"
+            "if(bg){bg.style.backgroundColor=color;bg.style.opacity='0.2';}"
+            "};"
             "const f=async()=>{"
             "try{"
             "const r=await fetch(u,{method:'GET',credentials:'same-origin',cache:'no-store'});"
@@ -704,6 +726,7 @@ class XunleiHijackDownloader(_PluginBase):
             "if(leftEl){leftEl.textContent=(it&&it.left_time)?String(it.left_time):'--';}"
             "const speedEl=document.getElementById('xunlei-metric-speed-'+k);"
             "if(speedEl){speedEl.textContent=(it&&it.speed_text)?String(it.speed_text):'0B/s';}"
+            "applyProgress(k,it);"
             "}"
             "}catch(e){}"
             "};"
@@ -2439,6 +2462,30 @@ class XunleiHijackDownloader(_PluginBase):
             if any(k in text for k in ("waiting", "wait", "pending", "queue")):
                 return "排队中"
         return "下载中"
+
+    def _task_progress_state(self, task: Dict[str, Any]) -> str:
+        if self._is_task_completed(task):
+            return "completed"
+        if self._is_task_failed(task):
+            return "failed"
+        if self._is_task_paused(task):
+            return "paused"
+        for text in self._task_status_values(task):
+            if any(k in text for k in ("waiting", "wait", "pending", "queue")):
+                return "queued"
+        return "downloading"
+
+    def _task_progress_color(self, task: Dict[str, Any]) -> str:
+        state = self._task_progress_state(task)
+        if state == "completed":
+            return "success"
+        if state == "paused":
+            return "warning"
+        if state == "failed":
+            return "error"
+        if state == "queued":
+            return "secondary"
+        return "primary"
 
     def _is_task_paused(self, task: Dict[str, Any]) -> bool:
         for text in self._task_status_values(task):
