@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.6"
+    plugin_version = "1.9.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -74,6 +74,8 @@ class XunleiHijackDownloader(_PluginBase):
     _last_request_error = ""
     _task_list_cache: Dict[str, Dict[str, Any]] = {}
     _task_list_cache_ttl_seconds = 1.0
+    _ui_last_active_ts = 0.0
+    _ui_keepalive_seconds = 20.0
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -81,6 +83,7 @@ class XunleiHijackDownloader(_PluginBase):
         self._moved_task_keys = set(self._moved_task_order)
         self._task_name_cache = {}
         self._task_list_cache = {}
+        self._ui_last_active_ts = 0.0
         self._completed_seen_at = {}
         self._completed_seen_order = []
         self._completed_seen_name = {}
@@ -115,6 +118,18 @@ class XunleiHijackDownloader(_PluginBase):
 
     def get_state(self) -> bool:
         return self._enabled
+
+    def _touch_ui_active(self) -> None:
+        self._ui_last_active_ts = time.time()
+
+    def _is_ui_active(self) -> bool:
+        try:
+            last_ts = float(self._ui_last_active_ts or 0.0)
+        except Exception:
+            last_ts = 0.0
+        if last_ts <= 0:
+            return False
+        return (time.time() - last_ts) <= float(self._ui_keepalive_seconds)
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
@@ -342,6 +357,7 @@ class XunleiHijackDownloader(_PluginBase):
                     }
                 ],
             }]
+        self._touch_ui_active()
         page: List[dict] = [
             {
                 "component": "VRow",
@@ -381,7 +397,7 @@ class XunleiHijackDownloader(_PluginBase):
             },
         ]
 
-        tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
+        tasks = self._list_download_tasks(include_runner=False, phase_mode="active", purpose="ui")
         visible_tasks = [task for task in tasks if not self._is_moved_task(task)]
         if not visible_tasks:
             page.append({
@@ -438,7 +454,8 @@ class XunleiHijackDownloader(_PluginBase):
         if not self._enabled:
             return {"success": True, "items": []}
         try:
-            tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
+            self._touch_ui_active()
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="active", purpose="ui")
             items: List[Dict[str, Any]] = []
             for task in tasks:
                 if self._is_moved_task(task):
@@ -471,6 +488,7 @@ class XunleiHijackDownloader(_PluginBase):
         task_key = str(task_id or "").strip()
         if not task_key:
             return schemas.Response(success=False, message="任务ID不能为空。")
+        self._touch_ui_active()
         logger.info(
             f"收到任务控制请求[v{self.plugin_version}]：action={action}，task_id={task_key}，"
             f"space={space or 'EMPTY'}，type={task_type or 'EMPTY'}"
@@ -868,9 +886,9 @@ class XunleiHijackDownloader(_PluginBase):
 
         hash_set = self._normalize_hashs(hashs)
         if status == TorrentStatus.TRANSFER:
-            tasks = self._list_download_tasks(include_runner=False, phase_mode="completed")
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="completed", purpose="external")
         else:
-            tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="active", purpose="external")
         if not tasks:
             return []
 
@@ -962,7 +980,7 @@ class XunleiHijackDownloader(_PluginBase):
     def downloader_info(self, downloader: Optional[str] = None) -> Optional[List[schemas.DownloaderInfo]]:
         if downloader and not self._is_xunlei_downloader(downloader):
             return None
-        tasks = self._list_download_tasks(include_runner=True, phase_mode="active")
+        tasks = self._list_download_tasks(include_runner=True, phase_mode="active", purpose="external")
         dl_speed = 0.0
         up_speed = 0.0
         for task in tasks:
@@ -1599,7 +1617,7 @@ class XunleiHijackDownloader(_PluginBase):
                 )
                 return
             target_root.mkdir(parents=True, exist_ok=True)
-            tasks = self._list_download_tasks(include_runner=False, phase_mode="completed")
+            tasks = self._list_download_tasks(include_runner=False, phase_mode="completed", purpose="move")
             now_ts = time.time()
             stats = {
                 "moved": 0,
@@ -1787,13 +1805,19 @@ class XunleiHijackDownloader(_PluginBase):
         finally:
             self._move_lock.release()
 
-    def _list_download_tasks(self, include_runner: bool = False, phase_mode: str = "active") -> List[Dict[str, Any]]:
+    def _list_download_tasks(self, include_runner: bool = False, phase_mode: str = "active",
+                             purpose: str = "external") -> List[Dict[str, Any]]:
         if not self._enabled:
+            return []
+        purpose_token = str(purpose or "external").strip().lower()
+        if purpose_token not in ("ui", "move", "control", "external"):
+            purpose_token = "external"
+        if purpose_token not in ("ui", "move", "control") and not self._is_ui_active():
             return []
         mode = str(phase_mode or "active").strip().lower()
         if mode not in ("active", "completed", "all"):
             mode = "active"
-        cache_key = ("runner" if include_runner else "download") + f":{mode}"
+        cache_key = ("runner" if include_runner else "download") + f":{mode}:{purpose_token}"
         now_ts = time.time()
         cache_obj = self._task_list_cache.get(cache_key) if isinstance(self._task_list_cache, dict) else None
         if isinstance(cache_obj, dict):
@@ -2337,7 +2361,7 @@ class XunleiHijackDownloader(_PluginBase):
         deadline = time.time() + max(0.6, float(timeout_seconds or 1.8))
         while time.time() <= deadline:
             self._task_list_cache = {}
-            tasks = self._list_download_tasks(include_runner=True, phase_mode="all")
+            tasks = self._list_download_tasks(include_runner=True, phase_mode="all", purpose="control")
             target = None
             for task in tasks:
                 if self._task_key(task) == key:
@@ -3194,7 +3218,7 @@ class XunleiHijackDownloader(_PluginBase):
             return False
         if downloader:
             return True
-        tasks = self._list_download_tasks(include_runner=False, phase_mode="active")
+        tasks = self._list_download_tasks(include_runner=False, phase_mode="active", purpose="external")
         if not tasks:
             return None
         task_ids = {self._task_key(x) for x in tasks if isinstance(x, dict) and self._task_key(x)}
