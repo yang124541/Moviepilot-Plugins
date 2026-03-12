@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "1.9.18"
+    plugin_version = "1.9.19"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -779,10 +779,21 @@ class XunleiHijackDownloader(_PluginBase):
             "}"
             "}catch(e){}"
             "};"
+            "const resolveState=(it)=>{"
+            "let s=(it&&it.state)?String(it.state):'downloading';"
+            "const speedText=(it&&it.speed_text)?String(it.speed_text):'';"
+            "const leftText=(it&&it.left_time)?String(it.left_time):'';"
+            "let speedNum=0;"
+            "try{const m=speedText.match(/-?\\d+(?:\\.\\d+)?/);if(m){speedNum=Number(m[0])||0;}}catch(_e){}"
+            "const hasSpeed=speedNum>0;"
+            "if(s==='paused'&&hasSpeed){s='downloading';}"
+            "if(s==='downloading'&&!hasSpeed&&leftText==='已暂停'){s='paused';}"
+            "return s;"
+            "};"
             "const applyProgress=(k,it)=>{"
             "const pRaw=(it&&it.progress!=null)?Number(it.progress):NaN;"
             "const p=Number.isFinite(pRaw)?Math.max(0,Math.min(100,pRaw)):0;"
-            "const state=(it&&it.state)?String(it.state):'downloading';"
+            "const state=resolveState(it);"
             "let token=(it&&it.progress_color)?String(it.progress_color):'';"
             "if(state==='paused'){token='warning';}"
             "else if(state==='completed'){token=token||'success';}"
@@ -815,7 +826,7 @@ class XunleiHijackDownloader(_PluginBase):
             "if(sizeEl){sizeEl.textContent=(it&&it.size_text)?String(it.size_text):'--';}"
             "const leftEl=document.getElementById('xunlei-metric-left-'+k);"
             "const speedEl=document.getElementById('xunlei-metric-speed-'+k);"
-            "const state=(it&&it.state)?String(it.state):'downloading';"
+            "const state=resolveState(it);"
             "let leftText=(it&&it.left_time)?String(it.left_time):'--';"
             "let speedText=(it&&it.speed_text)?String(it.speed_text):'0B/s';"
             "if(state==='paused'){leftText='已暂停';speedText='';}"
@@ -2815,7 +2826,48 @@ class XunleiHijackDownloader(_PluginBase):
                 return "排队中"
         return "下载中"
 
+    @staticmethod
+    def _phase_token_to_state(text: str) -> str:
+        token = str(text or "").strip().lower()
+        if not token:
+            return ""
+        if any(k in token for k in ("phase_type_complete", "phase_type_finished", "complete", "completed", "finished", "done", "success")):
+            return "completed"
+        if any(k in token for k in ("phase_type_error", "error", "failed", "fail", "invalid", "失败", "错误")):
+            return "failed"
+        if any(k in token for k in ("phase_type_paused", "pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")):
+            return "paused"
+        if any(k in token for k in ("phase_type_running", "running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")):
+            return "downloading"
+        if any(k in token for k in ("phase_type_pending", "pending", "wait", "waiting", "queue", "排队", "等待")):
+            return "queued"
+        return ""
+
+    def _task_phase_state(self, task: Dict[str, Any]) -> str:
+        phase_values: List[str] = []
+        for key in ("phase", "phase_name", "status", "state"):
+            value = task.get(key)
+            if value is not None:
+                phase_values.append(str(value).strip())
+        params = task.get("params")
+        if isinstance(params, dict):
+            for key in ("phase", "phase_name", "status", "state"):
+                value = params.get(key)
+                if value is not None:
+                    phase_values.append(str(value).strip())
+        for text in phase_values:
+            state = self._phase_token_to_state(text)
+            if state:
+                return state
+        return ""
+
     def _task_progress_state(self, task: Dict[str, Any]) -> str:
+        phase_state = self._task_phase_state(task)
+        if phase_state:
+            if phase_state == "paused":
+                speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
+                return "downloading" if speed > 0 else "paused"
+            return phase_state
         if self._is_task_completed(task):
             return "completed"
         if self._is_task_failed(task):
@@ -2847,24 +2899,14 @@ class XunleiHijackDownloader(_PluginBase):
         return "primary"
 
     def _is_task_paused(self, task: Dict[str, Any]) -> bool:
+        phase_state = self._task_phase_state(task)
+        if phase_state == "paused":
+            speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
+            return speed <= 0
+        if phase_state == "downloading":
+            return False
         paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
         running_words = ("running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")
-        phase_values: List[str] = []
-        for key in ("phase", "phase_name"):
-            value = task.get(key)
-            if value is not None:
-                phase_values.append(str(value).strip().lower())
-        params = task.get("params")
-        if isinstance(params, dict):
-            for key in ("phase", "phase_name"):
-                value = params.get(key)
-                if value is not None:
-                    phase_values.append(str(value).strip().lower())
-        for text in phase_values:
-            if any(k in text for k in paused_words):
-                return True
-            if any(k in text for k in running_words):
-                return False
         values = self._task_status_values(task)
         paused = any(any(k in text for k in paused_words) for text in values)
         if not paused:
@@ -2872,29 +2914,18 @@ class XunleiHijackDownloader(_PluginBase):
         running = any(any(k in text for k in running_words) for text in values)
         if running:
             speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
-            if speed > 0:
-                return False
+            return speed <= 0
         return True
 
     def _is_task_running(self, task: Dict[str, Any]) -> bool:
+        phase_state = self._task_phase_state(task)
+        if phase_state == "downloading":
+            return True
+        if phase_state == "paused":
+            speed = float(self._task_speed_number(task=task, key="download_speed") or 0)
+            return speed > 0
         running_words = ("running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")
         paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
-        phase_values: List[str] = []
-        for key in ("phase", "phase_name"):
-            value = task.get(key)
-            if value is not None:
-                phase_values.append(str(value).strip().lower())
-        params = task.get("params")
-        if isinstance(params, dict):
-            for key in ("phase", "phase_name"):
-                value = params.get(key)
-                if value is not None:
-                    phase_values.append(str(value).strip().lower())
-        for text in phase_values:
-            if any(k in text for k in running_words):
-                return True
-            if any(k in text for k in paused_words):
-                return False
         values = self._task_status_values(task)
         running = any(any(k in text for k in running_words) for text in values)
         if not running:
