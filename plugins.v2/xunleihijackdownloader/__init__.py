@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.2.6"
+    plugin_version = "2.2.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -3143,6 +3143,19 @@ class XunleiHijackDownloader(_PluginBase):
         task_key = self._task_key(task)
         if task_key and task_key in self._moved_task_keys:
             return True
+        # 兼容“已搬移但未命中 moved_key 缓存”的场景：
+        # 完成态任务若在源下载目录中已不存在，则视为已搬离并从插件列表隐藏。
+        source_dir = str(self._source_download_dir or "").strip()
+        task_name = Path(str(self._task_name(task) or "")).name
+        if source_dir and task_name:
+            try:
+                source_root = Path(source_dir)
+                if source_root.exists() and source_root.is_dir():
+                    src = self._resolve_source_path(source_root, task_name)
+                    if not src or not src.exists():
+                        return True
+            except Exception:
+                pass
         return False
 
     @staticmethod
