@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.1.7"
+    plugin_version = "2.1.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -952,8 +952,8 @@ class XunleiHijackDownloader(_PluginBase):
             "let leftText=(it&&it.left_time)?String(it.left_time):'--';"
             "let speedText=(it&&it.speed_text)?String(it.speed_text):'0B/s';"
             "if(state==='paused'){leftText='已暂停';speedText='';}"
-            "else if(state==='queued'){leftText='排队中';speedText='排队中';}"
-            "else if(state==='failed'){leftText='失败';speedText='';}"
+            "else if(state==='queued'){leftText='排队中';speedText='';}"
+            "else if(state==='failed'){leftText='下载失败';speedText='';}"
             "if(leftEl){leftEl.textContent=leftText;}"
             "if(speedEl){speedEl.textContent=speedText;}"
             "applyToggleAction(k,state);"
@@ -2948,9 +2948,9 @@ class XunleiHijackDownloader(_PluginBase):
         if state == "paused":
             return "已暂停", ""
         if state == "queued":
-            return "排队中", "排队中"
+            return "排队中", ""
         if state == "failed":
-            return "失败", "失败"
+            return "下载失败", ""
         if state == "completed":
             return "已完成", "0B/s"
         left_time = self._task_left_time(task, progress) or "--"
@@ -2961,7 +2961,7 @@ class XunleiHijackDownloader(_PluginBase):
         if self._is_task_completed(task):
             return "已完成"
         if self._is_task_failed(task):
-            return "失败"
+            return "下载失败"
         if self._is_task_paused(task):
             return "已暂停"
         for text in self._task_status_values(task):
