@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.1.0"
+    plugin_version = "2.1.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -74,7 +74,7 @@ class XunleiHijackDownloader(_PluginBase):
     _last_request_error = ""
     _task_list_cache: Dict[str, Dict[str, Any]] = {}
     _task_list_cache_ttl_seconds = 1.0
-    _task_list_cache_ttl_ui_seconds = 5.0
+    _task_list_cache_ttl_ui_seconds = 1.0
     _ui_last_active_ts = 0.0
     _ui_keepalive_seconds = 20.0
 
@@ -362,7 +362,7 @@ class XunleiHijackDownloader(_PluginBase):
         page: List[dict] = [
             {
                 "component": "VRow",
-                "props": {"align": "center"},
+                "props": {"align": "center", "id": "xunlei-plugin-page-root"},
                 "content": [
                     {
                         "component": "VCol",
@@ -375,11 +375,11 @@ class XunleiHijackDownloader(_PluginBase):
                                     "style": "display:none;width:0;height:0;",
                                     "onload": self._build_page_metrics_poller_onerror(
                                         plugin_id=plugin_id,
-                                        interval_ms=5000,
+                                        interval_ms=1000,
                                     ),
                                     "onerror": self._build_page_metrics_poller_onerror(
                                         plugin_id=plugin_id,
-                                        interval_ms=5000,
+                                        interval_ms=1000,
                                     ),
                                 },
                             },
@@ -722,76 +722,38 @@ class XunleiHijackDownloader(_PluginBase):
             "(async()=>{"
             f"try{{const r=await fetch('{path}',{{method:'GET',credentials:'same-origin'}});"
             "const j=await r.json().catch(()=>null);"
-            "if(r.ok&&(!j||j.success!==false)){try{if(typeof window.__xunleiMetricsPollNow==='function'){window.__xunleiMetricsPollNow();}}catch(_e){}return;}"
+            "if(r.ok&&(!j||j.success!==false)){return;}"
             "alert((j&&j.message)?j.message:'操作失败，请查看日志');"
             "}catch(e){alert('请求失败，请检查网络或权限');}"
             "})();"
         )
 
     @staticmethod
-    def _build_page_metrics_poller_onerror(plugin_id: str, interval_ms: int = 5000) -> str:
+    def _build_page_metrics_poller_onerror(plugin_id: str, interval_ms: int = 1000) -> str:
         plugin = str(plugin_id or "").strip().replace("\\", "\\\\").replace("'", "\\'")
         try:
             ms = int(interval_ms)
         except Exception:
-            ms = 5000
-        if ms < 300:
-            ms = 300
+            ms = 1000
+        if ms < 1000:
+            ms = 1000
         metrics_api = f"/api/v1/plugin/{plugin}/task/metrics"
         return (
             "(function(){"
             "try{"
+            "const rootId='xunlei-plugin-page-root';"
+            "const onPage=()=>{try{return !!document.getElementById(rootId);}catch(_e){return false;}};"
+            "const stopPoller=()=>{"
+            "try{if(window.__xunleiMetricsPollerTimer){clearInterval(window.__xunleiMetricsPollerTimer);}}catch(_e){}"
+            "window.__xunleiMetricsPollerTimer=0;"
+            "};"
             "if(window.__xunleiMetricsPollerTimer){"
-            "try{"
-            "if(typeof window.__xunleiBindActionButtons==='function'){window.__xunleiBindActionButtons();}"
-            "else{const nodes=document.querySelectorAll('[id^=\"xunlei-action-\"]');for(const n of nodes){if(n){n.style.opacity='1';}}}"
-            "if(typeof window.__xunleiMetricsPollNow==='function'){window.__xunleiMetricsPollNow();}"
-            "}catch(_e){}"
+            "if(!onPage()){stopPoller();return;}"
+            "try{if(typeof window.__xunleiBindActionButtons==='function'){window.__xunleiBindActionButtons();}}catch(_e){}"
             "return;"
             "}"
             f"const u='{metrics_api}';"
-            f"const baseMs={ms};"
-            "const fastMs=1000;"
-            "const getPending=()=>{"
-            "if(!window.__xunleiTogglePending||typeof window.__xunleiTogglePending!=='object'){window.__xunleiTogglePending={};}"
-            "return window.__xunleiTogglePending;"
-            "};"
-            "const cleanupPending=(nowTs)=>{"
-            "const p=getPending();"
-            "const now=Number(nowTs||Date.now());"
-            "for(const k in p){"
-            "if(!Object.prototype.hasOwnProperty.call(p,k)){continue;}"
-            "const item=p[k]||{};"
-            "const at=Number(item.at||0);"
-            "if(!at||now-at>30000){delete p[k];}"
-            "}"
-            "return p;"
-            "};"
-            "const markTogglePending=(node)=>{"
-            "try{"
-            "const id=(node&&node.id)?String(node.id):'';"
-            "const prefix='xunlei-action-toggle-';"
-            "if(!id||id.indexOf(prefix)!==0){return;}"
-            "const key=id.slice(prefix.length);"
-            "if(!key){return;}"
-            "const api=String(node.getAttribute('data-xunlei-api')||'').toLowerCase();"
-            "const target=(api.indexOf('/task/start')>=0)?'active':'paused';"
-            "const p=getPending();"
-            "p[key]={target:target,at:Date.now()};"
-            "window.__xunleiMetricsFastMode=1;"
-            "}catch(_e){}"
-            "};"
-            "const reconcilePending=(k,state)=>{"
-            "const p=getPending();"
-            "const item=p[k];"
-            "if(!item){return;}"
-            "const target=String(item.target||'');"
-            "const s=String(state||'');"
-            "let matched=false;"
-            "if(target==='paused'){matched=(s==='paused');}"
-            "else if(target==='active'){matched=(s!==''&&s!=='paused');}"
-            "if(matched){delete p[k];}"
-            "};"
+            f"const minGapMs={ms};"
             "const centerActionIcon=(node)=>{"
             "try{"
             "if(!node){return;}"
@@ -845,16 +807,13 @@ class XunleiHijackDownloader(_PluginBase):
             "if(node.dataset.xunleiBusy==='1'){return;}"
             "const api=node.getAttribute('data-xunlei-api')||'';"
             "if(!api){return;}"
-            "const okMsg=node.getAttribute('data-xunlei-success')||'操作成功';"
             "const failMsg=node.getAttribute('data-xunlei-failure')||'操作失败';"
-            "markTogglePending(node);"
             "node.dataset.xunleiBusy='1';"
             "node.style.pointerEvents='none';"
             "try{"
             "const r=await fetch(api,{method:'GET',credentials:'same-origin',cache:'no-store'});"
             "const j=await r.json().catch(()=>null);"
-            "if(r.ok&&(!j||j.success!==false)){try{if(typeof window.__xunleiMetricsPollNow==='function'){window.__xunleiMetricsPollNow();}}catch(_e){}return;}"
-            "alert((j&&j.message)?j.message:failMsg);"
+            "if(!(r.ok&&(!j||j.success!==false))){alert((j&&j.message)?j.message:failMsg);}"
             "}catch(e){alert('请求失败，请检查网络或权限');}"
             "finally{node.dataset.xunleiBusy='0';node.style.pointerEvents='auto';}"
             "},true);"
@@ -934,14 +893,13 @@ class XunleiHijackDownloader(_PluginBase):
             "};"
             "const f=async()=>{"
             "try{"
+            "if(!onPage()){stopPoller();return;}"
             "if(document&&document.visibilityState==='hidden'){return;}"
-            "const now=Date.now();"
-            "const fastMode=(window.__xunleiMetricsFastMode===1);"
-            "const lastRun=Number(window.__xunleiMetricsLastRunAt||0);"
-            "const minGap=fastMode?fastMs:baseMs;"
-            "if(lastRun&&now-lastRun<minGap){return;}"
-            "window.__xunleiMetricsLastRunAt=now;"
             "if(window.__xunleiMetricsInflight===1){return;}"
+            "const now=Date.now();"
+            "const lastRun=Number(window.__xunleiMetricsLastRunAt||0);"
+            "if(lastRun&&now-lastRun<minGapMs){return;}"
+            "window.__xunleiMetricsLastRunAt=now;"
             "window.__xunleiMetricsInflight=1;"
             "bindActionButtons();"
             "const r=await fetch(u,{method:'GET',credentials:'same-origin',cache:'no-store'});"
@@ -964,21 +922,17 @@ class XunleiHijackDownloader(_PluginBase):
             "if(speedEl){speedEl.textContent=speedText;}"
             "applyToggleAction(k,state);"
             "applyProgress(k,it);"
-            "reconcilePending(k,state);"
             "}"
             "}catch(e){}"
-            "finally{"
-            "window.__xunleiMetricsInflight=0;"
-            "const pending=cleanupPending(Date.now());"
-            "if(window.__xunleiMetricsFastMode===1&&Object.keys(pending).length===0){window.__xunleiMetricsFastMode=0;}"
-            "}"
+            "finally{window.__xunleiMetricsInflight=0;}"
             "};"
             "window.__xunleiMetricsPollNow=()=>{try{f();}catch(e){}};"
-            "window.__xunleiMetricsFastMode=0;"
             "window.__xunleiMetricsLastRunAt=0;"
+            "window.__xunleiMetricsInflight=0;"
             "bindActionButtons();"
             "f();"
-            "window.__xunleiMetricsPollerTimer=setInterval(f,1000);"
+            "window.__xunleiMetricsPollerTimer=setInterval(f,minGapMs);"
+            "window.addEventListener('beforeunload',()=>{try{stopPoller();}catch(_e){}},{once:true});"
             "}catch(e){}"
             "})();"
         )
