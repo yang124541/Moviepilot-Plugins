@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.1.8"
+    plugin_version = "2.1.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -594,6 +594,7 @@ class XunleiHijackDownloader(_PluginBase):
             "data-xunlei-start-failure": "开始任务失败。",
             "data-xunlei-pause-failure": "暂停任务失败。",
             "data-xunlei-retry-failure": "重试任务失败。",
+            "data-xunlei-hover-color": "retry" if toggle_is_retry else ("success" if toggle_is_start else "warning"),
             "data-xunlei-icon-mode": "retry" if toggle_is_retry else ("start" if toggle_is_start else "pause"),
         })
 
@@ -783,7 +784,7 @@ class XunleiHijackDownloader(_PluginBase):
             "if(!iconMode){iconMode=(apiText.indexOf('/task/start')>=0)?'start':'pause';}"
             "const playSvg='<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" aria-hidden=\"true\" focusable=\"false\"><polygon points=\"7,5 19,12 7,19\" fill=\"#4CAF50\"></polygon></svg>';"
             "const pauseSvg='<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" aria-hidden=\"true\" focusable=\"false\"><rect x=\"6\" y=\"5\" width=\"4\" height=\"14\" rx=\"1\" fill=\"#FB8C00\"></rect><rect x=\"14\" y=\"5\" width=\"4\" height=\"14\" rx=\"1\" fill=\"#FB8C00\"></rect></svg>';"
-            "const retrySvg='<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" aria-hidden=\"true\" focusable=\"false\"><g fill=\"none\" stroke=\"#90A4AE\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 4v6h-6\"></path><path d=\"M20 10a8 8 0 1 0 2.3 5.6\"></path></g></svg>';"
+            "const retrySvg='<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" aria-hidden=\"true\" focusable=\"false\"><g fill=\"none\" stroke=\"#90A4AE\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 11a8 8 0 1 1-2.3-5.6\"></path><polyline points=\"20 5 20 11 14 11\"></polyline></g></svg>';"
             "if(prepend){prepend.style.display='none';}"
             "if(content){content.style.display='inline-flex';content.style.alignItems='center';content.style.justifyContent='center';content.style.fontSize='13px';content.style.lineHeight='1';content.style.fontWeight='700';content.innerHTML=(iconMode==='retry')?retrySvg:(iconMode==='start'?playSvg:pauseSvg);}"
             "node.style.color='';"
@@ -817,6 +818,7 @@ class XunleiHijackDownloader(_PluginBase):
             "const k=String(c||'').toLowerCase();"
             "if(k==='success'){return '0 0 0 12px rgba(76,175,80,.62),0 0 24px rgba(76,175,80,.54)';}"
             "if(k==='warning'){return '0 0 0 12px rgba(251,140,0,.62),0 0 24px rgba(251,140,0,.54)';}"
+            "if(k==='retry'){return '0 0 0 12px rgba(144,164,174,.52),0 0 24px rgba(144,164,174,.44)';}"
             "if(k==='error'){return '0 0 0 12px rgba(255,82,82,.62),0 0 24px rgba(255,82,82,.54)';}"
             "return '0 0 0 12px rgba(25,118,210,.62),0 0 24px rgba(25,118,210,.54)';"
             "};"
@@ -908,7 +910,7 @@ class XunleiHijackDownloader(_PluginBase):
             "btn.setAttribute('data-xunlei-api',useStart?apiStart:apiPause);"
             "btn.setAttribute('data-xunlei-success',isFailed?okRetry:(useStart?okStart:okPause));"
             "btn.setAttribute('data-xunlei-failure',isFailed?failRetry:(useStart?failStart:failPause));"
-            "btn.setAttribute('data-xunlei-hover-color',isFailed?'warning':(useStart?'success':'warning'));"
+            "btn.setAttribute('data-xunlei-hover-color',isFailed?'retry':(useStart?'success':'warning'));"
             "btn.setAttribute('data-xunlei-icon-mode',isFailed?'retry':(useStart?'start':'pause'));"
             "btn.classList.remove('text-success','text-warning');"
             "btn.classList.add(isFailed?'text-warning':(useStart?'text-success':'text-warning'));"
