@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.1.5"
+    plugin_version = "2.1.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -549,13 +549,22 @@ class XunleiHijackDownloader(_PluginBase):
         toggle_btn_id = f"xunlei-action-toggle-{btn_key}"
         delete_btn_id = f"xunlei-action-delete-{btn_key}"
         progress_color = "primary"
-        toggle_is_start = (task_state == "paused")
-        toggle_text = "开始" if toggle_is_start else "暂停"
-        toggle_color = "success" if toggle_is_start else "warning"
-        toggle_icon = "mdi-play" if toggle_is_start else "mdi-pause"
+        toggle_is_retry = (task_state == "failed")
+        toggle_is_start = (task_state == "paused") or toggle_is_retry
+        toggle_text = "重试" if toggle_is_retry else ("开始" if toggle_is_start else "暂停")
+        toggle_color = "warning" if toggle_is_retry else ("success" if toggle_is_start else "warning")
+        toggle_icon = "mdi-refresh" if toggle_is_retry else ("mdi-play" if toggle_is_start else "mdi-pause")
         toggle_api = start_api if toggle_is_start else pause_api
-        toggle_success_message = "开始任务成功，请点击刷新查看状态。" if toggle_is_start else "暂停任务成功，请点击刷新查看状态。"
-        toggle_failure_message = "开始任务失败。" if toggle_is_start else "暂停任务失败。"
+        toggle_success_message = (
+            "重试任务成功，请点击刷新查看状态。"
+            if toggle_is_retry
+            else ("开始任务成功，请点击刷新查看状态。" if toggle_is_start else "暂停任务成功，请点击刷新查看状态。")
+        )
+        toggle_failure_message = (
+            "重试任务失败。"
+            if toggle_is_retry
+            else ("开始任务失败。" if toggle_is_start else "暂停任务失败。")
+        )
 
         image_node: Dict[str, Any] = {
             "component": "VImg",
@@ -581,8 +590,11 @@ class XunleiHijackDownloader(_PluginBase):
             "data-xunlei-api-pause": str(pause_api or ""),
             "data-xunlei-start-success": "开始任务成功，请点击刷新查看状态。",
             "data-xunlei-pause-success": "暂停任务成功，请点击刷新查看状态。",
+            "data-xunlei-retry-success": "重试任务成功，请点击刷新查看状态。",
             "data-xunlei-start-failure": "开始任务失败。",
             "data-xunlei-pause-failure": "暂停任务失败。",
+            "data-xunlei-retry-failure": "重试任务失败。",
+            "data-xunlei-icon-mode": "retry" if toggle_is_retry else ("start" if toggle_is_start else "pause"),
         })
 
         return {
@@ -766,11 +778,14 @@ class XunleiHijackDownloader(_PluginBase):
             "const isToggle=(nodeId.indexOf('xunlei-action-toggle-')===0);"
             "if(isToggle){"
             "const apiText=String(node.getAttribute('data-xunlei-api')||'').toLowerCase();"
-            "const isStart=(apiText.indexOf('/task/start')>=0);"
+            "let iconMode=String(node.getAttribute('data-xunlei-icon-mode')||'').toLowerCase();"
+            "if(iconMode!=='start'&&iconMode!=='pause'&&iconMode!=='retry'){iconMode='';}"
+            "if(!iconMode){iconMode=(apiText.indexOf('/task/start')>=0)?'start':'pause';}"
             "const playSvg='<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" aria-hidden=\"true\" focusable=\"false\"><polygon points=\"7,5 19,12 7,19\" fill=\"#4CAF50\"></polygon></svg>';"
             "const pauseSvg='<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" aria-hidden=\"true\" focusable=\"false\"><rect x=\"6\" y=\"5\" width=\"4\" height=\"14\" rx=\"1\" fill=\"#FB8C00\"></rect><rect x=\"14\" y=\"5\" width=\"4\" height=\"14\" rx=\"1\" fill=\"#FB8C00\"></rect></svg>';"
+            "const retrySvg='<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" aria-hidden=\"true\" focusable=\"false\"><g fill=\"none\" stroke=\"#90A4AE\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 4v6h-6\"></path><path d=\"M20 10a8 8 0 1 0 2.3 5.6\"></path></g><animateTransform attributeName=\"transform\" attributeType=\"XML\" type=\"rotate\" from=\"0 12 12\" to=\"360 12 12\" dur=\"1s\" repeatCount=\"indefinite\"></animateTransform></svg>';"
             "if(prepend){prepend.style.display='none';}"
-            "if(content){content.style.display='inline-flex';content.style.alignItems='center';content.style.justifyContent='center';content.style.fontSize='13px';content.style.lineHeight='1';content.style.fontWeight='700';content.innerHTML=isStart?playSvg:pauseSvg;}"
+            "if(content){content.style.display='inline-flex';content.style.alignItems='center';content.style.justifyContent='center';content.style.fontSize='13px';content.style.lineHeight='1';content.style.fontWeight='700';content.innerHTML=(iconMode==='retry')?retrySvg:(iconMode==='start'?playSvg:pauseSvg);}"
             "node.style.color='';"
             "node.style.opacity='1';"
             "return;"
@@ -878,20 +893,25 @@ class XunleiHijackDownloader(_PluginBase):
             "const applyToggleAction=(k,state)=>{"
             "const btn=document.getElementById('xunlei-action-toggle-'+k);"
             "if(!btn){return;}"
-            "const useStart=String(state||'')==='paused';"
+            "const stateToken=String(state||'');"
+            "const isFailed=(stateToken==='failed');"
+            "const useStart=(stateToken==='paused'||isFailed);"
             "const apiStart=btn.getAttribute('data-xunlei-api-start')||'';"
             "const apiPause=btn.getAttribute('data-xunlei-api-pause')||'';"
             "const okStart=btn.getAttribute('data-xunlei-start-success')||'开始任务成功，请点击刷新查看状态。';"
             "const okPause=btn.getAttribute('data-xunlei-pause-success')||'暂停任务成功，请点击刷新查看状态。';"
+            "const okRetry=btn.getAttribute('data-xunlei-retry-success')||'重试任务成功，请点击刷新查看状态。';"
             "const failStart=btn.getAttribute('data-xunlei-start-failure')||'开始任务失败。';"
             "const failPause=btn.getAttribute('data-xunlei-pause-failure')||'暂停任务失败。';"
-            "btn.setAttribute('title',useStart?'开始':'暂停');"
+            "const failRetry=btn.getAttribute('data-xunlei-retry-failure')||'重试任务失败。';"
+            "btn.setAttribute('title',isFailed?'重试':(useStart?'开始':'暂停'));"
             "btn.setAttribute('data-xunlei-api',useStart?apiStart:apiPause);"
-            "btn.setAttribute('data-xunlei-success',useStart?okStart:okPause);"
-            "btn.setAttribute('data-xunlei-failure',useStart?failStart:failPause);"
-            "btn.setAttribute('data-xunlei-hover-color',useStart?'success':'warning');"
+            "btn.setAttribute('data-xunlei-success',isFailed?okRetry:(useStart?okStart:okPause));"
+            "btn.setAttribute('data-xunlei-failure',isFailed?failRetry:(useStart?failStart:failPause));"
+            "btn.setAttribute('data-xunlei-hover-color',isFailed?'warning':(useStart?'success':'warning'));"
+            "btn.setAttribute('data-xunlei-icon-mode',isFailed?'retry':(useStart?'start':'pause'));"
             "btn.classList.remove('text-success','text-warning');"
-            "btn.classList.add(useStart?'text-success':'text-warning');"
+            "btn.classList.add(isFailed?'text-warning':(useStart?'text-success':'text-warning'));"
             "centerActionIcon(btn);"
             "};"
             "const applyProgress=(k,it)=>{"
@@ -933,7 +953,7 @@ class XunleiHijackDownloader(_PluginBase):
             "let speedText=(it&&it.speed_text)?String(it.speed_text):'0B/s';"
             "if(state==='paused'){leftText='已暂停';speedText='';}"
             "else if(state==='queued'){leftText='排队中';speedText='排队中';}"
-            "else if(state==='failed'){leftText='失败';speedText='失败';}"
+            "else if(state==='failed'){leftText='失败';speedText='';}"
             "if(leftEl){leftEl.textContent=leftText;}"
             "if(speedEl){speedEl.textContent=speedText;}"
             "applyToggleAction(k,state);"
