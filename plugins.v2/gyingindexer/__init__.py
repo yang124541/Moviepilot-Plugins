@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urljoin, urlparse
 
+import requests
 from fastapi.concurrency import run_in_threadpool
 
 from app.core.config import settings
@@ -21,7 +22,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.5.2"
+    plugin_version = "1.5.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -35,6 +36,8 @@ class GyingIndexer(_PluginBase):
     _enable_zh4k = True
     _include_original = True
     _extra_hosts = ""
+    _login_username = ""
+    _login_password = ""
 
     _default_hosts: Set[str] = {
         "gying.si",
@@ -93,6 +96,16 @@ class GyingIndexer(_PluginBase):
             self._enabled = bool(config.get("enabled"))
             self._include_original = bool(config.get("include_original", True))
             self._extra_hosts = (config.get("extra_hosts") or "").strip()
+            self._login_username = str(
+                config.get("login_username")
+                or config.get("username")
+                or ""
+            ).strip()
+            self._login_password = str(
+                config.get("login_password")
+                or config.get("password")
+                or ""
+            ).strip()
 
             # 新版 5 开关
             if any(k in config for k in ("enable_1080", "enable_zh1080", "enable_4k", "enable_zh4k")):
@@ -221,6 +234,40 @@ class GyingIndexer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "login_username",
+                                            "label": "观影账号",
+                                            "placeholder": "请输入 gying.si 账号",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "login_password",
+                                            "label": "观影密码",
+                                            "type": "password",
+                                            "placeholder": "请输入 gying.si 密码",
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
                                 "props": {"cols": 12},
                                 "content": [
                                     {
@@ -246,6 +293,8 @@ class GyingIndexer(_PluginBase):
             "enable_zh4k": True,
             "include_original": True,
             "extra_hosts": "",
+            "login_username": "",
+            "login_password": "",
         }
 
     def get_page(self) -> List[dict]:
@@ -284,9 +333,16 @@ class GyingIndexer(_PluginBase):
 
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
-        cookie = site.get("cookie")
         proxies = settings.PROXY if site.get("proxy") else None
         referer = base_url
+        cookie = self._resolve_site_cookie(
+            site=site,
+            base_url=base_url,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+            keyword=keyword,
+        )
 
         logger.info(
             f"观影(GYing)开始搜索：关键词='{keyword}'，"
@@ -655,6 +711,180 @@ class GyingIndexer(_PluginBase):
         except Exception as err:
             logger.error(f"观影(GYing)搜索异常：关键词='{keyword}'，错误={err}")
             return []
+
+    def _resolve_site_cookie(self, site: dict, base_url: str, ua: str,
+                             proxies: Optional[Dict[str, str]], timeout: int,
+                             keyword: str) -> str:
+        cookie = str(site.get("cookie") or "").strip()
+        if self._is_search_response_ready(
+            base_url=base_url,
+            keyword=keyword,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+            cookie=cookie,
+        ):
+            return cookie
+
+        username = str(
+            self._login_username
+            or site.get("username")
+            or site.get("user")
+            or site.get("account")
+            or site.get("email")
+            or ""
+        ).strip()
+        password = str(
+            self._login_password
+            or site.get("password")
+            or site.get("passwd")
+            or site.get("pass")
+            or site.get("pwd")
+            or ""
+        ).strip()
+        if not username or not password:
+            logger.warn("观影(GYing)cookie 已失效且未配置可用账号密码，无法自动登录。")
+            return cookie
+
+        refreshed = self._login_and_get_cookie(
+            base_url=base_url,
+            username=username,
+            password=password,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+        )
+        if not refreshed:
+            logger.warn("观影(GYing)自动登录失败，继续使用现有 cookie 搜索。")
+            return cookie
+
+        if not self._is_search_response_ready(
+            base_url=base_url,
+            keyword=keyword,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+            cookie=refreshed,
+        ):
+            logger.warn("观影(GYing)自动登录后仍未获取到搜索页数据，请检查站点风控或账号状态。")
+            return cookie
+
+        logger.info("观影(GYing)检测到 cookie 失效，已自动登录并刷新会话。")
+        return refreshed
+
+    @staticmethod
+    def _cookie_jar_to_header(jar: requests.cookies.RequestsCookieJar) -> str:
+        if not jar:
+            return ""
+        parts: List[str] = []
+        for item in jar:
+            name = str(getattr(item, "name", "") or "").strip()
+            value = str(getattr(item, "value", "") or "").strip()
+            if name:
+                parts.append(f"{name}={value}")
+        return "; ".join(parts)
+
+    @staticmethod
+    def _is_login_shell(html_text: str) -> bool:
+        text = str(html_text or "")
+        if not text:
+            return True
+        return ("_BT.PC.HTML('login')" in text) or ('_BT.PC.HTML("login")' in text)
+
+    def _is_search_response_ready(self, base_url: str, keyword: str, ua: str,
+                                  proxies: Optional[Dict[str, str]], timeout: int,
+                                  cookie: str) -> bool:
+        try:
+            headers = {"User-Agent": ua or settings.USER_AGENT, "Referer": base_url}
+            if cookie:
+                headers["Cookie"] = cookie
+            url = self._build_search_url(base_url=base_url, keyword=keyword or "测试", mode="precise")
+            resp = requests.get(url=url, headers=headers, proxies=proxies, timeout=max(5, int(timeout or 20)))
+            if not resp.ok:
+                return False
+            body = str(resp.text or "")
+            if self._is_login_shell(body):
+                return False
+            return "_obj.search" in body
+        except Exception:
+            return False
+
+    def _login_and_get_cookie(self, base_url: str, username: str, password: str, ua: str,
+                              proxies: Optional[Dict[str, str]], timeout: int) -> str:
+        root_candidates = self._build_login_roots(base_url=base_url)
+        for root in root_candidates:
+            try:
+                with requests.Session() as session:
+                    session.proxies.update(proxies or {})
+                    session.headers.update({
+                        "User-Agent": ua or settings.USER_AGENT,
+                        "Referer": root,
+                    })
+                    session.get(root, timeout=max(5, int(timeout or 20)))
+                    login_url = urljoin(root, "/user/login")
+                    payload = {
+                        "username": username,
+                        "password": password,
+                        "cookietime": "10506240",
+                        "siteid": "1",
+                        "dosubmit": "1",
+                        "code": "",
+                    }
+                    ajax_headers = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/json, text/javascript, */*; q=0.01",
+                        "Origin": f"{urlparse(root).scheme}://{urlparse(root).netloc}",
+                        "Referer": login_url,
+                    }
+                    resp = session.post(
+                        login_url,
+                        data=payload,
+                        headers=ajax_headers,
+                        timeout=max(5, int(timeout or 20)),
+                    )
+                    if not resp.ok:
+                        continue
+                    ok = False
+                    try:
+                        obj = resp.json()
+                        ok = int(obj.get("code") or 0) == 200
+                    except Exception:
+                        text = str(resp.text or "")
+                        ok = ("登录成功" in text) or ("\"code\":200" in text) or ("{'code':200}" in text)
+                    if not ok:
+                        continue
+                    cookie_text = self._cookie_jar_to_header(session.cookies)
+                    if cookie_text:
+                        return cookie_text
+            except Exception as err:
+                logger.warn(f"观影(GYing)自动登录异常：{err}")
+                continue
+        return ""
+
+    @staticmethod
+    def _build_login_roots(base_url: str) -> List[str]:
+        parsed = urlparse(str(base_url or "").strip())
+        scheme = parsed.scheme or "https"
+        host = parsed.netloc or ""
+        host = host.strip()
+        if not host:
+            return ["https://www.gying.si/"]
+        pure = host[4:] if host.startswith("www.") else host
+        candidates: List[str] = [f"{scheme}://{host}/"]
+        if pure:
+            candidates.append(f"{scheme}://{pure}/")
+            candidates.append(f"{scheme}://www.{pure}/")
+        ret: List[str] = []
+        seen: Set[str] = set()
+        for item in candidates:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            if text in seen:
+                continue
+            seen.add(text)
+            ret.append(text)
+        return ret
 
     @staticmethod
     def _make_cached_get(client: RequestUtils,
