@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.0.5"
+    plugin_version = "2.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -528,7 +528,7 @@ class XunleiHijackDownloader(_PluginBase):
         task_name = self._task_name(task) or task_id or "xunlei-task"
         dom_key = self._task_dom_key(task)
         task_done = self._is_task_completed(task)
-        task_paused = self._is_task_paused(task)
+        task_state = self._task_progress_state(task)
         task_failed = self._is_task_failed(task)
 
         progress = self._task_progress(task)
@@ -549,7 +549,7 @@ class XunleiHijackDownloader(_PluginBase):
         toggle_btn_id = f"xunlei-action-toggle-{btn_key}"
         delete_btn_id = f"xunlei-action-delete-{btn_key}"
         progress_color = "primary"
-        toggle_is_start = bool(task_paused)
+        toggle_is_start = (task_state == "paused")
         toggle_text = "开始" if toggle_is_start else "暂停"
         toggle_color = "success" if toggle_is_start else "warning"
         toggle_icon = "mdi-play" if toggle_is_start else "mdi-pause"
@@ -705,7 +705,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "disabled": bool(disabled),
                 "class": "ml-1 xunlei-action-btn",
                 "rounded": "sm",
-                "style": "position:relative;min-width:28px;width:28px;height:28px;padding:0;background:transparent;transition:box-shadow .15s ease;",
+                "style": "position:relative;min-width:28px;width:28px;height:28px;padding:0;opacity:0;background:transparent;transition:box-shadow .15s ease,opacity .08s linear;",
                 "id": str(button_id or ""),
                 "data-xunlei-api": str(api_path or ""),
                 "data-xunlei-success": str(success_message or ""),
@@ -804,6 +804,7 @@ class XunleiHijackDownloader(_PluginBase):
             "if(content){content.style.display='none';}"
             "const icon=node.querySelector('.v-icon');"
             "if(icon){icon.style.margin='0';icon.style.lineHeight='1';}"
+            "node.style.opacity='1';"
             "}catch(_e){}"
             "};"
             "const bindActionButtons=()=>{"
@@ -850,11 +851,16 @@ class XunleiHijackDownloader(_PluginBase):
             "}"
             "}catch(e){}"
             "};"
-            "const resolveState=(it)=>{"
-            "let s=(it&&it.state)?String(it.state):'downloading';"
-            "if(!s){s='downloading';}"
-            "return s;"
+            "const normalizeState=(raw)=>{"
+            "const s=String(raw||'').trim().toLowerCase();"
+            "if(!s){return 'downloading';}"
+            "if(s.indexOf('phase_type_complete')>=0||s.indexOf('phase_type_finished')>=0||s.indexOf('complete')>=0||s.indexOf('finished')>=0||s.indexOf('done')>=0){return 'completed';}"
+            "if(s.indexOf('phase_type_error')>=0||s.indexOf('failed')>=0||s.indexOf('fail')>=0||s.indexOf('error')>=0||s.indexOf('invalid')>=0||s.indexOf('失败')>=0||s.indexOf('错误')>=0){return 'failed';}"
+            "if(s.indexOf('phase_type_paused')>=0||s.indexOf('paused')>=0||s.indexOf('pause')>=0||s.indexOf('suspend')>=0||s.indexOf('stopped')>=0||s.indexOf('halt')>=0||s.indexOf('暂停')>=0||s.indexOf('已暂停')>=0||s.indexOf('已停止')>=0){return 'paused';}"
+            "if(s.indexOf('phase_type_pending')>=0||s.indexOf('pending')>=0||s.indexOf('waiting')>=0||s.indexOf('queue')>=0||s.indexOf('排队')>=0||s.indexOf('等待')>=0){return 'queued';}"
+            "return 'downloading';"
             "};"
+            "const resolveState=(it)=>normalizeState((it&&it.state)?it.state:'');"
             "const applyToggleAction=(k,state)=>{"
             "const btn=document.getElementById('xunlei-action-toggle-'+k);"
             "if(!btn){return;}"
@@ -2938,9 +2944,9 @@ class XunleiHijackDownloader(_PluginBase):
             return "completed"
         if any(k in token for k in ("phase_type_error", "error", "failed", "fail", "invalid", "失败", "错误")):
             return "failed"
-        if any(k in token for k in ("phase_type_paused", "pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")):
+        if any(k in token for k in ("phase_type_paused", "pause", "paused", "suspend", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")):
             return "paused"
-        if any(k in token for k in ("phase_type_running", "running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")):
+        if any(k in token for k in ("phase_type_running", "running", "run", "resume", "resumed", "下载中", "进行中", "启动中")):
             return "downloading"
         if any(k in token for k in ("phase_type_pending", "pending", "wait", "waiting", "queue", "排队", "等待")):
             return "queued"
@@ -3020,8 +3026,8 @@ class XunleiHijackDownloader(_PluginBase):
             return True
         if phase_state == "downloading":
             return False
-        paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
-        running_words = ("running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")
+        paused_words = ("pause", "paused", "suspend", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
+        running_words = ("running", "run", "resume", "resumed", "下载中", "进行中", "启动中")
         values = self._task_status_values(task)
         paused = any(any(k in text for k in paused_words) for text in values)
         if not paused:
@@ -3038,8 +3044,8 @@ class XunleiHijackDownloader(_PluginBase):
             return True
         if phase_state == "paused":
             return False
-        running_words = ("running", "run", "start", "started", "resume", "resumed", "下载中", "进行中", "启动中")
-        paused_words = ("pause", "paused", "suspend", "stop", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
+        running_words = ("running", "run", "resume", "resumed", "下载中", "进行中", "启动中")
+        paused_words = ("pause", "paused", "suspend", "stopped", "halt", "暂停", "已暂停", "停止", "已停止")
         values = self._task_status_values(task)
         running = any(any(k in text for k in running_words) for text in values)
         if not running:

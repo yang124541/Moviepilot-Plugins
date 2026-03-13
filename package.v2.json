@@ -61,11 +61,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "2.0.5",
+    "version": "2.0.6",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v2.0.6": "修复操作按钮首屏图标跳动；开始/暂停按钮按任务实时状态正确切换。",
       "v2.0.5": "加宽右侧指标/进度区域（保持与按钮区不重叠），延长进度条显示长度。",
       "v2.0.4": "仅增强按钮 hover 光晕强度（更重更明显），不调整点击态颜色逻辑。",
       "v2.0.3": "修复按钮图标丢失：恢复 prependIcon 渲染并强制图标居中；同时加重 hover 光晕效果。",
