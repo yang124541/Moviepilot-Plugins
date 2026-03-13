@@ -1,4 +1,5 @@
 import html
+import importlib
 import json
 import re
 from datetime import datetime
@@ -22,7 +23,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.5.4"
+    plugin_version = "1.5.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -769,8 +770,117 @@ class GyingIndexer(_PluginBase):
             logger.warn("观影(GYing)自动登录后仍未获取到搜索页数据，请检查站点风控或账号状态。")
             return cookie
 
-        logger.info("观影(GYing)检测到 cookie 失效，已自动登录并刷新会话。")
+        site["cookie"] = refreshed
+        persisted = self._persist_site_cookie(site=site, cookie=refreshed)
+        if persisted:
+            logger.info("观影(GYing)检测到 cookie 失效，已自动登录并刷新会话，且已回写站点 cookie。")
+        else:
+            logger.info("观影(GYing)检测到 cookie 失效，已自动登录并刷新会话。")
+            logger.warn("观影(GYing)未能回写站点 cookie，本次搜索仍将使用新会话。")
         return refreshed
+
+    def _persist_site_cookie(self, site: dict, cookie: str) -> bool:
+        cookie_text = str(cookie or "").strip()
+        if not cookie_text or not isinstance(site, dict):
+            return False
+
+        site_id = site.get("id")
+        payload = dict(site)
+        payload["cookie"] = cookie_text
+        site["cookie"] = cookie_text
+
+        oper_candidates: List[Tuple[str, str]] = [
+            ("app.db.site_oper", "SiteOper"),
+            ("app.db.siteoper", "SiteOper"),
+            ("app.db.site", "SiteOper"),
+        ]
+        method_candidates: Tuple[str, ...] = (
+            "update",
+            "update_site",
+            "save",
+            "upsert",
+            "update_cookie",
+        )
+
+        for module_name, class_name in oper_candidates:
+            try:
+                module = importlib.import_module(module_name)
+                oper_cls = getattr(module, class_name, None)
+                if not oper_cls:
+                    continue
+                oper = oper_cls()
+            except Exception:
+                continue
+
+            for method_name in method_candidates:
+                method = getattr(oper, method_name, None)
+                if not callable(method):
+                    continue
+                if self._try_site_update_method(
+                    method=method,
+                    site_id=site_id,
+                    payload=payload,
+                    cookie_text=cookie_text,
+                ):
+                    return True
+        return False
+
+    @staticmethod
+    def _try_site_update_method(method: Callable[..., Any], site_id: Any,
+                                payload: Dict[str, Any], cookie_text: str) -> bool:
+        has_site_id = site_id is not None and str(site_id).strip() != ""
+        attempts: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+        if has_site_id:
+            attempts.extend([
+                ((site_id, payload), {}),
+                ((), {"site_id": site_id, "site": payload}),
+                ((), {"site_id": site_id, "data": payload}),
+                ((), {"site_id": site_id, "payload": payload}),
+                ((), {"id": site_id, "site": payload}),
+                ((), {"id": site_id, "data": payload}),
+                ((), {"id": site_id, "payload": payload}),
+                ((site_id, cookie_text), {}),
+                ((), {"site_id": site_id, "cookie": cookie_text}),
+                ((), {"id": site_id, "cookie": cookie_text}),
+            ])
+        attempts.extend([
+            ((payload,), {}),
+            ((), {"site": payload}),
+            ((), {"data": payload}),
+            ((), {"payload": payload}),
+        ])
+
+        for args, kwargs in attempts:
+            try:
+                result = method(*args, **kwargs)
+            except TypeError:
+                continue
+            except Exception:
+                continue
+            if GyingIndexer._is_site_update_success(result):
+                return True
+        return False
+
+    @staticmethod
+    def _is_site_update_success(result: Any) -> bool:
+        if result is None:
+            return True
+        if isinstance(result, bool):
+            return result
+        if isinstance(result, (int, float)):
+            return int(result) >= 0
+        if isinstance(result, dict):
+            if "success" in result:
+                return bool(result.get("success"))
+            if "code" in result:
+                try:
+                    return int(result.get("code") or 0) in (0, 200)
+                except Exception:
+                    return False
+            if "id" in result or "site_id" in result:
+                return True
+            return False
+        return True
 
     @staticmethod
     def _cookie_jar_to_header(jar: requests.cookies.RequestsCookieJar) -> str:
