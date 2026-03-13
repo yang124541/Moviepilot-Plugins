@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.0.9"
+    plugin_version = "2.1.0"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -2199,6 +2199,8 @@ class XunleiHijackDownloader(_PluginBase):
             single_phase = "running"
         elif action_token in ("pause", "stop", "suspend"):
             single_phase = "pause"
+        elif action_token in ("delete", "remove"):
+            single_phase = "delete"
         if single_phase:
             device_space = str(preferred_space or self._device_id or "").strip()
             task_type = str(preferred_type or "user#download-url").strip()
@@ -2239,7 +2241,8 @@ class XunleiHijackDownloader(_PluginBase):
                 self._last_request_error = detail
             if not self._last_request_error:
                 self._last_request_error = f"action={action} 单次请求未成功"
-            return False
+            if action_token != "delete":
+                return False
 
         payload_templates: List[Dict[str, Any]] = [
             {"action": action, "ids": id_list},
@@ -2499,6 +2502,8 @@ class XunleiHijackDownloader(_PluginBase):
             return ["phase_type_running", "PHASE_TYPE_RUNNING", "running", "RUNNING", "start", "START"]
         if token in ("pause", "stop", "suspend"):
             return ["phase_type_paused", "PHASE_TYPE_PAUSED", "pause", "PAUSE", "paused", "PAUSED"]
+        if token in ("delete", "remove"):
+            return ["phase_type_delete", "PHASE_TYPE_DELETE", "delete", "DELETE"]
         return []
 
     @staticmethod
@@ -2508,6 +2513,8 @@ class XunleiHijackDownloader(_PluginBase):
             return ["running", "RUNNING", "start", "START"]
         if token in ("pause", "stop", "suspend"):
             return ["pause", "PAUSE", "paused", "PAUSED"]
+        if token in ("delete", "remove"):
+            return ["delete", "DELETE"]
         return []
 
     @staticmethod
