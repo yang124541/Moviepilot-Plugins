@@ -66,11 +66,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "2.2.1",
+    "version": "2.2.2",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v2.2.2": "修复删除后列表残留：任务状态轮询成功后会清理本轮已不存在的任务行，删除结果可自动反映到插件页面。",
       "v2.2.1": "版本号升级到 2.2.1。",
       "v2.1.10": "重试图标改为 path+currentColor 画法并固定灰色显示，hover 继续使用灰色光晕。",
       "v2.1.9": "重试图标按示意重绘为静态灰色循环箭头，并将失败态重试按钮 hover 光晕改为灰色。",

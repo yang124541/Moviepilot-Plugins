@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.2.1"
+    plugin_version = "2.2.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -600,7 +600,7 @@ class XunleiHijackDownloader(_PluginBase):
 
         return {
             "component": "VCard",
-            "props": {"variant": "text", "style": "margin-top:10px;margin-bottom:0;"},
+            "props": {"id": f"xunlei-task-row-{dom_key or btn_key}", "variant": "text", "style": "margin-top:10px;margin-bottom:0;"},
             "content": [
                 {
                     "component": "VCardText",
@@ -943,9 +943,11 @@ class XunleiHijackDownloader(_PluginBase):
             "const r=await fetch(u,{method:'GET',credentials:'same-origin',cache:'no-store'});"
             "const j=await r.json().catch(()=>null);"
             "if(!r.ok||!j||j.success===false||!Array.isArray(j.items)){return;}"
+            "const liveKeys={};"
             "for(const it of j.items){"
             "const k=(it&&it.key)?String(it.key):'';"
             "if(!k){continue;}"
+            "liveKeys[k]=1;"
             "const sizeEl=document.getElementById('xunlei-metric-size-'+k);"
             "if(sizeEl){sizeEl.textContent=(it&&it.size_text)?String(it.size_text):'--';}"
             "const leftEl=document.getElementById('xunlei-metric-left-'+k);"
@@ -960,6 +962,15 @@ class XunleiHijackDownloader(_PluginBase):
             "if(speedEl){speedEl.textContent=speedText;}"
             "applyToggleAction(k,state);"
             "applyProgress(k,it);"
+            "}"
+            "const rows=document.querySelectorAll('[id^=\"xunlei-task-row-\"]');"
+            "for(const row of rows){"
+            "const rid=String((row&&row.id)||'');"
+            "if(!rid){continue;}"
+            "const key=rid.slice('xunlei-task-row-'.length);"
+            "if(!key){continue;}"
+            "if(Object.prototype.hasOwnProperty.call(liveKeys,key)){continue;}"
+            "try{row.remove();}catch(_e){try{if(row&&row.parentNode){row.parentNode.removeChild(row);}}catch(__e){}}"
             "}"
             "}catch(e){}"
             "finally{window.__xunleiMetricsInflight=0;}"
