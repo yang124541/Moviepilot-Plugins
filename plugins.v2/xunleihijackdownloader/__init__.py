@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.1.1"
+    plugin_version = "2.1.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -665,7 +665,7 @@ class XunleiHijackDownloader(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": "auto", "class": "d-flex justify-end ga-1 py-0", "style": "position:absolute;right:76px;top:50%;transform:translateY(-50%);width:68px;max-width:68px;flex:0 0 68px;z-index:1;"},
+                                    "props": {"cols": "auto", "class": "d-flex justify-end ga-1 py-0", "style": "position:absolute;right:76px;top:50%;transform:translateY(-50%);width:76px;max-width:76px;flex:0 0 76px;z-index:1;"},
                                     "content": [
                                         toggle_button,
                                         self._build_task_action_button(
@@ -705,7 +705,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "disabled": bool(disabled),
                 "class": "ml-1 xunlei-action-btn",
                 "rounded": "sm",
-                "style": "position:relative;min-width:28px;width:28px;height:28px;padding:0;opacity:0;background:transparent;transition:box-shadow .15s ease,opacity .08s linear;",
+                "style": "position:relative;min-width:28px;width:28px;height:28px;padding:0;opacity:1;background:transparent;transition:box-shadow .15s ease,opacity .08s linear;",
                 "id": str(button_id or ""),
                 "data-xunlei-api": str(api_path or ""),
                 "data-xunlei-success": str(success_message or ""),
@@ -762,6 +762,9 @@ class XunleiHijackDownloader(_PluginBase):
             "node.style.justifyContent='center';"
             "const prepend=node.querySelector('.v-btn__prepend');"
             "if(prepend){"
+            "prepend.style.display='inline-flex';"
+            "prepend.style.alignItems='center';"
+            "prepend.style.justifyContent='center';"
             "prepend.style.marginInlineStart='0';"
             "prepend.style.marginInlineEnd='0';"
             "prepend.style.position='absolute';"
@@ -771,8 +774,9 @@ class XunleiHijackDownloader(_PluginBase):
             "}"
             "const content=node.querySelector('.v-btn__content');"
             "if(content){"
-            "if(prepend){content.style.display='none';}"
-            "else{content.style.display='inline-flex';content.style.alignItems='center';content.style.justifyContent='center';}"
+            "content.style.display='inline-flex';"
+            "content.style.alignItems='center';"
+            "content.style.justifyContent='center';"
             "}"
             "const icon=node.querySelector('.v-icon');"
             "if(icon){icon.style.margin='0';icon.style.lineHeight='1';}"
@@ -843,7 +847,7 @@ class XunleiHijackDownloader(_PluginBase):
             "const iconTag=(iconEl&&iconEl.tagName)?String(iconEl.tagName).toLowerCase():'';"
             "const needRebuild=(!iconEl)||(iconTag==='svg')||(!!(iconEl&&iconEl.querySelector&&iconEl.querySelector('svg')));"
             "if(needRebuild){"
-            "if(prepend){host=prepend;}"
+            "if(prepend){host=prepend;prepend.style.display='inline-flex';prepend.style.alignItems='center';prepend.style.justifyContent='center';}"
             "else if(content){host=content;content.style.display='inline-flex';content.style.alignItems='center';content.style.justifyContent='center';}"
             "if(!host){return;}"
             "host.innerHTML='';"

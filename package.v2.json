@@ -66,11 +66,12 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 搜索/订阅下载到迅雷，并支持下载完成后自动搬运到监控目录。",
     "labels": "下载器,迅雷",
-    "version": "2.1.1",
+    "version": "2.1.2",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v2.1.2": "修复任务行开始/暂停按钮偶发不显示：放宽按钮区宽度并增强图标容器兼容，确保开始/暂停与删除按钮稳定同显。",
       "v2.1.1": "任务状态轮询改为页面打开后固定每秒一次；页面关闭即停轮询（后台仅保留按配置的自动搬运轮询）；点击开始/暂停/删除后不再触发额外加速轮询，请求失败不重试，等待下一秒轮询更新。",
       "v2.1.0": "删除按钮改为优先走 pan-xunlei wrapper 的 patch/drive/v1/task，并按 phase=delete 提交 id/set_params.spec/space/type；失败时保留兼容回退。",
       "v2.0.9": "修复状态切换时图标不跟随问题：兼容 prepend/content/SVG 图标节点，确保运行中显示暂停图标、暂停时显示开始图标。",
