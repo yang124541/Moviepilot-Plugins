@@ -23,7 +23,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.5.5"
+    plugin_version = "1.5.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -403,12 +403,8 @@ class GyingIndexer(_PluginBase):
                 if res_dir in ("tv", "ac", "mv"):
                     cache_key = f"{res_dir}/{res_id}"
                     parent_default_dir.setdefault(cache_key, "bt")
-                    if skip_keyword_match and cache_key not in skip_keyword_parent_keys:
+                    if skip_keyword_match:
                         skip_keyword_parent_keys.add(cache_key)
-                        logger.info(
-                            f"观影(GYing)父类直出：关键词='{keyword}'，父级='{cache_key}'，"
-                            f"已跳过关键词二次匹配"
-                        )
                     if cache_key not in parent_down_entries_cache:
                         _down_entries = self._fetch_parent_down_entries(
                             client=client,

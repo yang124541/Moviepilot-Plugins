@@ -3,11 +3,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.5.5",
+    "version": "1.5.6",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.5.6": "移除“父类直出已跳过关键词二次匹配”的高频日志，减少搜索日志刷屏；功能逻辑保持不变。",
       "v1.5.5": "自动登录拿到新会话后，尝试回写覆盖站点配置中的 cookie，减少后续重复账号密码登录。",
       "v1.5.4": "新增插件内观影账号/密码配置；cookie 失效时自动发起站点 AJAX 登录并刷新会话后重试搜索。",
       "v1.5.3": "修复 gying.si 搜索返回登录页导致 0 条：cookie 失效时自动使用站点账号密码登录并刷新会话后再搜索。",
