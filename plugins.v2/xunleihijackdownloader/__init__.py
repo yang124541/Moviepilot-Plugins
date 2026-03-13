@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.2.2"
+    plugin_version = "2.2.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -2965,7 +2965,7 @@ class XunleiHijackDownloader(_PluginBase):
         if state == "failed":
             return "下载失败", ""
         if state == "completed":
-            return "已完成", "0B/s"
+            return "已完成", ""
         left_time = self._task_left_time(task, progress) or "--"
         speed_text = self._task_speed_text(task, key="download_speed") or "0B/s"
         return left_time, speed_text
