@@ -29,12 +29,17 @@ try:
 except Exception:
     DirectoryHelper = None
 
+try:
+    from app.core.module import ModuleManager
+except Exception:
+    ModuleManager = None
+
 
 class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.2.7"
+    plugin_version = "2.2.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -1031,15 +1036,83 @@ class XunleiHijackDownloader(_PluginBase):
         if not magnet:
             if self._fallback_to_builtin:
                 logger.warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：不支持当前下载内容类型，未解析出磁力链接。")
-                return None
+                return self._fallback_builtin_download(
+                    content=content,
+                    download_dir=download_dir,
+                    cookie=cookie,
+                    episodes=episodes,
+                    category=category,
+                    label=label,
+                    downloader=downloader,
+                )
             return "xunlei", None, None, "迅雷接管失败：仅支持磁力链接。"
         task_id, err = self._add_task(magnet)
         if not task_id:
             if self._fallback_to_builtin:
                 logger.warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：{err or '迅雷添加任务失败'}")
-                return None
+                return self._fallback_builtin_download(
+                    content=magnet,
+                    download_dir=download_dir,
+                    cookie=cookie,
+                    episodes=episodes,
+                    category=category,
+                    label=label,
+                    downloader=downloader,
+                )
             return "xunlei", None, None, err or "迅雷添加任务失败。"
         return "xunlei", task_id, "NoSubfolder", "添加下载成功"
+
+    def _fallback_builtin_download(self,
+                                   content: Union[Path, str, bytes],
+                                   download_dir: Path,
+                                   cookie: str,
+                                   episodes: Set[int] = None,
+                                   category: Optional[str] = None,
+                                   label: Optional[str] = None,
+                                   downloader: Optional[str] = None
+                                   ) -> Tuple[Optional[str], Optional[str], Optional[str], str]:
+        if ModuleManager is None:
+            return None, None, None, "回退内建下载器失败：ModuleManager 不可用。"
+        try:
+            modules = list(ModuleManager().get_running_modules("download") or [])
+        except Exception as err:
+            return None, None, None, f"回退内建下载器失败：{err}"
+        if not modules:
+            return None, None, None, "回退内建下载器失败：未找到可用下载器模块。"
+
+        last_error = ""
+        for module in sorted(modules, key=lambda x: x.get_priority()):
+            module_name = module.__class__.__name__
+            try:
+                result = module.download(
+                    content=content,
+                    download_dir=download_dir,
+                    cookie=cookie,
+                    episodes=episodes,
+                    category=category,
+                    label=label,
+                    downloader=downloader
+                )
+            except Exception as err:
+                logger.warn(f"回退内建下载器模块异常：{module_name}，{err}")
+                last_error = str(err)
+                continue
+            if not result:
+                continue
+            if not isinstance(result, tuple):
+                continue
+            dl_name, task_hash, layout, message = (list(result) + [None, None, None, ""])[:4]
+            if task_hash:
+                logger.info(f"迅雷接管[v{self.plugin_version}]回退内建下载器成功：{dl_name or module_name}")
+                return dl_name, task_hash, layout, str(message or "添加下载成功")
+            if message:
+                last_error = str(message)
+                # 与处理链行为保持一致：下载器明确返回失败时不再尝试后续模块。
+                return dl_name, task_hash, layout, last_error
+
+        if last_error:
+            return None, None, None, f"回退内建下载器失败：{last_error}"
+        return None, None, None, "回退内建下载器失败：未匹配到可处理的下载器配置。"
 
     def list_torrents(self,
                       status: TorrentStatus = None,
