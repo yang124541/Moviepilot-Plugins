@@ -23,7 +23,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.5.6"
+    plugin_version = "1.5.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -776,13 +776,11 @@ class GyingIndexer(_PluginBase):
         return refreshed
 
     def _persist_site_cookie(self, site: dict, cookie: str) -> bool:
-        cookie_text = str(cookie or "").strip()
+        cookie_text = self._normalize_cookie_header(cookie)
         if not cookie_text or not isinstance(site, dict):
             return False
 
         site_id = site.get("id")
-        payload = dict(site)
-        payload["cookie"] = cookie_text
         site["cookie"] = cookie_text
 
         oper_candidates: List[Tuple[str, str]] = [
@@ -791,11 +789,14 @@ class GyingIndexer(_PluginBase):
             ("app.db.site", "SiteOper"),
         ]
         method_candidates: Tuple[str, ...] = (
+            "update_cookie",
+            "update_site_cookie",
+            "save_cookie",
+            "set_cookie",
             "update",
             "update_site",
             "save",
             "upsert",
-            "update_cookie",
         )
 
         for module_name, class_name in oper_candidates:
@@ -815,7 +816,6 @@ class GyingIndexer(_PluginBase):
                 if self._try_site_update_method(
                     method=method,
                     site_id=site_id,
-                    payload=payload,
                     cookie_text=cookie_text,
                 ):
                     return True
@@ -823,28 +823,23 @@ class GyingIndexer(_PluginBase):
 
     @staticmethod
     def _try_site_update_method(method: Callable[..., Any], site_id: Any,
-                                payload: Dict[str, Any], cookie_text: str) -> bool:
+                                cookie_text: str) -> bool:
         has_site_id = site_id is not None and str(site_id).strip() != ""
+        patch_data = {"cookie": cookie_text}
         attempts: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
         if has_site_id:
             attempts.extend([
-                ((site_id, payload), {}),
-                ((), {"site_id": site_id, "site": payload}),
-                ((), {"site_id": site_id, "data": payload}),
-                ((), {"site_id": site_id, "payload": payload}),
-                ((), {"id": site_id, "site": payload}),
-                ((), {"id": site_id, "data": payload}),
-                ((), {"id": site_id, "payload": payload}),
                 ((site_id, cookie_text), {}),
+                ((site_id, patch_data), {}),
                 ((), {"site_id": site_id, "cookie": cookie_text}),
                 ((), {"id": site_id, "cookie": cookie_text}),
+                ((), {"site_id": site_id, "data": patch_data}),
+                ((), {"id": site_id, "data": patch_data}),
+                ((), {"site_id": site_id, "payload": patch_data}),
+                ((), {"id": site_id, "payload": patch_data}),
+                ((), {"site_id": site_id, "update": patch_data}),
+                ((), {"id": site_id, "update": patch_data}),
             ])
-        attempts.extend([
-            ((payload,), {}),
-            ((), {"site": payload}),
-            ((), {"data": payload}),
-            ((), {"payload": payload}),
-        ])
 
         for args, kwargs in attempts:
             try:
@@ -856,6 +851,24 @@ class GyingIndexer(_PluginBase):
             if GyingIndexer._is_site_update_success(result):
                 return True
         return False
+
+    @staticmethod
+    def _normalize_cookie_header(cookie: str) -> str:
+        raw = str(cookie or "").replace("\r", ";").replace("\n", ";").strip()
+        if not raw:
+            return ""
+        parts: List[str] = []
+        for item in raw.split(";"):
+            token = str(item or "").strip()
+            if not token or "=" not in token:
+                continue
+            name, value = token.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if not name:
+                continue
+            parts.append(f"{name}={value}")
+        return "; ".join(parts)
 
     @staticmethod
     def _is_site_update_success(result: Any) -> bool:
