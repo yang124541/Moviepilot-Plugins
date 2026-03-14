@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.0"
+    plugin_version = "2.3.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -2703,13 +2703,31 @@ class XunleiHijackDownloader(_PluginBase):
         return ""
 
     def _task_progress(self, task: Dict[str, Any]) -> float:
-        value = self._task_number(task, "progress")
+        if self._is_task_completed(task):
+            return 100.0
+        value = self._task_number_by_keys(task=task, keys=[
+            "progress",
+            "percent",
+            "percentage",
+            "progress_value",
+            "progress_percent",
+        ])
         if value is None:
             return 0.0
         try:
             v = float(value)
-            if v <= 1:
+            if v < 0:
+                return 0.0
+            if v < 1:
                 return round(v * 100, 2)
+            # 某些接口返回 1 表示 1%，而不是 100%。
+            if v == 1:
+                return 1.0
+            if v <= 100:
+                return max(0.0, min(100.0, round(v, 2)))
+            # 兼容 0~10000 的两位百分制。
+            if v <= 10000:
+                return max(0.0, min(100.0, round(v / 100.0, 2)))
             return max(0.0, min(100.0, v))
         except Exception:
             return 0.0
@@ -2941,7 +2959,7 @@ class XunleiHijackDownloader(_PluginBase):
             "eta_text",
         ]
         value = self._task_number_by_keys(task=task, keys=left_time_keys)
-        if value is not None and value >= 0:
+        if value is not None and value > 0:
             seconds = float(value)
             # 极大值通常为毫秒
             if seconds > 315360000:
