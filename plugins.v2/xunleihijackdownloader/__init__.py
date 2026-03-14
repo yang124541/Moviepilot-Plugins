@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.1"
+    plugin_version = "2.3.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -113,12 +113,12 @@ class XunleiHijackDownloader(_PluginBase):
 
         if self._enabled and self._auto_refresh_pan_auth and not self._pan_auth:
             self._pan_auth = self._fetch_pan_auth() or self._pan_auth
-        if self._enabled and self._move_enabled:
+        if self._enabled and (self._move_enabled or self._source_download_dir):
             self._start_move_scheduler()
         self._save_config()
         logger.info(
             f"迅雷接管[v{self.plugin_version}]初始化完成："
-            f"启用={self._enabled}，地址={self._base_url}，自动搬运={self._move_enabled}"
+            f"启用={self._enabled}，地址={self._base_url}，电影重命名=ON，自动搬运={self._move_enabled}"
         )
 
     def get_state(self) -> bool:
@@ -1427,8 +1427,8 @@ class XunleiHijackDownloader(_PluginBase):
         )
         self._scheduler.start()
         logger.info(
-            f"迅雷自动搬运调度已启动：间隔={self._move_interval_minutes}分钟，"
-            f"源目录={self._source_download_dir}，目标目录={self._target_watch_dir}"
+            f"迅雷重命名/搬运调度已启动：间隔={self._move_interval_minutes}分钟，"
+            f"源目录={self._source_download_dir}，目标目录={self._target_watch_dir}，自动搬运={self._move_enabled}"
         )
 
     def _get_headers(self) -> Dict[str, str]:
@@ -1767,30 +1767,35 @@ class XunleiHijackDownloader(_PluginBase):
         return result
 
     def _move_completed_downloads(self):
-        if not self._enabled or not self._move_enabled:
+        if not self._enabled:
             return
-        if not self._source_download_dir or not self._target_watch_dir:
+        if not self._source_download_dir:
             logger.warn(
-                f"跳过自动搬运：源/目标目录未配置，"
-                f"源={self._source_download_dir or 'EMPTY'}，目标={self._target_watch_dir or 'EMPTY'}"
+                f"跳过重命名/搬运：源目录未配置，"
+                f"源={self._source_download_dir or 'EMPTY'}"
             )
             return
+        move_allowed = bool(self._move_enabled and str(self._target_watch_dir or "").strip())
+        if self._move_enabled and not move_allowed:
+            logger.warn("自动搬运已启用但目标目录为空：本轮仅执行电影重命名，不执行搬运。")
         if not self._move_lock.acquire(blocking=False):
-            logger.info("跳过自动搬运：上一轮任务仍在执行。")
+            logger.info("跳过重命名/搬运：上一轮任务仍在执行。")
             return
         try:
             source_root = Path(self._source_download_dir)
-            target_root = Path(self._target_watch_dir)
+            target_root = Path(self._target_watch_dir) if move_allowed else None
             if not source_root.exists() or not source_root.is_dir():
                 logger.warn(
-                    f"跳过自动搬运：源目录无效，"
+                    f"跳过重命名/搬运：源目录无效，"
                     f"源={source_root}，exists={source_root.exists()}，is_dir={source_root.is_dir()}"
                 )
                 return
-            target_root.mkdir(parents=True, exist_ok=True)
+            if move_allowed and target_root:
+                target_root.mkdir(parents=True, exist_ok=True)
             tasks = self._list_download_tasks(include_runner=False, phase_mode="completed", purpose="move")
             now_ts = time.time()
             stats = {
+                "renamed": 0,
                 "moved": 0,
                 "skip_not_completed": 0,
                 "skip_no_move_key": 0,
@@ -1801,6 +1806,7 @@ class XunleiHijackDownloader(_PluginBase):
                 "skip_cached_missing_name": 0,
                 "skip_cached_backoff": 0,
                 "skip_cached_expired": 0,
+                "rename_failed": 0,
                 "move_failed": 0,
             }
             samples: List[str] = []
@@ -1838,11 +1844,16 @@ class XunleiHijackDownloader(_PluginBase):
                     )
                     return
                 try:
-                    src = self._rename_movie_path_if_needed(src=src, task_id=task_id, task_name=task_name)
-                    if not src or not src.exists():
-                        stats["move_failed"] += 1
+                    renamed_src = self._rename_movie_path_if_needed(src=src, task_id=task_id, task_name=task_name)
+                    if not renamed_src or not renamed_src.exists():
+                        stats["rename_failed"] += 1
                         add_sample(f"{task_tag} skip: rename failed, task_id={task_id}")
                         return
+                    if renamed_src != src:
+                        stats["renamed"] += 1
+                    if not move_allowed:
+                        return
+                    src = renamed_src
                     dst = self._build_move_target_path(
                         target_root=target_root,
                         src=src,
@@ -1867,16 +1878,23 @@ class XunleiHijackDownloader(_PluginBase):
                     else:
                         logger.info(f"自动搬运成功：{src} -> {dst}")
                 except Exception as move_err:
-                    stats["move_failed"] += 1
-                    logger.warn(
-                        f"单任务搬运失败：key={move_key}，"
-                        f"name={task_name}，err={move_err}"
-                    )
+                    if move_allowed:
+                        stats["move_failed"] += 1
+                        logger.warn(
+                            f"单任务搬运失败：key={move_key}，"
+                            f"name={task_name}，err={move_err}"
+                        )
+                    else:
+                        stats["rename_failed"] += 1
+                        logger.warn(
+                            f"单任务重命名失败：key={move_key}，"
+                            f"name={task_name}，err={move_err}"
+                        )
 
             if not tasks:
                 logger.info(
-                    f"自动搬运扫描：当前无任务，源={source_root}，目标={target_root}，"
-                    f"缓存已完成数={cached_total}"
+                    f"自动重命名/搬运扫描：当前无任务，源={source_root}，"
+                    f"目标={target_root or 'DISABLED'}，自动搬运={move_allowed}，缓存已完成数={cached_total}"
                 )
 
             for task in tasks:
@@ -1903,7 +1921,8 @@ class XunleiHijackDownloader(_PluginBase):
                 done_ts = self._task_completed_timestamp(task)
                 if done_ts is None:
                     done_ts = now_ts
-                done_ts = self._remember_completed_seen(move_key=move_key, now_ts=done_ts, task_name=task_name)
+                if move_allowed:
+                    done_ts = self._remember_completed_seen(move_key=move_key, now_ts=done_ts, task_name=task_name)
                 if self._move_safe_seconds > 0:
                     elapsed = now_ts - done_ts
                     if elapsed < self._move_safe_seconds:
@@ -1912,7 +1931,9 @@ class XunleiHijackDownloader(_PluginBase):
                             f"{task_tag} 跳过：安全等待中，完成后已过{elapsed:.1f}s < {self._move_safe_seconds}s"
                         )
                         continue
-                task_name_for_move = task_name or Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
+                task_name_for_move = task_name
+                if not task_name_for_move and move_allowed:
+                    task_name_for_move = Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
                 if not task_name_for_move:
                     stats["skip_cached_missing_name"] += 1
                     add_sample(f"{task_tag} 跳过：缺少任务名，key={move_key}")
@@ -1925,51 +1946,52 @@ class XunleiHijackDownloader(_PluginBase):
                     from_cache=False,
                 )
 
-            for move_key in list(self._completed_seen_order):
-                if move_key in processed_keys:
-                    continue
-                if move_key in self._moved_task_keys:
-                    stats["skip_already_moved"] += 1
-                    self._drop_completed_seen(move_key)
-                    continue
-                done_ts = float(self._completed_seen_at.get(move_key) or now_ts)
-                if now_ts - done_ts > float(self._completed_seen_ttl_seconds):
-                    stats["skip_cached_expired"] += 1
-                    self._drop_completed_seen(move_key)
-                    continue
-                next_try_at = float(self._completed_seen_next_try_at.get(move_key) or 0.0)
-                if next_try_at > now_ts:
-                    stats["skip_cached_backoff"] += 1
-                    continue
-                task_name = Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
-                task_tag = f"id=-,name={task_name or '-'}"
-                if not task_name:
-                    stats["skip_cached_missing_name"] += 1
-                    add_sample(f"{task_tag} 跳过：缓存缺少任务名，key={move_key}")
-                    continue
-                if self._move_safe_seconds > 0:
-                    elapsed = now_ts - done_ts
-                    if elapsed < self._move_safe_seconds:
-                        stats["skip_safe_wait"] += 1
-                        add_sample(
-                            f"{task_tag} 跳过：缓存安全等待中，完成后已过{elapsed:.1f}s < {self._move_safe_seconds}s"
-                        )
+            if move_allowed:
+                for move_key in list(self._completed_seen_order):
+                    if move_key in processed_keys:
                         continue
-                cached_task_id = "-"
-                if isinstance(move_key, str) and move_key.startswith("id:"):
-                    cached_task_id = str(move_key.split(":", 1)[1] or "-").strip() or "-"
-                try_move_by_name(
-                    move_key=move_key,
-                    task_name=task_name,
-                    task_id=cached_task_id,
-                    task_tag=task_tag,
-                    from_cache=True,
-                )
+                    if move_key in self._moved_task_keys:
+                        stats["skip_already_moved"] += 1
+                        self._drop_completed_seen(move_key)
+                        continue
+                    done_ts = float(self._completed_seen_at.get(move_key) or now_ts)
+                    if now_ts - done_ts > float(self._completed_seen_ttl_seconds):
+                        stats["skip_cached_expired"] += 1
+                        self._drop_completed_seen(move_key)
+                        continue
+                    next_try_at = float(self._completed_seen_next_try_at.get(move_key) or 0.0)
+                    if next_try_at > now_ts:
+                        stats["skip_cached_backoff"] += 1
+                        continue
+                    task_name = Path(str(self._completed_seen_name.get(move_key) or "").strip()).name
+                    task_tag = f"id=-,name={task_name or '-'}"
+                    if not task_name:
+                        stats["skip_cached_missing_name"] += 1
+                        add_sample(f"{task_tag} 跳过：缓存缺少任务名，key={move_key}")
+                        continue
+                    if self._move_safe_seconds > 0:
+                        elapsed = now_ts - done_ts
+                        if elapsed < self._move_safe_seconds:
+                            stats["skip_safe_wait"] += 1
+                            add_sample(
+                                f"{task_tag} 跳过：缓存安全等待中，完成后已过{elapsed:.1f}s < {self._move_safe_seconds}s"
+                            )
+                            continue
+                    cached_task_id = "-"
+                    if isinstance(move_key, str) and move_key.startswith("id:"):
+                        cached_task_id = str(move_key.split(":", 1)[1] or "-").strip() or "-"
+                    try_move_by_name(
+                        move_key=move_key,
+                        task_name=task_name,
+                        task_id=cached_task_id,
+                        task_tag=task_tag,
+                        from_cache=True,
+                    )
             if cache_dirty:
                 self._save_completed_seen_cache()
             logger.info(
-                f"自动搬运扫描汇总：源={source_root}，目标={target_root}，"
-                f"总任务={len(tasks)}，缓存已完成={cached_total}，成功搬运={stats['moved']}，"
+                f"自动重命名/搬运扫描汇总：源={source_root}，目标={target_root or 'DISABLED'}，自动搬运={move_allowed}，"
+                f"总任务={len(tasks)}，缓存已完成={cached_total}，重命名成功={stats['renamed']}，成功搬运={stats['moved']}，"
                 f"未完成跳过={stats['skip_not_completed']}，"
                 f"无搬运键跳过={stats['skip_no_move_key']}，已搬运跳过={stats['skip_already_moved']}，"
                 f"源不存在跳过={stats['skip_source_not_found']}，"
@@ -1977,12 +1999,12 @@ class XunleiHijackDownloader(_PluginBase):
                 f"安全等待跳过={stats['skip_safe_wait']}，"
                 f"缓存缺名跳过={stats['skip_cached_missing_name']}，"
                 f"缓存退避跳过={stats['skip_cached_backoff']}，缓存过期跳过={stats['skip_cached_expired']}，"
-                f"搬运失败={stats['move_failed']}"
+                f"重命名失败={stats['rename_failed']}，搬运失败={stats['move_failed']}"
             )
             if samples:
-                logger.info("自动搬运扫描样本： " + " | ".join(samples))
+                logger.info("自动重命名/搬运扫描样本： " + " | ".join(samples))
         except Exception as err:
-            logger.error(f"自动搬运任务执行失败：{err}")
+            logger.error(f"自动重命名/搬运任务执行失败：{err}")
         finally:
             self._move_lock.release()
 
