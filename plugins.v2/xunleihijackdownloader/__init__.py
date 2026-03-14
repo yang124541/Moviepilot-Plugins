@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.2.9"
+    plugin_version = "2.3.0"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -77,6 +77,10 @@ class XunleiHijackDownloader(_PluginBase):
     _task_list_cache_ttl_ui_seconds = 1.0
     _ui_last_active_ts = 0.0
     _ui_keepalive_seconds = 20.0
+    _movie_video_suffixes: Set[str] = {
+        ".mkv", ".mp4", ".avi", ".mov", ".flv", ".wmv", ".ts", ".m2ts",
+        ".mpg", ".mpeg", ".iso", ".rmvb", ".webm", ".m4v"
+    }
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -1812,6 +1816,8 @@ class XunleiHijackDownloader(_PluginBase):
                 nonlocal cache_dirty
                 src = self._resolve_source_path(source_root, task_name)
                 if not src or not src.exists():
+                    src = self._resolve_movie_renamed_source_path(source_root=source_root, task_id=task_id)
+                if not src or not src.exists():
                     src = self._resolve_source_path_fallback(source_root, task_name)
                 if not src or not src.exists():
                     stats["skip_source_not_found"] += 1
@@ -1832,6 +1838,11 @@ class XunleiHijackDownloader(_PluginBase):
                     )
                     return
                 try:
+                    src = self._rename_movie_path_if_needed(src=src, task_id=task_id, task_name=task_name)
+                    if not src or not src.exists():
+                        stats["move_failed"] += 1
+                        add_sample(f"{task_tag} skip: rename failed, task_id={task_id}")
+                        return
                     dst = self._build_move_target_path(
                         target_root=target_root,
                         src=src,
@@ -1944,10 +1955,13 @@ class XunleiHijackDownloader(_PluginBase):
                             f"{task_tag} 跳过：缓存安全等待中，完成后已过{elapsed:.1f}s < {self._move_safe_seconds}s"
                         )
                         continue
+                cached_task_id = "-"
+                if isinstance(move_key, str) and move_key.startswith("id:"):
+                    cached_task_id = str(move_key.split(":", 1)[1] or "-").strip() or "-"
                 try_move_by_name(
                     move_key=move_key,
                     task_name=task_name,
-                    task_id="-",
+                    task_id=cached_task_id,
                     task_tag=task_tag,
                     from_cache=True,
                 )
@@ -3153,6 +3167,12 @@ class XunleiHijackDownloader(_PluginBase):
                 if source_root.exists() and source_root.is_dir():
                     src = self._resolve_source_path(source_root, task_name)
                     if not src or not src.exists():
+                        renamed_src = self._resolve_movie_renamed_source_path(
+                            source_root=source_root,
+                            task_id=task_key,
+                        ) if task_key else None
+                        if renamed_src and renamed_src.exists():
+                            return False
                         return True
             except Exception:
                 pass
@@ -3355,6 +3375,61 @@ class XunleiHijackDownloader(_PluginBase):
                     except Exception:
                         pass
                     candidates.append((score, mtime, item))
+        except Exception:
+            return None
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return candidates[0][2]
+
+    def _resolve_movie_renamed_source_path(self, source_root: Path, task_id: str) -> Optional[Path]:
+        if not source_root.exists() or not source_root.is_dir():
+            return None
+        token = str(task_id or "").strip()
+        if not token or token == "-":
+            return None
+        meta = self._resolve_movie_rename_meta(task_id=token)
+        if not bool(meta.get("is_movie")):
+            return None
+        movie_name = self._build_movie_scrape_name(
+            title=str(meta.get("title") or "").strip(),
+            year=str(meta.get("year") or "").strip(),
+        )
+        if not movie_name:
+            return None
+        movie_norm = self._normalize_name(movie_name)
+        if not movie_norm:
+            return None
+
+        candidates: List[Tuple[int, float, Path]] = []
+        try:
+            scanned = 0
+            for item in source_root.rglob("*"):
+                scanned += 1
+                if scanned > 5000:
+                    break
+                try:
+                    name = item.name
+                except Exception:
+                    continue
+                stem = item.stem if item.is_file() else name
+                score = 0
+                if name.lower() == movie_name.lower():
+                    score = 100
+                elif stem.lower() == movie_name.lower():
+                    score = 95
+                else:
+                    item_norm = self._normalize_name(stem or name)
+                    if item_norm == movie_norm:
+                        score = 90
+                if score <= 0:
+                    continue
+                mtime = 0.0
+                try:
+                    mtime = float(item.stat().st_mtime or 0.0)
+                except Exception:
+                    pass
+                candidates.append((score, mtime, item))
         except Exception:
             return None
         if not candidates:
@@ -3590,6 +3665,192 @@ class XunleiHijackDownloader(_PluginBase):
         except Exception as err:
             logger.debug(f"按下载历史解析目录失败：task_id={task_id}，err={err}")
         return None
+
+    def _rename_movie_path_if_needed(self, src: Path, task_id: str, task_name: str = "") -> Path:
+        token = str(task_id or "").strip()
+        if not token or token == "-" or not src or not src.exists():
+            return src
+        meta = self._resolve_movie_rename_meta(task_id=token)
+        if not bool(meta.get("is_movie")):
+            return src
+        movie_name = self._build_movie_scrape_name(
+            title=str(meta.get("title") or "").strip(),
+            year=str(meta.get("year") or "").strip(),
+        )
+        if not movie_name:
+            logger.warn(f"movie rename skipped: missing title, task_id={token}, task_name={task_name or '-'}")
+            return src
+        try:
+            if src.is_file():
+                return self._rename_movie_file(src=src, movie_name=movie_name, task_id=token)
+            if src.is_dir():
+                return self._rename_movie_dir(src_dir=src, movie_name=movie_name, task_id=token)
+        except Exception as err:
+            logger.warn(f"movie rename failed: task_id={token}, task_name={task_name or '-'}, err={err}")
+        return src
+
+    def _rename_movie_file(self, src: Path, movie_name: str, task_id: str) -> Path:
+        suffix = str(src.suffix or "")
+        desired_name = f"{movie_name}{suffix}" if suffix else movie_name
+        return self._rename_path(
+            src=src,
+            desired_name=desired_name,
+            task_id=task_id,
+            rename_kind="movie_file",
+        )
+
+    def _rename_movie_dir(self, src_dir: Path, movie_name: str, task_id: str) -> Path:
+        renamed_dir = self._rename_path(
+            src=src_dir,
+            desired_name=movie_name,
+            task_id=task_id,
+            rename_kind="movie_dir",
+        )
+        if not renamed_dir.exists() or not renamed_dir.is_dir():
+            return renamed_dir
+        main_video = self._pick_primary_video_file(root_dir=renamed_dir)
+        if not main_video:
+            return renamed_dir
+        suffix = str(main_video.suffix or "")
+        desired_name = f"{movie_name}{suffix}" if suffix else movie_name
+        self._rename_path(
+            src=main_video,
+            desired_name=desired_name,
+            task_id=task_id,
+            rename_kind="movie_main_file",
+        )
+        return renamed_dir
+
+    def _pick_primary_video_file(self, root_dir: Path) -> Optional[Path]:
+        if not root_dir.exists() or not root_dir.is_dir():
+            return None
+        candidates: List[Tuple[int, int, Path]] = []
+        for item in root_dir.rglob("*"):
+            if not item.is_file():
+                continue
+            if item.suffix.lower() not in self._movie_video_suffixes:
+                continue
+            try:
+                size = int(item.stat().st_size or 0)
+            except Exception:
+                size = 0
+            try:
+                depth = len(item.relative_to(root_dir).parts)
+            except Exception:
+                depth = 999
+            candidates.append((size, -depth, item))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return candidates[0][2]
+
+    def _rename_path(self, src: Path, desired_name: str, task_id: str, rename_kind: str) -> Path:
+        if not src or not src.exists():
+            return src
+        safe_name = self._sanitize_file_name(desired_name)
+        if not safe_name:
+            return src
+        if safe_name.lower() == src.name.lower():
+            return src
+        target = src.with_name(safe_name)
+        if target.exists():
+            target = self._dedupe_target(target)
+        try:
+            src.rename(target)
+            logger.info(f"movie rename: {rename_kind}, task_id={task_id}, {src.name} -> {target.name}")
+            return target
+        except Exception as err:
+            logger.warn(
+                f"movie rename failed: {rename_kind}, task_id={task_id}, src={src.name}, "
+                f"target={target.name}, err={err}"
+            )
+            return src
+
+    def _resolve_movie_rename_meta(self, task_id: str) -> Dict[str, Any]:
+        meta: Dict[str, Any] = {
+            "is_movie": False,
+            "title": "",
+            "year": "",
+        }
+        token = str(task_id or "").strip()
+        if not token or token == "-" or not DownloadHistoryOper:
+            return meta
+        try:
+            history = DownloadHistoryOper().get_by_hash(token)
+            if not history:
+                return meta
+            media_type = str(getattr(history, "type", "") or "").strip()
+            is_movie = self._is_movie_media_type(media_type=media_type)
+            meta["is_movie"] = bool(is_movie)
+            meta["title"] = self._extract_history_title(history=history)
+            meta["year"] = self._extract_history_year(history=history)
+            return meta
+        except Exception as err:
+            logger.debug(f"parse movie rename meta failed: task_id={task_id}, err={err}")
+        return meta
+
+    @staticmethod
+    def _is_movie_media_type(media_type: str) -> bool:
+        raw = str(media_type or "").strip()
+        if not raw:
+            return False
+        if "\u7535\u5f71" in raw:
+            return True
+        token = re.sub(r"[\s._-]+", "", raw.lower())
+        return any(k in token for k in ("movie", "film", "mv"))
+
+    @staticmethod
+    def _history_text_attr(history: Any, keys: Tuple[str, ...]) -> str:
+        for key in keys:
+            try:
+                value = getattr(history, key, None)
+            except Exception:
+                value = None
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text and text.lower() not in ("none", "null"):
+                return text
+        return ""
+
+    def _extract_history_title(self, history: Any) -> str:
+        raw = self._history_text_attr(
+            history=history,
+            keys=(
+                "title", "name", "tmdb_name", "media_name", "movie_name",
+                "cn_name", "original_title", "en_name", "display_title",
+            ),
+        )
+        return self._sanitize_file_name(raw)
+
+    def _extract_history_year(self, history: Any) -> str:
+        raw = self._history_text_attr(
+            history=history,
+            keys=(
+                "year", "release_year", "publish_year", "air_year",
+                "release_date", "first_air_date", "pubdate", "date",
+            ),
+        )
+        match = re.search(r"(19|20)\d{2}", str(raw or ""))
+        return match.group(0) if match else ""
+
+    def _build_movie_scrape_name(self, title: str, year: str) -> str:
+        clean_title = self._sanitize_file_name(title)
+        if not clean_title:
+            return ""
+        match = re.search(r"(19|20)\d{2}", str(year or ""))
+        if match:
+            return f"{clean_title}({match.group(0)})"
+        return clean_title
+
+    @staticmethod
+    def _sanitize_file_name(name: str) -> str:
+        text = str(name or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"[\\/:*?\"<>|]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text.strip(" .")
 
     @staticmethod
     def _dedupe_target(path: Path) -> Path:
