@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.3"
+    plugin_version = "2.3.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -78,6 +78,7 @@ class XunleiHijackDownloader(_PluginBase):
     _ui_last_active_ts = 0.0
     _ui_keepalive_seconds = 20.0
     _movie_default_resolution_tag = "1080p"
+    _movie_move_protect_suffix = ".mpmoving"
     _movie_video_suffixes: Set[str] = {
         ".mkv", ".mp4", ".avi", ".mov", ".flv", ".wmv", ".ts", ".m2ts",
         ".mpg", ".mpeg", ".iso", ".rmvb", ".webm", ".m4v"
@@ -1845,7 +1846,12 @@ class XunleiHijackDownloader(_PluginBase):
                     )
                     return
                 try:
-                    renamed_src = self._rename_movie_path_if_needed(src=src, task_id=task_id, task_name=task_name)
+                    renamed_src = self._rename_movie_path_if_needed(
+                        src=src,
+                        task_id=task_id,
+                        task_name=task_name,
+                        protect_for_move=bool(move_allowed),
+                    )
                     if not renamed_src or not renamed_src.exists():
                         stats["rename_failed"] += 1
                         add_sample(f"{task_tag} skip: rename failed, task_id={task_id}")
@@ -1868,6 +1874,7 @@ class XunleiHijackDownloader(_PluginBase):
                         )
                         return
                     shutil.move(str(src), str(dst))
+                    dst = self._restore_movie_path_after_move(dst=dst, task_id=task_id, task_name=task_name)
                     self._remember_moved_key(move_key)
                     self._drop_completed_seen(move_key)
                     if task_id and task_id != "-":
@@ -3463,6 +3470,12 @@ class XunleiHijackDownloader(_PluginBase):
                     item_norm = self._normalize_name(stem or name)
                     if item_norm == movie_norm:
                         score = 90
+                    elif len(movie_norm) >= 4 and (
+                        item_norm.startswith(movie_norm) or movie_norm.startswith(item_norm)
+                    ):
+                        score = 85
+                    elif len(movie_norm) >= 8 and movie_norm in item_norm:
+                        score = 80
                 if score <= 0:
                     continue
                 mtime = 0.0
@@ -3707,7 +3720,13 @@ class XunleiHijackDownloader(_PluginBase):
             logger.debug(f"按下载历史解析目录失败：task_id={task_id}，err={err}")
         return None
 
-    def _rename_movie_path_if_needed(self, src: Path, task_id: str, task_name: str = "") -> Path:
+    def _rename_movie_path_if_needed(
+        self,
+        src: Path,
+        task_id: str,
+        task_name: str = "",
+        protect_for_move: bool = False,
+    ) -> Path:
         token = str(task_id or "").strip()
         if not token or token == "-" or not src or not src.exists():
             return src
@@ -3724,20 +3743,40 @@ class XunleiHijackDownloader(_PluginBase):
             return src
         try:
             if src.is_file():
-                return self._rename_movie_file(src=src, movie_name=movie_name, task_id=token, resolution=resolution)
+                return self._rename_movie_file(
+                    src=src,
+                    movie_name=movie_name,
+                    task_id=token,
+                    resolution=resolution,
+                    protect_for_move=protect_for_move,
+                )
             if src.is_dir():
-                return self._rename_movie_dir(src_dir=src, movie_name=movie_name, task_id=token, resolution=resolution)
+                return self._rename_movie_dir(
+                    src_dir=src,
+                    movie_name=movie_name,
+                    task_id=token,
+                    resolution=resolution,
+                    protect_for_move=protect_for_move,
+                )
         except Exception as err:
             logger.warn(f"movie rename failed: task_id={token}, task_name={task_name or '-'}, err={err}")
         return src
 
-    def _rename_movie_file(self, src: Path, movie_name: str, task_id: str, resolution: str = "") -> Path:
+    def _rename_movie_file(
+        self,
+        src: Path,
+        movie_name: str,
+        task_id: str,
+        resolution: str = "",
+        protect_for_move: bool = False,
+    ) -> Path:
         suffix = str(src.suffix or "")
         desired_name = self._build_movie_video_file_name(
             movie_name=movie_name,
             source_name=src.name,
             suffix=suffix,
             preferred_resolution=resolution,
+            protected=protect_for_move,
         )
         return self._rename_path(
             src=src,
@@ -3746,7 +3785,14 @@ class XunleiHijackDownloader(_PluginBase):
             rename_kind="movie_file",
         )
 
-    def _rename_movie_dir(self, src_dir: Path, movie_name: str, task_id: str, resolution: str = "") -> Path:
+    def _rename_movie_dir(
+        self,
+        src_dir: Path,
+        movie_name: str,
+        task_id: str,
+        resolution: str = "",
+        protect_for_move: bool = False,
+    ) -> Path:
         renamed_dir = self._rename_path(
             src=src_dir,
             desired_name=movie_name,
@@ -3764,6 +3810,7 @@ class XunleiHijackDownloader(_PluginBase):
             source_name=main_video.name,
             suffix=suffix,
             preferred_resolution=resolution,
+            protected=protect_for_move,
         )
         self._rename_path(
             src=main_video,
@@ -3779,6 +3826,7 @@ class XunleiHijackDownloader(_PluginBase):
         source_name: str = "",
         suffix: str = "",
         preferred_resolution: str = "",
+        protected: bool = False,
     ) -> str:
         base = str(movie_name or "").strip()
         if not base:
@@ -3789,7 +3837,36 @@ class XunleiHijackDownloader(_PluginBase):
         if not resolution:
             resolution = str(self._movie_default_resolution_tag or "").strip()
         file_base = f"{base} - {resolution}" if resolution else base
-        return f"{file_base}{suffix}" if suffix else file_base
+        file_name = f"{file_base}{suffix}" if suffix else file_base
+        if protected:
+            return self._append_movie_move_protect_suffix(file_name)
+        return file_name
+
+    def _append_movie_move_protect_suffix(self, file_name: str) -> str:
+        name = str(file_name or "").strip()
+        if not name:
+            return ""
+        suffix = str(self._movie_move_protect_suffix or "").strip()
+        if not suffix:
+            return name
+        if not suffix.startswith("."):
+            suffix = f".{suffix}"
+        if name.lower().endswith(suffix.lower()):
+            return name
+        return f"{name}{suffix}"
+
+    def _strip_movie_move_protect_suffix(self, file_name: str) -> str:
+        name = str(file_name or "").strip()
+        if not name:
+            return ""
+        suffix = str(self._movie_move_protect_suffix or "").strip()
+        if not suffix:
+            return name
+        if not suffix.startswith("."):
+            suffix = f".{suffix}"
+        if name.lower().endswith(suffix.lower()):
+            return name[:-len(suffix)]
+        return name
 
     @staticmethod
     def _extract_movie_resolution_tag(source_name: str) -> str:
@@ -3861,6 +3938,71 @@ class XunleiHijackDownloader(_PluginBase):
                 f"target={target.name}, err={err}"
             )
             return src
+
+    def _is_movie_move_protected_name(self, file_name: str) -> bool:
+        name = str(file_name or "").strip()
+        if not name:
+            return False
+        suffix = str(self._movie_move_protect_suffix or "").strip()
+        if not suffix:
+            return False
+        if not suffix.startswith("."):
+            suffix = f".{suffix}"
+        return name.lower().endswith(suffix.lower())
+
+    def _restore_movie_protected_file_name(self, src: Path, task_id: str, rename_kind: str) -> Path:
+        if not src or not src.exists() or not src.is_file():
+            return src
+        desired_name = self._strip_movie_move_protect_suffix(src.name)
+        if not desired_name or desired_name.lower() == src.name.lower():
+            return src
+        return self._rename_path(
+            src=src,
+            desired_name=desired_name,
+            task_id=task_id,
+            rename_kind=rename_kind,
+        )
+
+    def _restore_movie_path_after_move(self, dst: Path, task_id: str, task_name: str = "") -> Path:
+        if not dst or not dst.exists():
+            return dst
+        try:
+            if dst.is_file():
+                return self._restore_movie_protected_file_name(
+                    src=dst,
+                    task_id=task_id,
+                    rename_kind="movie_file_post_move",
+                )
+            if not dst.is_dir():
+                return dst
+            restored = 0
+            candidates: List[Path] = []
+            for item in dst.rglob("*"):
+                if not item.is_file():
+                    continue
+                if not self._is_movie_move_protected_name(item.name):
+                    continue
+                candidates.append(item)
+            for item in candidates:
+                renamed = self._restore_movie_protected_file_name(
+                    src=item,
+                    task_id=task_id,
+                    rename_kind="movie_file_post_move",
+                )
+                if renamed != item:
+                    restored += 1
+            if restored > 0:
+                logger.info(
+                    f"movie rename restored after move: task_id={task_id}, task_name={task_name or '-'}, "
+                    f"path={dst.name}, restored_files={restored}"
+                )
+            return dst
+        except Exception as err:
+            logger.warn(
+                f"movie rename restore failed after move: task_id={task_id}, "
+                f"task_name={task_name or '-'}, path={dst.name}, err={err}"
+            )
+            return dst
 
     def _resolve_movie_rename_meta(self, task_id: str) -> Dict[str, Any]:
         meta: Dict[str, Any] = {
