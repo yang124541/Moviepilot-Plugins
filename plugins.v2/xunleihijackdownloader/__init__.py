@@ -34,7 +34,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.2"
+    plugin_version = "2.3.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -77,6 +77,7 @@ class XunleiHijackDownloader(_PluginBase):
     _task_list_cache_ttl_ui_seconds = 1.0
     _ui_last_active_ts = 0.0
     _ui_keepalive_seconds = 20.0
+    _movie_default_resolution_tag = "1080p"
     _movie_video_suffixes: Set[str] = {
         ".mkv", ".mp4", ".avi", ".mov", ".flv", ".wmv", ".ts", ".m2ts",
         ".mpg", ".mpeg", ".iso", ".rmvb", ".webm", ".m4v"
@@ -3717,21 +3718,27 @@ class XunleiHijackDownloader(_PluginBase):
             title=str(meta.get("title") or "").strip(),
             year=str(meta.get("year") or "").strip(),
         )
+        resolution = str(meta.get("resolution") or "").strip()
         if not movie_name:
             logger.warn(f"movie rename skipped: missing title, task_id={token}, task_name={task_name or '-'}")
             return src
         try:
             if src.is_file():
-                return self._rename_movie_file(src=src, movie_name=movie_name, task_id=token)
+                return self._rename_movie_file(src=src, movie_name=movie_name, task_id=token, resolution=resolution)
             if src.is_dir():
-                return self._rename_movie_dir(src_dir=src, movie_name=movie_name, task_id=token)
+                return self._rename_movie_dir(src_dir=src, movie_name=movie_name, task_id=token, resolution=resolution)
         except Exception as err:
             logger.warn(f"movie rename failed: task_id={token}, task_name={task_name or '-'}, err={err}")
         return src
 
-    def _rename_movie_file(self, src: Path, movie_name: str, task_id: str) -> Path:
+    def _rename_movie_file(self, src: Path, movie_name: str, task_id: str, resolution: str = "") -> Path:
         suffix = str(src.suffix or "")
-        desired_name = f"{movie_name}{suffix}" if suffix else movie_name
+        desired_name = self._build_movie_video_file_name(
+            movie_name=movie_name,
+            source_name=src.name,
+            suffix=suffix,
+            preferred_resolution=resolution,
+        )
         return self._rename_path(
             src=src,
             desired_name=desired_name,
@@ -3739,7 +3746,7 @@ class XunleiHijackDownloader(_PluginBase):
             rename_kind="movie_file",
         )
 
-    def _rename_movie_dir(self, src_dir: Path, movie_name: str, task_id: str) -> Path:
+    def _rename_movie_dir(self, src_dir: Path, movie_name: str, task_id: str, resolution: str = "") -> Path:
         renamed_dir = self._rename_path(
             src=src_dir,
             desired_name=movie_name,
@@ -3752,7 +3759,12 @@ class XunleiHijackDownloader(_PluginBase):
         if not main_video:
             return renamed_dir
         suffix = str(main_video.suffix or "")
-        desired_name = f"{movie_name}{suffix}" if suffix else movie_name
+        desired_name = self._build_movie_video_file_name(
+            movie_name=movie_name,
+            source_name=main_video.name,
+            suffix=suffix,
+            preferred_resolution=resolution,
+        )
         self._rename_path(
             src=main_video,
             desired_name=desired_name,
@@ -3760,6 +3772,50 @@ class XunleiHijackDownloader(_PluginBase):
             rename_kind="movie_main_file",
         )
         return renamed_dir
+
+    def _build_movie_video_file_name(
+        self,
+        movie_name: str,
+        source_name: str = "",
+        suffix: str = "",
+        preferred_resolution: str = "",
+    ) -> str:
+        base = str(movie_name or "").strip()
+        if not base:
+            return ""
+        resolution = self._normalize_movie_resolution_tag(preferred_resolution)
+        if not resolution:
+            resolution = self._extract_movie_resolution_tag(source_name=source_name)
+        if not resolution:
+            resolution = str(self._movie_default_resolution_tag or "").strip()
+        file_base = f"{base} - {resolution}" if resolution else base
+        return f"{file_base}{suffix}" if suffix else file_base
+
+    @staticmethod
+    def _extract_movie_resolution_tag(source_name: str) -> str:
+        return XunleiHijackDownloader._normalize_movie_resolution_tag(source_name)
+
+    @staticmethod
+    def _normalize_movie_resolution_tag(raw_text: str) -> str:
+        text = str(raw_text or "").strip().lower()
+        if not text:
+            return ""
+        match = re.search(r"(?<!\d)(4320|2160|1440|1080|720|576|540|480|360|240)p(?!\d)", text)
+        if match:
+            return f"{match.group(1)}p"
+        match = re.search(r"(?<!\d)(4320|2160|1440|1080|720|576|540|480|360|240)i(?!\d)", text)
+        if match:
+            return f"{match.group(1)}p"
+        if re.search(r"(?<!\d)8k(?!\d)", text):
+            return "4320p"
+        if re.search(r"(?<!\d)(4k|uhd)(?!\d)", text):
+            return "2160p"
+        if re.search(r"(?<!\d)2k(?!\d)", text):
+            return "1440p"
+        match = re.search(r"(?<!\d)(4320|2160|1440|1080|720|576|540|480|360|240)(?!\d)", text)
+        if match:
+            return f"{match.group(1)}p"
+        return ""
 
     def _pick_primary_video_file(self, root_dir: Path) -> Optional[Path]:
         if not root_dir.exists() or not root_dir.is_dir():
@@ -3811,6 +3867,7 @@ class XunleiHijackDownloader(_PluginBase):
             "is_movie": False,
             "title": "",
             "year": "",
+            "resolution": "",
         }
         token = str(task_id or "").strip()
         if not token or token == "-" or not DownloadHistoryOper:
@@ -3824,6 +3881,7 @@ class XunleiHijackDownloader(_PluginBase):
             meta["is_movie"] = bool(is_movie)
             meta["title"] = self._extract_history_title(history=history)
             meta["year"] = self._extract_history_year(history=history)
+            meta["resolution"] = self._extract_history_resolution(history=history)
             return meta
         except Exception as err:
             logger.debug(f"parse movie rename meta failed: task_id={task_id}, err={err}")
@@ -3873,6 +3931,19 @@ class XunleiHijackDownloader(_PluginBase):
         )
         match = re.search(r"(19|20)\d{2}", str(raw or ""))
         return match.group(0) if match else ""
+
+    def _extract_history_resolution(self, history: Any) -> str:
+        keys = (
+            "resolution", "video_resolution", "resource_pix", "resource_resolution",
+            "quality", "video_quality", "resource_quality", "resource", "edition",
+            "title", "name", "tmdb_name", "media_name", "movie_name", "display_title",
+        )
+        for key in keys:
+            raw = self._history_text_attr(history=history, keys=(key,))
+            resolution = self._normalize_movie_resolution_tag(raw)
+            if resolution:
+                return resolution
+        return ""
 
     def _build_movie_scrape_name(self, title: str, year: str) -> str:
         clean_title = self._sanitize_file_name(title)
