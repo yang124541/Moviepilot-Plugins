@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.6.1"
+    plugin_version = "1.6.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -719,14 +719,11 @@ class GyingIndexer(_PluginBase):
                              proxies: Optional[Dict[str, str]], timeout: int,
                              keyword: str) -> str:
         cookie = str(site.get("cookie") or "").strip()
-        if self._is_search_response_ready(
-            base_url=base_url,
-            keyword=keyword,
-            ua=ua,
-            proxies=proxies,
-            timeout=timeout,
-            cookie=cookie,
-        ):
+        ready, cookie = self._is_search_response_ready(
+            base_url=base_url, keyword=keyword, ua=ua,
+            proxies=proxies, timeout=timeout, cookie=cookie,
+        )
+        if ready:
             return cookie
 
         username = str(
@@ -753,10 +750,11 @@ class GyingIndexer(_PluginBase):
             )
             if pow_cookie:
                 merged = self._merge_cookie_str(cookie, pow_cookie)
-                if self._is_search_response_ready(
+                ready2, merged = self._is_search_response_ready(
                     base_url=base_url, keyword=keyword, ua=ua,
                     proxies=proxies, timeout=timeout, cookie=merged
-                ):
+                )
+                if ready2:
                     return merged
             logger.warn("观影(GYing)cookie 已失效且未配置可用账号密码，无法自动登录。")
             return cookie
@@ -773,14 +771,11 @@ class GyingIndexer(_PluginBase):
             logger.warn("观影(GYing)自动登录失败，继续使用现有 cookie 搜索。")
             return cookie
 
-        if not self._is_search_response_ready(
-            base_url=base_url,
-            keyword=keyword,
-            ua=ua,
-            proxies=proxies,
-            timeout=timeout,
-            cookie=refreshed,
-        ):
+        ready3, refreshed = self._is_search_response_ready(
+            base_url=base_url, keyword=keyword, ua=ua,
+            proxies=proxies, timeout=timeout, cookie=refreshed,
+        )
+        if not ready3:
             logger.warn("观影(GYing)自动登录后仍未获取到搜索页数据，请检查站点风控或账号状态。")
             return cookie
 
@@ -1100,23 +1095,49 @@ class GyingIndexer(_PluginBase):
 
     def _is_search_response_ready(self, base_url: str, keyword: str, ua: str,
                                   proxies: Optional[Dict[str, str]], timeout: int,
-                                  cookie: str) -> bool:
+                                  cookie: str) -> Tuple[bool, str]:
+        """
+        检查搜索页是否就绪，返回 (ready, effective_cookie)。
+        若遇到 PoW，在同一 session 内自动求解后再验证，并将新 cookie 一并返回。
+        """
         try:
-            headers = {"User-Agent": ua or settings.USER_AGENT, "Referer": base_url}
-            if cookie:
-                headers["Cookie"] = cookie
             url = self._build_search_url(base_url=base_url, keyword=keyword or "测试", mode="precise")
-            resp = requests.get(url=url, headers=headers, proxies=proxies, timeout=max(5, int(timeout or 20)))
-            if not resp.ok:
-                return False
-            body = str(resp.text or "")
-            if self._is_login_shell(body):
-                return False
-            if self._is_pow_page(body):
-                return False
-            return "_obj.search" in body
+            with requests.Session() as session:
+                session.proxies.update(proxies or {})
+                session.headers.update({"User-Agent": ua or settings.USER_AGENT, "Referer": base_url})
+                if cookie:
+                    session.headers["Cookie"] = cookie
+
+                resp = session.get(url=url, timeout=max(5, int(timeout or 20)))
+                if not resp.ok:
+                    return False, cookie
+
+                body = str(resp.text or "")
+                if self._is_login_shell(body):
+                    return False, cookie
+
+                # 遇到 PoW：在同一 session 内解题，然后重试搜索 URL
+                if self._is_pow_page(body):
+                    ok = self._handle_pow_in_session(
+                        session=session, base_url=base_url,
+                        html_text=body, ua=ua, proxies=proxies, timeout=timeout,
+                    )
+                    if not ok:
+                        return False, cookie
+                    # PoW 解决后重试
+                    try:
+                        resp2 = session.get(url=url, timeout=max(5, int(timeout or 20)))
+                        body = str(resp2.text or "") if resp2.ok else ""
+                    except Exception:
+                        return False, cookie
+                    new_cookie = self._cookie_jar_to_header(session.cookies)
+                    if "_obj.search" in body:
+                        return True, new_cookie or cookie
+                    return False, new_cookie or cookie
+
+                return "_obj.search" in body, cookie
         except Exception:
-            return False
+            return False, cookie
 
     def _login_and_get_cookie(self, base_url: str, username: str, password: str, ua: str,
                               proxies: Optional[Dict[str, str]], timeout: int) -> str:
@@ -1280,64 +1301,48 @@ class GyingIndexer(_PluginBase):
                              ua: str, proxies: Optional[Dict[str, str]],
                              timeout: int, existing_cookie: str = "") -> str:
         """
-        直接从已获取的 PoW HTML 中提取挑战参数并求解，不重新发起页面请求。
-        返回验证后的 cookie 字符串，失败返回空字符串。
+        为 target_url 创建新 session，在同一 session 内 GET 目标页面获取服务端绑定的挑战，
+        再求解并提交——确保 challenge_id 与 session 匹配，避免"session 无 cookie"问题。
         """
-        pow_data = self._detect_pow_challenge(html_text)
-        if not pow_data:
-            # HTML 中无法解析挑战参数，回退到重新请求的方式
-            return self._try_solve_pow_standalone(
-                base_url=target_url, ua=ua, proxies=proxies,
-                timeout=timeout, existing_cookie=existing_cookie,
-            )
+        try:
+            with requests.Session() as session:
+                session.proxies.update(proxies or {})
+                session.headers.update({
+                    "User-Agent": ua or settings.USER_AGENT,
+                    "Referer": base_url,
+                })
+                if existing_cookie:
+                    session.headers["Cookie"] = existing_cookie
 
-        challenge_hashes: List[str] = list(pow_data.get("challenge") or [])
-        diff: int = int(pow_data.get("diff") or 0)
-        salt: str = str(pow_data.get("salt") or "")
-        challenge_id: str = str(pow_data.get("id") or "")
+                # 用同一 session 请求 target_url，让服务端在该 session 里建立挑战绑定
+                resp = session.get(target_url, timeout=max(5, int(timeout or 20)))
+                if not resp.ok:
+                    return ""
 
-        if not challenge_hashes or not diff or not salt or not challenge_id:
-            logger.warn("观影(GYing)PoW 挑战参数不完整，跳过求解")
+                fresh_html = resp.text
+                if not self._is_pow_page(fresh_html):
+                    # existing_cookie 已有效，无需 PoW，返回当前 session cookie
+                    return self._cookie_jar_to_header(session.cookies)
+
+                # 用同一 session 内的 HTML 求解（challenge_id 与 session 绑定）
+                ok = self._handle_pow_in_session(
+                    session=session,
+                    base_url=base_url,
+                    html_text=fresh_html,
+                    ua=ua, proxies=proxies, timeout=timeout,
+                )
+
+                cookie_text = self._cookie_jar_to_header(session.cookies)
+                if ok and cookie_text:
+                    logger.info("观影(GYing)PoW 验证完成，已获取 session cookie")
+                elif ok:
+                    logger.warn("观影(GYing)PoW 验证提交成功但 session 无 cookie，重试可能无效")
+                else:
+                    logger.warn("观影(GYing)PoW 验证提交失败")
+                return cookie_text
+        except Exception as err:
+            logger.warn(f"观影(GYing)PoW 求解异常：{err}")
             return ""
-
-        logger.info(f"观影(GYing)PoW 挑战解析成功，id={challenge_id}，难度={diff}，正在计算 nonce...")
-        solved = self._solve_pow(challenge_hashes, diff, salt)
-        if not solved:
-            logger.warn("观影(GYing)PoW 求解失败：在指定范围内未找到匹配 nonce")
-            return ""
-
-        nonces = list(solved.values())
-        logger.info(f"观影(GYing)PoW 计算完成，nonces={nonces}，正在提交验证...")
-
-        with requests.Session() as session:
-            session.proxies.update(proxies or {})
-            session.headers.update({
-                "User-Agent": ua or settings.USER_AGENT,
-                "Referer": base_url,
-            })
-            if existing_cookie:
-                session.headers["Cookie"] = existing_cookie
-
-            # 先对触发 PoW 的 URL 发起 GET，让服务端在 session 里写入挑战 cookie
-            try:
-                session.get(target_url, timeout=max(5, int(timeout or 20)))
-            except Exception:
-                pass
-
-            # 提交 nonce（尝试多种端点）
-            self._submit_pow_solution(
-                session=session, base_url=base_url,
-                challenge_id=challenge_id, nonces=nonces,
-                ua=ua, proxies=proxies, timeout=timeout,
-            )
-
-            # 无论提交端点是否匹配，都返回 session 内所有 cookie 供重试使用
-            cookie_text = self._cookie_jar_to_header(session.cookies)
-            if cookie_text:
-                logger.info("观影(GYing)PoW 验证完成，已获取 session cookie")
-            else:
-                logger.warn("观影(GYing)PoW 验证后 session 无 cookie，重试可能无效")
-            return cookie_text
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
