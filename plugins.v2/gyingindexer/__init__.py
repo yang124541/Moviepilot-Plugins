@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.6.4"
+    plugin_version = "1.6.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -993,25 +993,26 @@ class GyingIndexer(_PluginBase):
         return None
 
     @staticmethod
-    def _solve_pow(challenge_hashes: List[str], diff: int, salt: str) -> Dict[str, int]:
+    def _solve_pow(challenge_hashes: List[str], diff: int, salt: str) -> List[int]:
         """
-        暴力求解 PoW 挑战。
-        算法：对 nonce 从 0 到 diff，计算 SHA256(str(nonce) + salt)，
-        直到找到与所有目标哈希匹配的 nonce。
+        暴力求解 PoW 挑战，返回与 challenge_hashes 顺序严格对应的 nonce 列表。
+        算法：SHA256(str(nonce) + salt)，从 0 枚举到 diff。
         """
-        remaining: Dict[str, Optional[int]] = {h: None for h in challenge_hashes}
-        solved: Dict[str, int] = {}
+        hash_to_idx: Dict[str, int] = {h: i for i, h in enumerate(challenge_hashes)}
+        found: List[Optional[int]] = [None] * len(challenge_hashes)
+        remaining: Set[str] = set(challenge_hashes)
         salt_bytes = salt.encode("ascii")
 
         for nonce in range(diff + 2):
-            if len(solved) == len(remaining):
+            if not remaining:
                 break
             msg = str(nonce).encode("ascii") + salt_bytes
             h = hashlib.sha256(msg).hexdigest()
-            if h in remaining and h not in solved:
-                solved[h] = nonce
+            if h in remaining:
+                found[hash_to_idx[h]] = nonce
+                remaining.discard(h)
 
-        return solved
+        return [n for n in found if n is not None]
 
     def _submit_pow_solution(self, session: requests.Session, base_url: str,
                              challenge_id: str, nonces: List[int],
@@ -1055,6 +1056,16 @@ class GyingIndexer(_PluginBase):
                 # 方式2：服务端在响应 body 中返回 token，需手动写入 session.cookies
                 body_text = str(resp.text or "").strip()
                 logger.debug(f"观影(GYing)PoW 提交响应：status={resp.status_code}，body={body_text[:300]}")
+
+                # 若响应明确返回 success:false，当前 nonce 被拒绝，不继续
+                try:
+                    resp_obj = json.loads(body_text)
+                    if isinstance(resp_obj, dict) and resp_obj.get("success") is False:
+                        logger.warn(f"观影(GYing)PoW 端点 {endpoint} 拒绝 nonce（success:false），nonce 可能有误")
+                        return False
+                except Exception:
+                    pass
+
                 token = self._extract_pow_token(body_text)
                 if token:
                     for cookie_name in ("pow", "pow_pass", "_pow", "pow_token", "pow_verify"):
@@ -1062,7 +1073,7 @@ class GyingIndexer(_PluginBase):
                     logger.info(f"观影(GYing)PoW body token 已写入 session cookie：{token[:40]}...")
                     return True
 
-                # 方式3：200 OK 但无 token，让 session 继续（可能用页面刷新方式验证）
+                # 方式3：200 OK 但无明确结果，视为通过（服务端可能用 session 状态授权）
                 return True
 
             except Exception as e:
@@ -1109,12 +1120,12 @@ class GyingIndexer(_PluginBase):
             return False
 
         logger.info(f"观影(GYing)检测到人机验证（PoW），难度={diff}，正在计算解答...")
-        solved = self._solve_pow(challenge_hashes, diff, salt)
-        if not solved:
+        nonces = self._solve_pow(challenge_hashes, diff, salt)
+        if not nonces:
             logger.warn("观影(GYing)PoW 求解失败：在指定范围内未找到匹配 nonce")
             return False
 
-        nonces = list(solved.values())
+        nonces = self._solve_pow(challenge_hashes, diff, salt)
         logger.info(f"观影(GYing)PoW 计算完成，nonces={nonces}，正在提交...")
         ok = self._submit_pow_solution(
             session=session,
