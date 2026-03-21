@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.6.3"
+    plugin_version = "1.6.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1045,11 +1045,49 @@ class GyingIndexer(_PluginBase):
                 )
                 if resp.status_code == 404:
                     continue
-                if resp.ok:
+                if not resp.ok:
+                    continue
+
+                # 方式1：服务端通过 Set-Cookie 头写入（requests.Session 自动捕获）
+                if session.cookies:
                     return True
-            except Exception:
+
+                # 方式2：服务端在响应 body 中返回 token，需手动写入 session.cookies
+                body_text = str(resp.text or "").strip()
+                logger.debug(f"观影(GYing)PoW 提交响应：status={resp.status_code}，body={body_text[:300]}")
+                token = self._extract_pow_token(body_text)
+                if token:
+                    for cookie_name in ("pow", "pow_pass", "_pow", "pow_token", "pow_verify"):
+                        session.cookies.set(cookie_name, token, domain=urlparse(base_url).netloc)
+                    logger.info(f"观影(GYing)PoW body token 已写入 session cookie：{token[:40]}...")
+                    return True
+
+                # 方式3：200 OK 但无 token，让 session 继续（可能用页面刷新方式验证）
+                return True
+
+            except Exception as e:
+                logger.debug(f"观影(GYing)PoW 提交端点 {endpoint} 异常：{e}")
                 continue
         return False
+
+    @staticmethod
+    def _extract_pow_token(body: str) -> str:
+        """从响应 body 中提取 token/cookie 字段值。"""
+        if not body:
+            return ""
+        try:
+            obj = json.loads(body)
+            if isinstance(obj, dict):
+                for key in ("token", "cookie", "value", "data", "pass", "result", "key"):
+                    val = obj.get(key)
+                    if isinstance(val, str) and len(val) >= 8:
+                        return val.strip()
+        except Exception:
+            pass
+        m = re.search(r'"token"\s*:\s*"([^"]{8,})"', body)
+        if m:
+            return m.group(1)
+        return ""
 
     def _handle_pow_in_session(self, session: requests.Session, base_url: str,
                                html_text: str, ua: str,
@@ -1302,7 +1340,9 @@ class GyingIndexer(_PluginBase):
                              timeout: int, existing_cookie: str = "") -> str:
         """
         为 target_url 创建新 session，在同一 session 内 GET 目标页面获取服务端绑定的挑战，
-        再求解并提交——确保 challenge_id 与 session 匹配，避免"session 无 cookie"问题。
+        再求解并提交——确保 challenge_id 与 session 匹配。
+        提交后若 session 无 cookie，用同一 session 再重试 target_url，
+        看服务端是否通过 session 状态（而非 cookie）来授权。
         """
         try:
             with requests.Session() as session:
@@ -1321,7 +1361,7 @@ class GyingIndexer(_PluginBase):
 
                 fresh_html = resp.text
                 if not self._is_pow_page(fresh_html):
-                    # existing_cookie 已有效，无需 PoW，返回当前 session cookie
+                    # existing_cookie 已有效，无需 PoW
                     return self._cookie_jar_to_header(session.cookies)
 
                 # 用同一 session 内的 HTML 求解（challenge_id 与 session 绑定）
@@ -1331,15 +1371,30 @@ class GyingIndexer(_PluginBase):
                     html_text=fresh_html,
                     ua=ua, proxies=proxies, timeout=timeout,
                 )
+                if not ok:
+                    logger.warn("观影(GYing)PoW 验证提交失败")
+                    return ""
 
                 cookie_text = self._cookie_jar_to_header(session.cookies)
-                if ok and cookie_text:
+                if cookie_text:
                     logger.info("观影(GYing)PoW 验证完成，已获取 session cookie")
-                elif ok:
-                    logger.warn("观影(GYing)PoW 验证提交成功但 session 无 cookie，重试可能无效")
-                else:
-                    logger.warn("观影(GYing)PoW 验证提交失败")
-                return cookie_text
+                    return cookie_text
+
+                # 提交成功但 session 无 cookie：用同一 session 再请求一次 target_url
+                # 服务端可能通过 session 状态（而非 Set-Cookie）授权后续请求
+                logger.info("观影(GYing)PoW 提交后 session 无 cookie，尝试用同一 session 重试...")
+                try:
+                    resp2 = session.get(target_url, timeout=max(5, int(timeout or 20)))
+                    if resp2.ok and not self._is_pow_page(resp2.text):
+                        # session 已通过验证，把 session cookies 返回（可能在这次请求才设置）
+                        cookie_text = self._cookie_jar_to_header(session.cookies)
+                        logger.info(f"观影(GYing)PoW session 重试成功，cookie={cookie_text[:60] or '(空)'}")
+                        return cookie_text or "pow_verified=1"  # 兜底标志，防止空字符串被误判为失败
+                except Exception:
+                    pass
+
+                logger.warn("观影(GYing)PoW 验证后 session 仍无 cookie，重试可能无效")
+                return ""
         except Exception as err:
             logger.warn(f"观影(GYing)PoW 求解异常：{err}")
             return ""
