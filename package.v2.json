@@ -3,11 +3,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.6.2",
+    "version": "1.6.3",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.6.3": "版本号升级到 1.6.3，用于触发 MoviePilot 识别升级。",
       "v1.6.2": "彻底修复 PoW 求解失败：_is_search_response_ready 改为 session 内联解 PoW 并返回新 cookie；_solve_pow_from_html 改为在同一 session 内 GET 目标 URL 再解题，保证 challenge_id 与 session 绑定；修复"登录后仍未获取搜索页数据"。",
       "v1.6.1": "修复搜索中途 PoW 求解失败：直接用已抓到的 PoW HTML 解题，不再重新请求主页（主页无 PoW 时会导致求解流程提前退出）；提交失败时也返回 session cookie 供重试。",
       "v1.6.0": "自动通过 PoW 人机验证：检测到验证页时 Python 本地求解 SHA256 挑战并提交，搜索全程任意请求遇到验证均自动处理，无需手动更新 cookie。",
