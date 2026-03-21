@@ -1,3 +1,4 @@
+import hashlib
 import html
 import importlib
 import json
@@ -23,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.5.7"
+    plugin_version = "1.6.0"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -364,7 +365,12 @@ class GyingIndexer(_PluginBase):
             guarded_get = self._make_cached_get(
                 client=client,
                 url_cache=url_cache,
-                request_state=request_state
+                request_state=request_state,
+                base_url=base_url,
+                ua=ua,
+                proxies=proxies,
+                timeout=timeout,
+                cookie=cookie,
             )
             search_entries = self._collect_search_entries(
                 client=client,
@@ -739,7 +745,19 @@ class GyingIndexer(_PluginBase):
             or site.get("pwd")
             or ""
         ).strip()
+
         if not username or not password:
+            # 无账号密码时，尝试独立解决 PoW 挑战
+            pow_cookie = self._try_solve_pow_standalone(
+                base_url=base_url, ua=ua, proxies=proxies, timeout=timeout, existing_cookie=cookie
+            )
+            if pow_cookie:
+                merged = self._merge_cookie_str(cookie, pow_cookie)
+                if self._is_search_response_ready(
+                    base_url=base_url, keyword=keyword, ua=ua,
+                    proxies=proxies, timeout=timeout, cookie=merged
+                ):
+                    return merged
             logger.warn("观影(GYing)cookie 已失效且未配置可用账号密码，无法自动登录。")
             return cookie
 
@@ -774,6 +792,55 @@ class GyingIndexer(_PluginBase):
             logger.info("观影(GYing)检测到 cookie 失效，已自动登录并刷新会话。")
             logger.warn("观影(GYing)未能回写站点 cookie，本次搜索仍将使用新会话。")
         return refreshed
+
+    def _try_solve_pow_standalone(self, base_url: str, ua: str,
+                                  proxies: Optional[Dict[str, str]],
+                                  timeout: int, existing_cookie: str = "") -> str:
+        """
+        在无登录流程的情况下独立求解 PoW 挑战，返回验证后的 cookie 字符串。
+        失败或无 PoW 挑战时返回空字符串。
+        """
+        try:
+            with requests.Session() as session:
+                session.proxies.update(proxies or {})
+                session.headers.update({"User-Agent": ua or settings.USER_AGENT, "Referer": base_url})
+                if existing_cookie:
+                    session.headers["Cookie"] = existing_cookie
+                resp = session.get(base_url, timeout=max(5, int(timeout or 20)))
+                if not resp.ok or not self._is_pow_page(resp.text):
+                    return ""
+                ok = self._handle_pow_in_session(
+                    session=session,
+                    base_url=base_url,
+                    html_text=resp.text,
+                    ua=ua or settings.USER_AGENT,
+                    proxies=proxies,
+                    timeout=timeout,
+                )
+                if not ok:
+                    return ""
+                return self._cookie_jar_to_header(session.cookies)
+        except Exception as err:
+            logger.warn(f"观影(GYing)独立 PoW 求解异常：{err}")
+            return ""
+
+    @staticmethod
+    def _merge_cookie_str(base: str, extra: str) -> str:
+        """合并两个 cookie 字符串，extra 中同名字段覆盖 base。"""
+        if not extra:
+            return base
+        if not base:
+            return extra
+        parts: Dict[str, str] = {}
+        for raw in (base, extra):
+            for item in str(raw or "").split(";"):
+                item = item.strip()
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    k = k.strip()
+                    if k:
+                        parts[k] = v.strip()
+        return "; ".join(f"{k}={v}" for k, v in parts.items())
 
     def _persist_site_cookie(self, site: dict, cookie: str) -> bool:
         cookie_text = self._normalize_cookie_header(cookie)
@@ -910,6 +977,127 @@ class GyingIndexer(_PluginBase):
             return True
         return ("_BT.PC.HTML('login')" in text) or ('_BT.PC.HTML("login")' in text)
 
+    @staticmethod
+    def _is_pow_page(html_text: str) -> bool:
+        text = str(html_text or "")
+        return "正在确认你是不是机器人" in text and "challenge" in text and "diff" in text
+
+    @staticmethod
+    def _detect_pow_challenge(html_text: str) -> Optional[Dict[str, Any]]:
+        """从人机验证页面解析 PoW 挑战参数。"""
+        text = str(html_text or "")
+        match = re.search(r'const\s+json\s*=\s*(\{[^;]{20,500}\});', text)
+        if not match:
+            return None
+        try:
+            obj = json.loads(match.group(1))
+            if all(k in obj for k in ("id", "challenge", "diff", "salt")):
+                return obj
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _solve_pow(challenge_hashes: List[str], diff: int, salt: str) -> Dict[str, int]:
+        """
+        暴力求解 PoW 挑战。
+        算法：对 nonce 从 0 到 diff，计算 SHA256(str(nonce) + salt)，
+        直到找到与所有目标哈希匹配的 nonce。
+        """
+        remaining: Dict[str, Optional[int]] = {h: None for h in challenge_hashes}
+        solved: Dict[str, int] = {}
+        salt_bytes = salt.encode("ascii")
+
+        for nonce in range(diff + 2):
+            if len(solved) == len(remaining):
+                break
+            msg = str(nonce).encode("ascii") + salt_bytes
+            h = hashlib.sha256(msg).hexdigest()
+            if h in remaining and h not in solved:
+                solved[h] = nonce
+
+        return solved
+
+    def _submit_pow_solution(self, session: requests.Session, base_url: str,
+                             challenge_id: str, nonces: List[int],
+                             ua: str, proxies: Optional[Dict[str, str]],
+                             timeout: int) -> bool:
+        """
+        将 PoW 解答提交给服务端，验证通过后服务端会在 session 中写入 cookie。
+        尝试多个可能的提交端点。
+        """
+        headers = {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Origin": f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}",
+            "Referer": base_url,
+        }
+        payload = {"id": challenge_id, "nonces": nonces}
+
+        endpoints = [
+            urljoin(base_url, "pow/verify"),
+            urljoin(base_url, "pow/v"),
+            urljoin(base_url, "challenge/verify"),
+        ]
+        for endpoint in endpoints:
+            try:
+                resp = session.post(
+                    endpoint,
+                    json=payload,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=max(5, int(timeout or 20)),
+                )
+                if resp.status_code == 404:
+                    continue
+                if resp.ok:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _handle_pow_in_session(self, session: requests.Session, base_url: str,
+                               html_text: str, ua: str,
+                               proxies: Optional[Dict[str, str]],
+                               timeout: int) -> bool:
+        """
+        若当前页面为 PoW 验证页，则自动求解并通过 session 提交，返回是否成功。
+        """
+        pow_data = self._detect_pow_challenge(html_text)
+        if not pow_data:
+            return False
+
+        challenge_hashes: List[str] = list(pow_data.get("challenge") or [])
+        diff: int = int(pow_data.get("diff") or 0)
+        salt: str = str(pow_data.get("salt") or "")
+        challenge_id: str = str(pow_data.get("id") or "")
+
+        if not challenge_hashes or not diff or not salt or not challenge_id:
+            return False
+
+        logger.info(f"观影(GYing)检测到人机验证（PoW），难度={diff}，正在计算解答...")
+        solved = self._solve_pow(challenge_hashes, diff, salt)
+        if not solved:
+            logger.warn("观影(GYing)PoW 求解失败：在指定范围内未找到匹配 nonce")
+            return False
+
+        nonces = list(solved.values())
+        logger.info(f"观影(GYing)PoW 计算完成，nonces={nonces}，正在提交...")
+        ok = self._submit_pow_solution(
+            session=session,
+            base_url=base_url,
+            challenge_id=challenge_id,
+            nonces=nonces,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+        )
+        if ok:
+            logger.info("观影(GYing)PoW 验证提交成功")
+        else:
+            logger.warn("观影(GYing)PoW 验证提交失败，未找到匹配的提交端点")
+        return ok
+
     def _is_search_response_ready(self, base_url: str, keyword: str, ua: str,
                                   proxies: Optional[Dict[str, str]], timeout: int,
                                   cookie: str) -> bool:
@@ -923,6 +1111,8 @@ class GyingIndexer(_PluginBase):
                 return False
             body = str(resp.text or "")
             if self._is_login_shell(body):
+                return False
+            if self._is_pow_page(body):
                 return False
             return "_obj.search" in body
         except Exception:
@@ -939,7 +1129,21 @@ class GyingIndexer(_PluginBase):
                         "User-Agent": ua or settings.USER_AGENT,
                         "Referer": root,
                     })
-                    session.get(root, timeout=max(5, int(timeout or 20)))
+                    resp = session.get(root, timeout=max(5, int(timeout or 20)))
+
+                    # 处理 PoW 人机验证
+                    if resp.ok and self._is_pow_page(resp.text):
+                        self._handle_pow_in_session(
+                            session=session,
+                            base_url=root,
+                            html_text=resp.text,
+                            ua=ua or settings.USER_AGENT,
+                            proxies=proxies,
+                            timeout=timeout,
+                        )
+                        # PoW 验证后重新加载首页以确认通过
+                        resp = session.get(root, timeout=max(5, int(timeout or 20)))
+
                     login_url = urljoin(root, "/user/login")
                     payload = {
                         "username": username,
@@ -1005,10 +1209,20 @@ class GyingIndexer(_PluginBase):
             ret.append(text)
         return ret
 
-    @staticmethod
-    def _make_cached_get(client: RequestUtils,
+    def _make_cached_get(self, client: RequestUtils,
                          url_cache: Dict[str, str],
-                         request_state: Dict[str, int]) -> Callable[[str], str]:
+                         request_state: Dict[str, int],
+                         base_url: str = "",
+                         ua: str = "",
+                         proxies: Optional[Dict[str, str]] = None,
+                         timeout: int = 20,
+                         cookie: str = "") -> Callable[[str], str]:
+        """
+        返回带缓存的 GET 函数，并内置 PoW 人机验证处理：
+        当任意请求返回 PoW 验证页时，自动求解并用新 cookie 重试，保证搜索全程不被拦截。
+        """
+        pow_resolved_cookie: List[str] = [""]  # 已解决的 PoW cookie（闭包共享）
+
         def _getter(url: str) -> str:
             target = str(url or "").strip()
             if not target:
@@ -1018,10 +1232,43 @@ class GyingIndexer(_PluginBase):
                 return url_cache[target]
 
             request_state["http"] = int(request_state.get("http") or 0) + 1
-            text = client.get(target)
-            payload = text or ""
-            url_cache[target] = payload
-            return payload
+            text = client.get(target) or ""
+
+            # 若响应为 PoW 验证页，自动求解并重试
+            if self._is_pow_page(text) and base_url:
+                if not pow_resolved_cookie[0]:
+                    logger.info(f"观影(GYing)搜索中途遇到 PoW 验证，正在自动求解...")
+                    existing = str(cookie or "").strip()
+                    pow_extra = self._try_solve_pow_standalone(
+                        base_url=base_url, ua=ua, proxies=proxies,
+                        timeout=timeout, existing_cookie=existing
+                    )
+                    if pow_extra:
+                        pow_resolved_cookie[0] = self._merge_cookie_str(existing, pow_extra)
+                        logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
+                    else:
+                        logger.warn("观影(GYing)搜索中途 PoW 求解失败，跳过该 URL")
+                        url_cache[target] = ""
+                        return ""
+
+                # 用 PoW cookie 重试
+                try:
+                    retry_headers = {
+                        "User-Agent": ua or settings.USER_AGENT,
+                        "Referer": base_url,
+                        "Cookie": pow_resolved_cookie[0],
+                    }
+                    resp = requests.get(
+                        target, headers=retry_headers,
+                        proxies=proxies, timeout=max(5, int(timeout or 20))
+                    )
+                    text = resp.text if resp.ok else ""
+                except Exception as err:
+                    logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
+                    text = ""
+
+            url_cache[target] = text or ""
+            return text or ""
 
         return _getter
 
