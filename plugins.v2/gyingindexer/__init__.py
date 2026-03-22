@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.6.8"
+    plugin_version = "1.6.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -371,6 +371,7 @@ class GyingIndexer(_PluginBase):
                 proxies=proxies,
                 timeout=timeout,
                 cookie=cookie,
+                site=site,
             )
             search_entries = self._collect_search_entries(
                 client=client,
@@ -738,14 +739,18 @@ class GyingIndexer(_PluginBase):
         ).strip()
         has_credentials = bool(username and password)
 
-        # 有账号密码时初始检查不在内部解 PoW（由登录流程统一处理，避免重复 PoW）
-        ready, cookie = self._is_search_response_ready(
+        # 预检搜索页是否就绪；遇到 PoW 会在同一 session 内自动解决
+        ready, effective_cookie = self._is_search_response_ready(
             base_url=base_url, keyword=keyword, ua=ua,
             proxies=proxies, timeout=timeout, cookie=cookie,
-            solve_pow=not has_credentials,
         )
         if ready:
-            return cookie
+            # 如果解了 PoW 导致 cookie 有更新，回写持久化
+            if effective_cookie and effective_cookie != cookie:
+                site["cookie"] = effective_cookie
+                self._persist_site_cookie(site=site, cookie=effective_cookie)
+                logger.info("观影(GYing)PoW 验证通过，已回写站点 cookie。")
+            return effective_cookie
 
         if not has_credentials:
             # 无账号密码时，尝试独立解决 PoW 挑战
@@ -759,6 +764,10 @@ class GyingIndexer(_PluginBase):
                     proxies=proxies, timeout=timeout, cookie=merged
                 )
                 if ready2:
+                    site["cookie"] = merged
+                    persisted = self._persist_site_cookie(site=site, cookie=merged)
+                    if persisted:
+                        logger.info("观影(GYing)PoW 验证通过，已回写站点 cookie。")
                     return merged
             logger.warn("观影(GYing)cookie 已失效且未配置可用账号密码，无法自动登录。")
             return cookie
@@ -775,14 +784,7 @@ class GyingIndexer(_PluginBase):
             logger.warn("观影(GYing)自动登录失败，继续使用现有 cookie 搜索。")
             return cookie
 
-        ready3, refreshed = self._is_search_response_ready(
-            base_url=base_url, keyword=keyword, ua=ua,
-            proxies=proxies, timeout=timeout, cookie=refreshed,
-        )
-        if not ready3:
-            logger.warn("观影(GYing)自动登录后仍未获取到搜索页数据，请检查站点风控或账号状态。")
-            return cookie
-
+        # 登录成功后直接回写，不再发第二次预检请求（避免再次触发 PoW）
         site["cookie"] = refreshed
         persisted = self._persist_site_cookie(site=site, cookie=refreshed)
         if persisted:
@@ -1112,7 +1114,7 @@ class GyingIndexer(_PluginBase):
 
     def _is_search_response_ready(self, base_url: str, keyword: str, ua: str,
                                   proxies: Optional[Dict[str, str]], timeout: int,
-                                  cookie: str, solve_pow: bool = True) -> Tuple[bool, str]:
+                                  cookie: str) -> Tuple[bool, str]:
         """
         检查搜索页是否就绪，返回 (ready, effective_cookie)。
         若遇到 PoW，在同一 session 内自动求解后再验证，并将新 cookie 一并返回。
@@ -1135,9 +1137,6 @@ class GyingIndexer(_PluginBase):
 
                 # 遇到 PoW：在同一 session 内解题，然后重试搜索 URL
                 if self._is_pow_page(body):
-                    if not solve_pow:
-                        # 有账号密码时不在此处解 PoW，由登录流程统一处理
-                        return False, cookie
                     ok = self._handle_pow_in_session(
                         session=session, base_url=base_url,
                         html_text=body, ua=ua, proxies=proxies, timeout=timeout,
@@ -1259,7 +1258,8 @@ class GyingIndexer(_PluginBase):
                          ua: str = "",
                          proxies: Optional[Dict[str, str]] = None,
                          timeout: int = 20,
-                         cookie: str = "") -> Callable[[str], str]:
+                         cookie: str = "",
+                         site: Optional[dict] = None) -> Callable[[str], str]:
         """
         返回带缓存的 GET 函数，并内置 PoW 人机验证处理：
         当任意请求返回 PoW 验证页时，自动求解并用新 cookie 重试，保证搜索全程不被拦截。
@@ -1282,7 +1282,6 @@ class GyingIndexer(_PluginBase):
                 if not pow_resolved_cookie[0]:
                     logger.info(f"观影(GYing)搜索中途遇到 PoW 验证（URL={target}），正在自动求解...")
                     existing = str(cookie or "").strip()
-                    # 直接用已抓到的 PoW HTML 求解，不重新请求主页
                     pow_extra = self._solve_pow_from_html(
                         html_text=text,
                         target_url=target,
@@ -1291,8 +1290,13 @@ class GyingIndexer(_PluginBase):
                         existing_cookie=existing,
                     )
                     if pow_extra:
-                        pow_resolved_cookie[0] = self._merge_cookie_str(existing, pow_extra)
+                        merged = self._merge_cookie_str(existing, pow_extra)
+                        pow_resolved_cookie[0] = merged
                         logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
+                        # 回写 cookie，避免下次搜索重复验证
+                        if site is not None:
+                            site["cookie"] = merged
+                            self._persist_site_cookie(site=site, cookie=merged)
                     else:
                         logger.warn(f"观影(GYing)搜索中途 PoW 求解失败，跳过 URL={target}")
                         url_cache[target] = ""

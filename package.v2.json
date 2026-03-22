@@ -16,11 +16,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.6.8",
+    "version": "1.6.9",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.6.9": "修复每次搜索都重复过 PoW 验证的问题：预检时无论有无账号密码均在同一 session 内解 PoW，解完即回写 cookie；删除登录后多余的第二次预检；搜索中途 PoW 解完后同步持久化 cookie，整体从每次搜索 2+ 次 PoW 降为最多 1 次，cookie 有效时为 0 次。",
       "v1.6.8": "优化 PoW 流程：有账号密码时初始检查不在内部解 PoW，避免重复两次 PoW 验证；登录流程统一处理 PoW，整体验证次数从 2 次降为 1 次。",
       "v1.6.7": "修复 PoW 验证根本问题：正确实现 powSolve.js 协议——POST 到触发 PoW 的当前页面 URL，使用 form-encoded 格式（action=verify&id=ID&nonce[]=N0&nonce[]=N1），服务端返回 success:true 并设置 browser_verified cookie。",
       "v1.6.6": "修复 PoW nonce 计算失败（success:false）：_solve_pow 同时尝试 ASCII salt 和 hex 解码 salt 两种编码方式，哪种能匹配 challenge hash 就用哪种，兼容服务端不同实现。",
