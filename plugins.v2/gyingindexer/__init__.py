@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.0"
+    plugin_version = "1.7.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1150,7 +1150,8 @@ class GyingIndexer(_PluginBase):
                         body = str(resp2.text or "") if resp2.ok else ""
                     except Exception:
                         return False, cookie
-                    new_cookie = self._cookie_jar_to_header(session.cookies)
+                    # 合并原有 cookie + 新 cookie（browser_verified 等），避免丢失登录 session
+                    new_cookie = self._merge_cookie_str(cookie, self._cookie_jar_to_header(session.cookies))
                     if "_obj.search" in body:
                         return True, new_cookie or cookie
                     return False, new_cookie or cookie
