@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.6.5"
+    plugin_version = "1.6.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -995,22 +995,39 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _solve_pow(challenge_hashes: List[str], diff: int, salt: str) -> List[int]:
         """
-        暴力求解 PoW 挑战，返回与 challenge_hashes 顺序严格对应的 nonce 列表。
-        算法：SHA256(str(nonce) + salt)，从 0 枚举到 diff。
+        暴力求解 PoW，同时尝试两种 salt 编码方式：
+          1. SHA256(str(nonce) + salt_as_ascii)   — JS 纯字符串拼接方式
+          2. SHA256(str(nonce) + hex_decoded_salt) — WASM 可能使用二进制 salt
+        返回与 challenge_hashes 顺序严格对应的 nonce 列表。
         """
         hash_to_idx: Dict[str, int] = {h: i for i, h in enumerate(challenge_hashes)}
         found: List[Optional[int]] = [None] * len(challenge_hashes)
         remaining: Set[str] = set(challenge_hashes)
-        salt_bytes = salt.encode("ascii")
+
+        salt_ascii = salt.encode("ascii")
+        try:
+            salt_hex_decoded = bytes.fromhex(salt)
+        except Exception:
+            salt_hex_decoded = None
 
         for nonce in range(diff + 2):
             if not remaining:
                 break
-            msg = str(nonce).encode("ascii") + salt_bytes
-            h = hashlib.sha256(msg).hexdigest()
+            nonce_bytes = str(nonce).encode("ascii")
+
+            # 方式1：salt 作为 ASCII 字符串（纯 JS 方式）
+            h = hashlib.sha256(nonce_bytes + salt_ascii).hexdigest()
             if h in remaining:
                 found[hash_to_idx[h]] = nonce
                 remaining.discard(h)
+                continue
+
+            # 方式2：salt hex 解码为二进制字节（WASM HashVerifier 可能使用的方式）
+            if salt_hex_decoded is not None:
+                h2 = hashlib.sha256(nonce_bytes + salt_hex_decoded).hexdigest()
+                if h2 in remaining:
+                    found[hash_to_idx[h2]] = nonce
+                    remaining.discard(h2)
 
         return [n for n in found if n is not None]
 
@@ -1120,6 +1137,7 @@ class GyingIndexer(_PluginBase):
             return False
 
         logger.info(f"观影(GYing)检测到人机验证（PoW），难度={diff}，正在计算解答...")
+        logger.debug(f"观影(GYing)PoW 挑战参数：id={challenge_id}，salt={salt}，challenges={challenge_hashes}")
         nonces = self._solve_pow(challenge_hashes, diff, salt)
         if not nonces:
             logger.warn("观影(GYing)PoW 求解失败：在指定范围内未找到匹配 nonce")
