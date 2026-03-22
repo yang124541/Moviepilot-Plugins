@@ -19,7 +19,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -171,6 +171,7 @@ class LdysgIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
+        client_ip = self._rand_ip()
 
         # 构建 cookie（使用站点配置 cookie）
         cookie = str(site.get("cookie") or "").strip()
@@ -195,6 +196,7 @@ class LdysgIndexer(_PluginBase):
                 proxies=proxies,
                 timeout=timeout,
                 cookie=cookie,
+                client_ip=client_ip,
             )
             if not video_items:
                 logger.info(f"老电影资源(ldysg)搜索无结果：关键词='{keyword}'")
@@ -221,6 +223,7 @@ class LdysgIndexer(_PluginBase):
                     proxies=proxies,
                     timeout=timeout,
                     cookie=cookie,
+                    client_ip=client_ip,
                 )
                 if not vbt_items:
                     continue
@@ -281,7 +284,7 @@ class LdysgIndexer(_PluginBase):
 
     def _search_videos(self, client: RequestUtils, base_url: str, keyword: str,
                        ua: str, proxies: Optional[Dict[str, str]],
-                       timeout: int, cookie: str) -> List[Dict[str, Any]]:
+                       timeout: int, cookie: str, client_ip: str) -> List[Dict[str, Any]]:
         """调用 POST /api.php?fun=get_video 搜索视频列表，分页合并所有结果"""
         api_url = urljoin(base_url, "api.php")
         all_items: List[Dict[str, Any]] = []
@@ -304,8 +307,8 @@ class LdysgIndexer(_PluginBase):
                     "X-Requested-With": "XMLHttpRequest",
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Accept": "application/json, text/javascript, */*; q=0.01",
-                    "X-Forwarded-For": self._rand_ip(),
-                    "X-Real-IP": self._rand_ip(),
+                    "X-Forwarded-For": client_ip,
+                    "X-Real-IP": client_ip,
                 }
                 if cookie:
                     headers["Cookie"] = cookie
@@ -343,7 +346,7 @@ class LdysgIndexer(_PluginBase):
 
     def _fetch_vbt(self, client: RequestUtils, base_url: str, vid: str,
                    ua: str, proxies: Optional[Dict[str, str]],
-                   timeout: int, cookie: str) -> List[Dict[str, Any]]:
+                   timeout: int, cookie: str, client_ip: str) -> List[Dict[str, Any]]:
         """
         调用 POST /api.php 获取单个视频的磁力/网盘链接列表。
         站点对每次请求都要求图片验证码：
@@ -361,8 +364,8 @@ class LdysgIndexer(_PluginBase):
             "X-Requested-With": "XMLHttpRequest",
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Forwarded-For": self._rand_ip(),
-            "X-Real-IP": self._rand_ip(),
+            "X-Forwarded-For": client_ip,
+            "X-Real-IP": client_ip,
         }
         if cookie:
             headers["Cookie"] = cookie
@@ -415,7 +418,14 @@ class LdysgIndexer(_PluginBase):
                 logger.debug(f"老电影资源(ldysg)视频验证码无法识别，跳过：vid={vid}")
                 return []
 
-            solved = self._ocr_captcha(captcha_url, proxies=proxies, timeout=timeout)
+            solved = self._ocr_captcha(
+                captcha_url,
+                proxies=proxies,
+                timeout=timeout,
+                referer=referer,
+                ua=ua,
+                client_ip=client_ip,
+            )
             if not solved:
                 logger.debug(f"老电影资源(ldysg)验证码识别失败，跳过：vid={vid}")
                 return []
@@ -463,7 +473,8 @@ class LdysgIndexer(_PluginBase):
 
     @staticmethod
     def _ocr_captcha(captcha_url: str, proxies: Optional[Dict[str, str]] = None,
-                     timeout: int = 10) -> str:
+                     timeout: int = 10, referer: str = "https://www.ldysg.com/",
+                     ua: str = "", client_ip: str = "") -> str:
         """
         下载验证码图片并用 ddddocr 识别。
         ddddocr 专为中文网站图片验证码设计，识别效果好。
@@ -478,11 +489,19 @@ class LdysgIndexer(_PluginBase):
 
         try:
             import requests as _requests
+            headers = {
+                "Referer": referer or "https://www.ldysg.com/",
+            }
+            if ua:
+                headers["User-Agent"] = ua
+            if client_ip:
+                headers["X-Forwarded-For"] = client_ip
+                headers["X-Real-IP"] = client_ip
             img_resp = _requests.get(
                 captcha_url,
                 proxies=proxies,
                 timeout=max(5, timeout),
-                headers={"Referer": "https://www.ldysg.com/"},
+                headers=headers,
             )
             if not img_resp.ok:
                 return ""
