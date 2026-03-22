@@ -20,7 +20,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -436,15 +436,13 @@ class LdysgIndexer(_PluginBase):
                     logger.debug(f"老电影资源(ldysg)验证码识别失败，跳过：vid={vid}")
                     return []
 
-                logger.debug(
-                    f"老电影资源(ldysg)验证码识别结果='{solved}'，"
-                    f"片名='{self._display_title(title)}'"
-                )
                 resp2 = _post_vbt(solved)
+                retry_prefix = "验证码重试第1次，" if captcha_round > 1 else ""
 
                 if resp2 is not None and resp2.status_code == 200:
                     logger.debug(
-                        f"老电影资源(ldysg)验证码验证成功，"
+                        f"老电影资源(ldysg){retry_prefix}"
+                        f"验证码识别结果='{solved}'，验证码验证成功，"
                         f"片名='{self._display_title(title)}'"
                     )
                     try:
@@ -454,17 +452,14 @@ class LdysgIndexer(_PluginBase):
 
                 body_preview = self._preview_response_body(resp2)
                 logger.debug(
-                    f"老电影资源(ldysg)验证码验证失败，"
+                    f"老电影资源(ldysg){retry_prefix}"
+                    f"验证码识别结果='{solved}'，验证码验证失败，"
                     f"片名='{self._display_title(title)}'，"
                     f"status={resp2.status_code if resp2 is not None else 'None'}，"
                     f"body='{body_preview}'"
                 )
 
                 if self._is_captcha_wrong_response(resp2) and captcha_round < max_captcha_rounds:
-                    logger.debug(
-                        f"老电影资源(ldysg)验证码重试第1次，"
-                        f"片名='{self._display_title(title)}'"
-                    )
                     captcha_resp = _post_vbt("1")
                     if captcha_resp is None:
                         logger.debug(
