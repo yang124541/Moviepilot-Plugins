@@ -19,7 +19,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.0.9"
+    plugin_version = "1.0.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -432,15 +432,46 @@ class LdysgIndexer(_PluginBase):
 
             logger.debug(f"老电影资源(ldysg)验证码识别结果='{solved}'，vid={vid}")
             resp2 = None
-            for attempt in range(3):
+            max_submit_attempts = 3
+            retryable_statuses = {429, 500, 502, 503, 504}
+            for attempt in range(1, max_submit_attempts + 1):
                 resp2 = _post_vbt(solved)
-                if resp2 is not None:
+                if resp2 is None:
+                    logger.debug(
+                        f"老电影资源(ldysg)验证码提交第{attempt}/{max_submit_attempts}次失败："
+                        f"vid={vid}，status=None"
+                    )
+                    if attempt < max_submit_attempts:
+                        logger.debug(
+                            f"老电影资源(ldysg)验证码提交准备重试({attempt + 1}/{max_submit_attempts})："
+                            f"vid={vid}，原因=无响应"
+                        )
+                    continue
+
+                if resp2.status_code == 200:
+                    if attempt > 1:
+                        logger.debug(
+                            f"老电影资源(ldysg)验证码提交重试成功：vid={vid}，"
+                            f"attempt={attempt}/{max_submit_attempts}"
+                        )
                     break
-                logger.debug(f"老电影资源(ldysg)验证码提交重试({attempt + 1}/3)：vid={vid}")
+
+                body_preview = re.sub(r"\s+", " ", str(resp2.text or "")).strip()[:120]
+                logger.debug(
+                    f"老电影资源(ldysg)验证码提交第{attempt}/{max_submit_attempts}次返回异常："
+                    f"vid={vid}，status={resp2.status_code}，body='{body_preview}'"
+                )
+                if resp2.status_code not in retryable_statuses or attempt >= max_submit_attempts:
+                    break
+                logger.debug(
+                    f"老电影资源(ldysg)验证码提交准备重试({attempt + 1}/{max_submit_attempts})："
+                    f"vid={vid}，原因=status={resp2.status_code}"
+                )
             if resp2 is None or resp2.status_code != 200:
                 logger.debug(
                     f"老电影资源(ldysg)验证码提交失败：vid={vid}，"
-                    f"status={resp2.status_code if resp2 else 'None'}"
+                    f"status={resp2.status_code if resp2 else 'None'}，"
+                    f"attempts={max_submit_attempts}"
                 )
                 return []
             try:
