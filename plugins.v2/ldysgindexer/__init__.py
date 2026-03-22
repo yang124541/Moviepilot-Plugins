@@ -18,7 +18,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -428,7 +428,14 @@ class LdysgIndexer(_PluginBase):
             except Exception:
                 return []
 
-        logger.debug(f"老电影资源(ldysg)获取资源失败：vid={vid}，status={resp1.status_code}")
+        if resp1.status_code == 406:
+            try:
+                msg = resp1.json().get("msg", "")
+            except Exception:
+                msg = ""
+            logger.warning(f"老电影资源(ldysg)今日访问已达上限，请24小时后重试：{msg}")
+        else:
+            logger.debug(f"老电影资源(ldysg)获取资源失败：vid={vid}，status={resp1.status_code}")
         return []
 
     @staticmethod
