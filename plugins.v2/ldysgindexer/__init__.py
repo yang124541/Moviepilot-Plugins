@@ -1,3 +1,4 @@
+import random
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,7 +19,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -303,6 +304,8 @@ class LdysgIndexer(_PluginBase):
                     "X-Requested-With": "XMLHttpRequest",
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "X-Forwarded-For": self._rand_ip(),
+                    "X-Real-IP": self._rand_ip(),
                 }
                 if cookie:
                     headers["Cookie"] = cookie
@@ -358,6 +361,8 @@ class LdysgIndexer(_PluginBase):
             "X-Requested-With": "XMLHttpRequest",
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Forwarded-For": self._rand_ip(),
+            "X-Real-IP": self._rand_ip(),
         }
         if cookie:
             headers["Cookie"] = cookie
@@ -488,6 +493,11 @@ class LdysgIndexer(_PluginBase):
         except Exception as e:
             logger.debug(f"老电影资源(ldysg)验证码 OCR 异常：{e}")
             return ""
+
+    @staticmethod
+    def _rand_ip() -> str:
+        """生成随机公网 IP，用于绕过站点 IP 维度的访问频率限制"""
+        return f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
 
     @staticmethod
     def _build_match_title(title: str, parent_title: str = "", year: str = "") -> str:
