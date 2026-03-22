@@ -1,4 +1,17 @@
 {
+  "LdysgIndexer": {
+    "name": "老电影资源（ldysg）",
+    "description": "为 MoviePilot 增加 ldysg.com 老旧电影磁力搜索支持，自动 OCR 识别验证码。",
+    "labels": "站点,索引",
+    "version": "1.0.1",
+    "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/ldysg.png",
+    "author": "yang124541",
+    "level": 2,
+    "history": {
+      "v1.0.1": "自动 OCR 识别图片验证码（ddddocr），每次获取磁力链接时无需人工介入；遇到视频验证码或识别失败自动跳过。",
+      "v1.0.0": "初始版本：自动注册 ldysg 索引器并接管搜索，提取磁力链接。"
+    }
+  },
   "GyingIndexer": {
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
