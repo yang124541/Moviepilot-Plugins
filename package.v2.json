@@ -16,11 +16,12 @@
     "name": "老电影资源（ldysg）",
     "description": "为 MoviePilot 增加 ldysg.com 老旧电影磁力搜索支持，自动 OCR 识别验证码。",
     "labels": "站点,索引",
-    "version": "1.0.10",
+    "version": "1.1.2",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/ldysg.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.1.2": "修复验证码提交失败日志误判：HTTP 403 等响应不再被写成 status=None；响应体预览改为中文 JSON；最终 attempts 改为真实尝试次数。",
       "v1.0.10": "增强验证码提交可观测性：逐次记录提交尝试、无响应/HTTP异常原因与最终尝试次数，便于定位为何失败及是否发生重试。",
       "v1.0.9": "保持伪造 IP 策略不变，但将单次搜索内的搜索列表、种子获取与验证码图片请求统一固定为同一个 IP，减少站点风控导致的验证码链路差异。",
       "v1.0.1": "自动 OCR 识别图片验证码（ddddocr），每次获取磁力链接时无需人工介入；遇到视频验证码或识别失败自动跳过。",

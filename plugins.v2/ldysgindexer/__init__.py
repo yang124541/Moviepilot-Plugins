@@ -1,3 +1,4 @@
+import json
 import random
 import re
 from datetime import datetime
@@ -19,7 +20,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.0.10"
+    plugin_version = "1.1.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -433,8 +434,10 @@ class LdysgIndexer(_PluginBase):
             logger.debug(f"老电影资源(ldysg)验证码识别结果='{solved}'，vid={vid}")
             resp2 = None
             max_submit_attempts = 3
+            attempts_used = 0
             retryable_statuses = {429, 500, 502, 503, 504}
             for attempt in range(1, max_submit_attempts + 1):
+                attempts_used = attempt
                 resp2 = _post_vbt(solved)
                 if resp2 is None:
                     logger.debug(
@@ -456,7 +459,7 @@ class LdysgIndexer(_PluginBase):
                         )
                     break
 
-                body_preview = re.sub(r"\s+", " ", str(resp2.text or "")).strip()[:120]
+                body_preview = self._preview_response_body(resp2)
                 logger.debug(
                     f"老电影资源(ldysg)验证码提交第{attempt}/{max_submit_attempts}次返回异常："
                     f"vid={vid}，status={resp2.status_code}，body='{body_preview}'"
@@ -470,8 +473,8 @@ class LdysgIndexer(_PluginBase):
             if resp2 is None or resp2.status_code != 200:
                 logger.debug(
                     f"老电影资源(ldysg)验证码提交失败：vid={vid}，"
-                    f"status={resp2.status_code if resp2 else 'None'}，"
-                    f"attempts={max_submit_attempts}"
+                    f"status={resp2.status_code if resp2 is not None else 'None'}，"
+                    f"attempts={attempts_used}"
                 )
                 return []
             try:
@@ -501,6 +504,17 @@ class LdysgIndexer(_PluginBase):
         elif isinstance(vbt, list):
             items = vbt
         return items
+
+    @staticmethod
+    def _preview_response_body(resp: Any, limit: int = 120) -> str:
+        """格式化响应体预览，优先输出中文 JSON，便于日志排查。"""
+        if resp is None:
+            return ""
+        try:
+            text = json.dumps(resp.json(), ensure_ascii=False)
+        except Exception:
+            text = str(getattr(resp, "text", "") or "")
+        return re.sub(r"\s+", " ", text).strip()[:limit]
 
     @staticmethod
     def _ocr_captcha(captcha_url: str, proxies: Optional[Dict[str, str]] = None,
