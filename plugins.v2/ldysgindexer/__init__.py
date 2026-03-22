@@ -1,6 +1,7 @@
 import json
 import random
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,7 +22,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.1.8"
+    plugin_version = "1.1.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -31,7 +32,8 @@ class LdysgIndexer(_PluginBase):
 
     _enabled = False
     _extra_hosts = ""
-    _detail_concurrency = 4
+    _detail_concurrency = 5
+    _thread_local = threading.local()
 
     _default_host = "ldysg.com"
     _default_base_url = "https://www.ldysg.com/"
@@ -108,8 +110,8 @@ class LdysgIndexer(_PluginBase):
                                             "model": "detail_concurrency",
                                             "type": "number",
                                             "label": "资源页并发数",
-                                            "placeholder": "4",
-                                            "hint": "只并发抓取搜索结果详情页，建议 2-6",
+                                            "placeholder": "5",
+                                            "hint": "只并发抓取搜索结果详情页，允许范围 1-20",
                                             "persistentHint": True,
                                         },
                                     }
@@ -158,7 +160,7 @@ class LdysgIndexer(_PluginBase):
         ], {
             "enabled": False,
             "extra_hosts": "",
-            "detail_concurrency": 4,
+            "detail_concurrency": 5,
         }
 
     def get_page(self) -> List[dict]:
@@ -171,7 +173,7 @@ class LdysgIndexer(_PluginBase):
         }
 
     def stop_service(self):
-        pass
+        self._close_thread_local_resources()
 
     async def async_search_torrents(self, site: dict,
                                     keyword: str = None,
@@ -412,7 +414,7 @@ class LdysgIndexer(_PluginBase):
                 "issear": "1",
             }
             try:
-                import requests as _requests
+                session = self._get_thread_local_session()
                 headers = {
                     "User-Agent": ua or settings.USER_AGENT,
                     "Referer": base_url,
@@ -424,7 +426,7 @@ class LdysgIndexer(_PluginBase):
                 }
                 if cookie:
                     headers["Cookie"] = cookie
-                resp = _requests.post(
+                resp = session.post(
                     api_url,
                     data=payload,
                     headers=headers,
@@ -466,10 +468,9 @@ class LdysgIndexer(_PluginBase):
           2. 下载验证码图片，用 ddddocr OCR 识别数字
           3. 用识别结果重新发起请求，返回 200 及资源列表
         """
-        import requests as _requests
-
         api_url = urljoin(base_url, "api.php")
         referer = urljoin(base_url, f"id/{vid}")
+        session = self._get_thread_local_session()
         headers = {
             "User-Agent": ua or settings.USER_AGENT,
             "Referer": referer,
@@ -484,7 +485,7 @@ class LdysgIndexer(_PluginBase):
 
         def _post_vbt(vcode: str) -> Optional[dict]:
             try:
-                resp = _requests.post(
+                resp = session.post(
                     api_url,
                     data={"fun": "get_vbt", "id": vid, "issear": "1", "vcode": vcode},
                     headers=headers,
@@ -671,7 +672,7 @@ class LdysgIndexer(_PluginBase):
             return ""
 
         try:
-            import requests as _requests
+            session = LdysgIndexer._get_thread_local_session()
             headers = {
                 "Referer": referer or "https://www.ldysg.com/",
             }
@@ -680,7 +681,7 @@ class LdysgIndexer(_PluginBase):
             if client_ip:
                 headers["X-Forwarded-For"] = client_ip
                 headers["X-Real-IP"] = client_ip
-            img_resp = _requests.get(
+            img_resp = session.get(
                 captcha_url,
                 proxies=proxies,
                 timeout=max(5, timeout),
@@ -692,7 +693,7 @@ class LdysgIndexer(_PluginBase):
             if not img_bytes:
                 return ""
 
-            ocr = ddddocr.DdddOcr(show_ad=False)
+            ocr = LdysgIndexer._get_thread_local_ocr()
             result = str(ocr.classification(img_bytes) or "").strip()
             # 只保留数字和字母，去除空白
             result = re.sub(r"\s+", "", result)
@@ -700,6 +701,38 @@ class LdysgIndexer(_PluginBase):
         except Exception as e:
             logger.debug(f"老电影资源(ldysg)验证码 OCR 异常：{e}")
             return ""
+
+    @classmethod
+    def _get_thread_local_session(cls):
+        session = getattr(cls._thread_local, "session", None)
+        if session is None:
+            import requests
+            session = requests.Session()
+            cls._thread_local.session = session
+        return session
+
+    @classmethod
+    def _get_thread_local_ocr(cls):
+        ocr = getattr(cls._thread_local, "ocr", None)
+        if ocr is None:
+            import ddddocr  # type: ignore
+            ocr = ddddocr.DdddOcr(show_ad=False)
+            cls._thread_local.ocr = ocr
+        return ocr
+
+    @classmethod
+    def _close_thread_local_resources(cls) -> None:
+        session = getattr(cls._thread_local, "session", None)
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+            finally:
+                cls._thread_local.session = None
+
+        if getattr(cls._thread_local, "ocr", None) is not None:
+            cls._thread_local.ocr = None
 
     @staticmethod
     def _rand_ip() -> str:
@@ -709,10 +742,10 @@ class LdysgIndexer(_PluginBase):
     @staticmethod
     def _clamp_detail_concurrency(value: Any) -> int:
         try:
-            concurrency = int(value or 4)
+            concurrency = int(value or 5)
         except Exception:
-            concurrency = 4
-        return max(1, min(concurrency, 6))
+            concurrency = 5
+        return max(1, min(concurrency, 20))
 
     @staticmethod
     def _build_match_title(title: str, parent_title: str = "", year: str = "") -> str:
