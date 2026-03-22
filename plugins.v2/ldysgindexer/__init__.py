@@ -20,7 +20,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -214,6 +214,7 @@ class LdysgIndexer(_PluginBase):
                 year = str(item.get("year") or "").strip()
                 area = str(item.get("area") or "").strip()
                 cat = str(item.get("cat") or "").strip()
+                item_client_ip = self._rand_ip()
 
                 # 获取资源链接
                 vbt_items = self._fetch_vbt(
@@ -225,7 +226,7 @@ class LdysgIndexer(_PluginBase):
                     proxies=proxies,
                     timeout=timeout,
                     cookie=cookie,
-                    client_ip=client_ip,
+                    client_ip=item_client_ip,
                 )
                 if not vbt_items:
                     continue
@@ -401,7 +402,7 @@ class LdysgIndexer(_PluginBase):
         # 返回 401 → 拿验证码图片 URL 并 OCR
         if resp1.status_code == 401:
             captcha_resp = resp1
-            max_captcha_rounds = 2
+            max_captcha_rounds = 3
 
             for captcha_round in range(1, max_captcha_rounds + 1):
                 try:
@@ -433,11 +434,27 @@ class LdysgIndexer(_PluginBase):
                     client_ip=client_ip,
                 )
                 if not solved:
-                    logger.debug(f"老电影资源(ldysg)验证码识别失败，跳过：vid={vid}")
+                    retry_prefix = f"验证码重试第{captcha_round - 1}次，" if captcha_round > 1 else ""
+                    logger.debug(
+                        f"老电影资源(ldysg){retry_prefix}"
+                        f"验证码识别结果=''，验证码验证失败，"
+                        f"片名='{self._display_title(title)}'，body='验证码识别失败'"
+                    )
+                    if captcha_round < max_captcha_rounds:
+                        captcha_resp = _post_vbt("1")
+                        if captcha_resp is None or captcha_resp.status_code != 401:
+                            logger.debug(
+                                f"老电影资源(ldysg)验证码验证失败，"
+                                f"片名='{self._display_title(title)}'，"
+                                f"status={captcha_resp.status_code if captcha_resp is not None else 'None'}，"
+                                f"body='{self._preview_response_body(captcha_resp) or '重新获取验证码失败'}'"
+                            )
+                            return []
+                        continue
                     return []
 
                 resp2 = _post_vbt(solved)
-                retry_prefix = "验证码重试第1次，" if captcha_round > 1 else ""
+                retry_prefix = f"验证码重试第{captcha_round - 1}次，" if captcha_round > 1 else ""
 
                 if resp2 is not None and resp2.status_code == 200:
                     logger.debug(
@@ -459,7 +476,7 @@ class LdysgIndexer(_PluginBase):
                     f"body='{body_preview}'"
                 )
 
-                if self._is_captcha_wrong_response(resp2) and captcha_round < max_captcha_rounds:
+                if captcha_round < max_captcha_rounds:
                     captcha_resp = _post_vbt("1")
                     if captcha_resp is None:
                         logger.debug(
