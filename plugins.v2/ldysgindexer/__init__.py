@@ -19,7 +19,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -422,10 +422,11 @@ class LdysgIndexer(_PluginBase):
 
             logger.debug(f"老电影资源(ldysg)验证码识别结果='{solved}'，vid={vid}")
             resp2 = None
-            for _ in range(3):
+            for attempt in range(3):
                 resp2 = _post_vbt(solved)
                 if resp2 is not None:
                     break
+                logger.debug(f"老电影资源(ldysg)验证码提交重试({attempt + 1}/3)：vid={vid}")
             if resp2 is None or resp2.status_code != 200:
                 logger.debug(
                     f"老电影资源(ldysg)验证码提交失败：vid={vid}，"
