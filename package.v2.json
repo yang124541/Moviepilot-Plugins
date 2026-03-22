@@ -16,7 +16,7 @@
     "name": "老电影资源（ldysg）",
     "description": "为 MoviePilot 增加 ldysg.com 老旧电影磁力搜索支持，自动 OCR 识别验证码。",
     "labels": "站点,索引",
-    "version": "1.1.7",
+    "version": "1.1.8",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/ldysg.png",
     "author": "yang124541",
     "level": 2,

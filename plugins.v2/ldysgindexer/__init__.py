@@ -1,6 +1,7 @@
 import json
 import random
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -20,7 +21,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.1.7"
+    plugin_version = "1.1.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -30,6 +31,7 @@ class LdysgIndexer(_PluginBase):
 
     _enabled = False
     _extra_hosts = ""
+    _detail_concurrency = 4
 
     _default_host = "ldysg.com"
     _default_base_url = "https://www.ldysg.com/"
@@ -40,6 +42,9 @@ class LdysgIndexer(_PluginBase):
         if config:
             self._enabled = bool(config.get("enabled"))
             self._extra_hosts = (config.get("extra_hosts") or "").strip()
+            self._detail_concurrency = self._clamp_detail_concurrency(
+                config.get("detail_concurrency")
+            )
 
         if self._enabled:
             self._register_builtin_indexer()
@@ -95,6 +100,23 @@ class LdysgIndexer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "detail_concurrency",
+                                            "type": "number",
+                                            "label": "资源页并发数",
+                                            "placeholder": "4",
+                                            "hint": "只并发抓取搜索结果详情页，建议 2-6",
+                                            "persistentHint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
                                 "props": {"cols": 12},
                                 "content": [
                                     {
@@ -115,7 +137,7 @@ class LdysgIndexer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12},
+                                "props": {"cols": 12, "md": 8},
                                 "content": [
                                     {
                                         "component": "VAlert",
@@ -136,6 +158,7 @@ class LdysgIndexer(_PluginBase):
         ], {
             "enabled": False,
             "extra_hosts": "",
+            "detail_concurrency": 4,
         }
 
     def get_page(self) -> List[dict]:
@@ -203,77 +226,16 @@ class LdysgIndexer(_PluginBase):
                 logger.info(f"老电影资源(ldysg)搜索无结果：关键词='{keyword}'")
                 return []
 
-            results: List[TorrentInfo] = []
-            for item in video_items:
-                vid = str(item.get("id") or "").strip()
-                if not vid:
-                    continue
-                title = str(item.get("title") or "").strip()
-                if not title:
-                    continue
-                year = str(item.get("year") or "").strip()
-                area = str(item.get("area") or "").strip()
-                cat = str(item.get("cat") or "").strip()
-                item_client_ip = self._rand_ip()
-
-                # 获取资源链接
-                vbt_items = self._fetch_vbt(
-                    client=client,
-                    base_url=base_url,
-                    vid=vid,
-                    title=title,
-                    ua=ua,
-                    proxies=proxies,
-                    timeout=timeout,
-                    cookie=cookie,
-                    client_ip=item_client_ip,
-                )
-                if not vbt_items:
-                    continue
-
-                detail_url = urljoin(base_url, f"id/{vid}")
-                for vbt in vbt_items:
-                    url = str(vbt.get("url") or "").strip()
-                    if not url:
-                        continue
-                    # 只接受磁力链接
-                    if not url.lower().startswith("magnet:"):
-                        continue
-
-                    name = str(vbt.get("name") or title).strip()
-                    size_text = str(vbt.get("size") or "").strip()
-                    size_bytes = self._parse_size_bytes(size_text)
-
-                    title_for_match = self._build_match_title(
-                        title=name,
-                        parent_title=title,
-                        year=year,
-                    )
-                    desc_parts = [x for x in [name, title, area, cat] if x]
-                    description = " | ".join(desc_parts[:3])
-                    if year and not re.search(r"(19|20)\d{2}", description):
-                        description = f"{description} {year}".strip()
-
-                    results.append(TorrentInfo(
-                        site=site.get("id"),
-                        site_name=site.get("name"),
-                        site_cookie=site.get("cookie"),
-                        site_ua=site.get("ua"),
-                        site_proxy=site.get("proxy"),
-                        site_order=site.get("pri"),
-                        site_downloader=site.get("downloader"),
-                        title=title_for_match or name,
-                        description=description,
-                        enclosure=url,
-                        page_url=detail_url,
-                        size=size_bytes,
-                        seeders=0,
-                        peers=0,
-                        grabs=0,
-                        pubdate=None,
-                        downloadvolumefactor=0,
-                        uploadvolumefactor=1,
-                    ))
+            results = self._fetch_video_details_concurrently(
+                site=site,
+                client=client,
+                base_url=base_url,
+                video_items=video_items,
+                ua=ua,
+                proxies=proxies,
+                timeout=timeout,
+                cookie=cookie,
+            )
 
             cost = (datetime.now() - start_at).seconds
             logger.info(
@@ -284,6 +246,153 @@ class LdysgIndexer(_PluginBase):
         except Exception as err:
             logger.error(f"老电影资源(ldysg)搜索异常：关键词='{keyword}'，错误={err}")
             return []
+
+    def _fetch_video_details_concurrently(
+            self,
+            site: dict,
+            client: RequestUtils,
+            base_url: str,
+            video_items: List[Dict[str, Any]],
+            ua: str,
+            proxies: Optional[Dict[str, str]],
+            timeout: int,
+            cookie: str) -> List[TorrentInfo]:
+        worker_count = min(
+            len(video_items),
+            self._clamp_detail_concurrency(self._detail_concurrency),
+        )
+        if worker_count <= 1:
+            results: List[TorrentInfo] = []
+            for item in video_items:
+                results.extend(
+                    self._fetch_single_video_result(
+                        site=site,
+                        client=client,
+                        base_url=base_url,
+                        item=item,
+                        ua=ua,
+                        proxies=proxies,
+                        timeout=timeout,
+                        cookie=cookie,
+                    )
+                )
+            return results
+
+        logger.info(
+            f"老电影资源(ldysg)开始并发抓取资源页："
+            f"视频数={len(video_items)}，并发数={worker_count}"
+        )
+
+        ordered_results: Dict[int, List[TorrentInfo]] = {}
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ldysg") as executor:
+            future_map = {
+                executor.submit(
+                    self._fetch_single_video_result,
+                    site,
+                    client,
+                    base_url,
+                    item,
+                    ua,
+                    proxies,
+                    timeout,
+                    cookie,
+                ): index
+                for index, item in enumerate(video_items)
+            }
+            for future in as_completed(future_map):
+                index = future_map[future]
+                try:
+                    ordered_results[index] = future.result() or []
+                except Exception as err:
+                    title = self._display_title((video_items[index] or {}).get("title"))
+                    logger.debug(
+                        f"老电影资源(ldysg)并发抓取资源页异常："
+                        f"片名='{title}'，错误={err}"
+                    )
+                    ordered_results[index] = []
+
+        results: List[TorrentInfo] = []
+        for index in range(len(video_items)):
+            results.extend(ordered_results.get(index) or [])
+        return results
+
+    def _fetch_single_video_result(
+            self,
+            site: dict,
+            client: RequestUtils,
+            base_url: str,
+            item: Dict[str, Any],
+            ua: str,
+            proxies: Optional[Dict[str, str]],
+            timeout: int,
+            cookie: str) -> List[TorrentInfo]:
+        vid = str(item.get("id") or "").strip()
+        if not vid:
+            return []
+        title = str(item.get("title") or "").strip()
+        if not title:
+            return []
+        year = str(item.get("year") or "").strip()
+        area = str(item.get("area") or "").strip()
+        cat = str(item.get("cat") or "").strip()
+        item_client_ip = self._rand_ip()
+
+        vbt_items = self._fetch_vbt(
+            client=client,
+            base_url=base_url,
+            vid=vid,
+            title=title,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+            cookie=cookie,
+            client_ip=item_client_ip,
+        )
+        if not vbt_items:
+            return []
+
+        detail_url = urljoin(base_url, f"id/{vid}")
+        results: List[TorrentInfo] = []
+        for vbt in vbt_items:
+            url = str(vbt.get("url") or "").strip()
+            if not url or not url.lower().startswith("magnet:"):
+                continue
+
+            name = str(vbt.get("name") or title).strip()
+            size_text = str(vbt.get("size") or "").strip()
+            size_bytes = self._parse_size_bytes(size_text)
+
+            title_for_match = self._build_match_title(
+                title=name,
+                parent_title=title,
+                year=year,
+            )
+            desc_parts = [x for x in [name, title, area, cat] if x]
+            description = " | ".join(desc_parts[:3])
+            if year and not re.search(r"(19|20)\d{2}", description):
+                description = f"{description} {year}".strip()
+
+            results.append(TorrentInfo(
+                site=site.get("id"),
+                site_name=site.get("name"),
+                site_cookie=site.get("cookie"),
+                site_ua=site.get("ua"),
+                site_proxy=site.get("proxy"),
+                site_order=site.get("pri"),
+                site_downloader=site.get("downloader"),
+                title=title_for_match or name,
+                description=description,
+                enclosure=url,
+                page_url=detail_url,
+                size=size_bytes,
+                seeders=0,
+                peers=0,
+                grabs=0,
+                pubdate=None,
+                downloadvolumefactor=0,
+                uploadvolumefactor=1,
+            ))
+        return results
 
     def _search_videos(self, client: RequestUtils, base_url: str, keyword: str,
                        ua: str, proxies: Optional[Dict[str, str]],
@@ -596,6 +705,14 @@ class LdysgIndexer(_PluginBase):
     def _rand_ip() -> str:
         """生成随机公网 IP，用于绕过站点 IP 维度的访问频率限制"""
         return f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+
+    @staticmethod
+    def _clamp_detail_concurrency(value: Any) -> int:
+        try:
+            concurrency = int(value or 4)
+        except Exception:
+            concurrency = 4
+        return max(1, min(concurrency, 6))
 
     @staticmethod
     def _build_match_title(title: str, parent_title: str = "", year: str = "") -> str:
