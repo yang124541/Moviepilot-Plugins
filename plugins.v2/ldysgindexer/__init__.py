@@ -20,7 +20,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.1.3"
+    plugin_version = "1.1.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -220,6 +220,7 @@ class LdysgIndexer(_PluginBase):
                     client=client,
                     base_url=base_url,
                     vid=vid,
+                    title=title,
                     ua=ua,
                     proxies=proxies,
                     timeout=timeout,
@@ -345,7 +346,7 @@ class LdysgIndexer(_PluginBase):
 
         return all_items
 
-    def _fetch_vbt(self, client: RequestUtils, base_url: str, vid: str,
+    def _fetch_vbt(self, client: RequestUtils, base_url: str, vid: str, title: str,
                    ua: str, proxies: Optional[Dict[str, str]],
                    timeout: int, cookie: str, client_ip: str) -> List[Dict[str, Any]]:
         """
@@ -437,79 +438,50 @@ class LdysgIndexer(_PluginBase):
 
                 logger.debug(
                     f"老电影资源(ldysg)验证码识别结果='{solved}'，"
-                    f"vid={vid}，captcha_round={captcha_round}/{max_captcha_rounds}"
+                    f"片名='{self._display_title(title)}'"
                 )
-                resp2 = None
-                max_submit_attempts = 3
-                attempts_used = 0
-                retryable_statuses = {429, 500, 502, 503, 504}
-                for attempt in range(1, max_submit_attempts + 1):
-                    attempts_used = attempt
-                    resp2 = _post_vbt(solved)
-                    if resp2 is None:
-                        logger.debug(
-                            f"老电影资源(ldysg)验证码提交第{attempt}/{max_submit_attempts}次失败："
-                            f"vid={vid}，status=None，captcha_round={captcha_round}/{max_captcha_rounds}"
-                        )
-                        if attempt < max_submit_attempts:
-                            logger.debug(
-                                f"老电影资源(ldysg)验证码提交准备重试({attempt + 1}/{max_submit_attempts})："
-                                f"vid={vid}，原因=无响应，captcha_round={captcha_round}/{max_captcha_rounds}"
-                            )
-                        continue
-
-                    if resp2.status_code == 200:
-                        if attempt > 1:
-                            logger.debug(
-                                f"老电影资源(ldysg)验证码提交重试成功：vid={vid}，"
-                                f"attempt={attempt}/{max_submit_attempts}，"
-                                f"captcha_round={captcha_round}/{max_captcha_rounds}"
-                            )
-                        break
-
-                    body_preview = self._preview_response_body(resp2)
-                    logger.debug(
-                        f"老电影资源(ldysg)验证码提交第{attempt}/{max_submit_attempts}次返回异常："
-                        f"vid={vid}，status={resp2.status_code}，body='{body_preview}'，"
-                        f"captcha_round={captcha_round}/{max_captcha_rounds}"
-                    )
-                    if resp2.status_code not in retryable_statuses or attempt >= max_submit_attempts:
-                        break
-                    logger.debug(
-                        f"老电影资源(ldysg)验证码提交准备重试({attempt + 1}/{max_submit_attempts})："
-                        f"vid={vid}，原因=status={resp2.status_code}，"
-                        f"captcha_round={captcha_round}/{max_captcha_rounds}"
-                    )
+                resp2 = _post_vbt(solved)
 
                 if resp2 is not None and resp2.status_code == 200:
+                    logger.debug(
+                        f"老电影资源(ldysg)验证码验证成功，"
+                        f"片名='{self._display_title(title)}'"
+                    )
                     try:
                         return self._extract_vbt_items(resp2.json())
                     except Exception:
                         return []
 
+                body_preview = self._preview_response_body(resp2)
+                logger.debug(
+                    f"老电影资源(ldysg)验证码验证失败，"
+                    f"片名='{self._display_title(title)}'，"
+                    f"status={resp2.status_code if resp2 is not None else 'None'}，"
+                    f"body='{body_preview}'"
+                )
+
                 if self._is_captcha_wrong_response(resp2) and captcha_round < max_captcha_rounds:
                     logger.debug(
-                        f"老电影资源(ldysg)验证码提交返回“验证码错误”，准备重新获取新验证码："
-                        f"vid={vid}，next_captcha_round={captcha_round + 1}/{max_captcha_rounds}"
+                        f"老电影资源(ldysg)验证码重试第1次，"
+                        f"片名='{self._display_title(title)}'"
                     )
                     captcha_resp = _post_vbt("1")
                     if captcha_resp is None:
-                        logger.debug(f"老电影资源(ldysg)重新获取验证码失败：vid={vid}，status=None")
+                        logger.debug(
+                            f"老电影资源(ldysg)验证码验证失败，"
+                            f"片名='{self._display_title(title)}'，status=None，body='重新获取验证码失败'"
+                        )
                         return []
                     if captcha_resp.status_code != 401:
                         logger.debug(
-                            f"老电影资源(ldysg)重新获取验证码失败：vid={vid}，"
+                            f"老电影资源(ldysg)验证码验证失败，"
+                            f"片名='{self._display_title(title)}'，"
                             f"status={captcha_resp.status_code}，"
                             f"body='{self._preview_response_body(captcha_resp)}'"
                         )
                         return []
                     continue
 
-                logger.debug(
-                    f"老电影资源(ldysg)验证码提交失败：vid={vid}，"
-                    f"status={resp2.status_code if resp2 is not None else 'None'}，"
-                    f"attempts={attempts_used}，captcha_round={captcha_round}/{max_captcha_rounds}"
-                )
                 return []
 
         if resp1.status_code == 406:
@@ -545,6 +517,11 @@ class LdysgIndexer(_PluginBase):
         except Exception:
             text = str(getattr(resp, "text", "") or "")
         return re.sub(r"\s+", " ", text).strip()[:limit]
+
+    @staticmethod
+    def _display_title(title: Any) -> str:
+        text = str(title or "").strip().replace("'", " ")
+        return text or "未知片名"
 
     @staticmethod
     def _is_captcha_wrong_response(resp: Any) -> bool:
