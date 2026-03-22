@@ -4,6 +4,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
@@ -22,7 +23,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.1.9"
+    plugin_version = "1.2.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -193,6 +194,7 @@ class LdysgIndexer(_PluginBase):
             return None
 
         start_at = datetime.now()
+        search_started = perf_counter()
         base_url = self._resolve_base_url(site)
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
@@ -214,6 +216,7 @@ class LdysgIndexer(_PluginBase):
             )
 
             # 搜索视频列表
+            video_list_started = perf_counter()
             video_items = self._search_videos(
                 client=client,
                 base_url=base_url,
@@ -224,11 +227,12 @@ class LdysgIndexer(_PluginBase):
                 cookie=cookie,
                 client_ip=client_ip,
             )
+            video_list_cost = perf_counter() - video_list_started
             if not video_items:
                 logger.info(f"老电影资源(ldysg)搜索无结果：关键词='{keyword}'")
                 return []
 
-            results = self._fetch_video_details_concurrently(
+            results, timing_items = self._fetch_video_details_concurrently(
                 site=site,
                 client=client,
                 base_url=base_url,
@@ -239,10 +243,20 @@ class LdysgIndexer(_PluginBase):
                 cookie=cookie,
             )
 
+            total_cost = perf_counter() - search_started
             cost = (datetime.now() - start_at).seconds
+            timing_summary = {
+                "关键词": keyword,
+                "视频列表耗时": self._format_duration(video_list_cost),
+                "视频数": len(video_items),
+                "视频明细": timing_items,
+                "返回磁力": len(results),
+                "搜索总耗时": self._format_duration(total_cost),
+                "日志耗时秒": cost,
+            }
             logger.info(
-                f"老电影资源(ldysg)搜索完成：关键词='{keyword}'，"
-                f"找到视频={len(video_items)}，返回磁力={len(results)}，耗时={cost}s"
+                "老电影资源(ldysg)搜索完成："
+                f"{json.dumps(timing_summary, ensure_ascii=False)}"
             )
             return results
         except Exception as err:
@@ -258,27 +272,29 @@ class LdysgIndexer(_PluginBase):
             ua: str,
             proxies: Optional[Dict[str, str]],
             timeout: int,
-            cookie: str) -> List[TorrentInfo]:
+            cookie: str) -> Tuple[List[TorrentInfo], List[Dict[str, Any]]]:
         worker_count = min(
             len(video_items),
             self._clamp_detail_concurrency(self._detail_concurrency),
         )
         if worker_count <= 1:
             results: List[TorrentInfo] = []
+            timing_items: List[Dict[str, Any]] = []
             for item in video_items:
-                results.extend(
-                    self._fetch_single_video_result(
-                        site=site,
-                        client=client,
-                        base_url=base_url,
-                        item=item,
-                        ua=ua,
-                        proxies=proxies,
-                        timeout=timeout,
-                        cookie=cookie,
-                    )
+                item_results, timing_item = self._fetch_single_video_result(
+                    site=site,
+                    client=client,
+                    base_url=base_url,
+                    item=item,
+                    ua=ua,
+                    proxies=proxies,
+                    timeout=timeout,
+                    cookie=cookie,
                 )
-            return results
+                results.extend(item_results)
+                if timing_item:
+                    timing_items.append(timing_item)
+            return results, timing_items
 
         logger.info(
             f"老电影资源(ldysg)开始并发抓取资源页："
@@ -286,6 +302,7 @@ class LdysgIndexer(_PluginBase):
         )
 
         ordered_results: Dict[int, List[TorrentInfo]] = {}
+        ordered_timing_items: Dict[int, Dict[str, Any]] = {}
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ldysg") as executor:
             future_map = {
                 executor.submit(
@@ -304,7 +321,10 @@ class LdysgIndexer(_PluginBase):
             for future in as_completed(future_map):
                 index = future_map[future]
                 try:
-                    ordered_results[index] = future.result() or []
+                    item_results, timing_item = future.result()
+                    ordered_results[index] = item_results or []
+                    if timing_item:
+                        ordered_timing_items[index] = timing_item
                 except Exception as err:
                     title = self._display_title((video_items[index] or {}).get("title"))
                     logger.debug(
@@ -312,11 +332,23 @@ class LdysgIndexer(_PluginBase):
                         f"片名='{title}'，错误={err}"
                     )
                     ordered_results[index] = []
+                    ordered_timing_items[index] = {
+                        "片名": title,
+                        "验证码耗时": self._format_duration(0),
+                        "种子总耗时": self._format_duration(0),
+                        "验证码重试次数": 0,
+                        "资源数": 0,
+                        "状态": "抓取异常",
+                    }
 
         results: List[TorrentInfo] = []
+        timing_items: List[Dict[str, Any]] = []
         for index in range(len(video_items)):
             results.extend(ordered_results.get(index) or [])
-        return results
+            timing_item = ordered_timing_items.get(index)
+            if timing_item:
+                timing_items.append(timing_item)
+        return results, timing_items
 
     def _fetch_single_video_result(
             self,
@@ -327,19 +359,19 @@ class LdysgIndexer(_PluginBase):
             ua: str,
             proxies: Optional[Dict[str, str]],
             timeout: int,
-            cookie: str) -> List[TorrentInfo]:
+            cookie: str) -> Tuple[List[TorrentInfo], Dict[str, Any]]:
         vid = str(item.get("id") or "").strip()
         if not vid:
-            return []
+            return [], {}
         title = str(item.get("title") or "").strip()
         if not title:
-            return []
+            return [], {}
         year = str(item.get("year") or "").strip()
         area = str(item.get("area") or "").strip()
         cat = str(item.get("cat") or "").strip()
         item_client_ip = self._rand_ip()
 
-        vbt_items = self._fetch_vbt(
+        vbt_items, timing_item = self._fetch_vbt(
             client=client,
             base_url=base_url,
             vid=vid,
@@ -351,7 +383,7 @@ class LdysgIndexer(_PluginBase):
             client_ip=item_client_ip,
         )
         if not vbt_items:
-            return []
+            return [], timing_item
 
         detail_url = urljoin(base_url, f"id/{vid}")
         results: List[TorrentInfo] = []
@@ -394,7 +426,8 @@ class LdysgIndexer(_PluginBase):
                 downloadvolumefactor=0,
                 uploadvolumefactor=1,
             ))
-        return results
+        timing_item["资源数"] = len(results)
+        return results, timing_item
 
     def _search_videos(self, client: RequestUtils, base_url: str, keyword: str,
                        ua: str, proxies: Optional[Dict[str, str]],
@@ -460,7 +493,7 @@ class LdysgIndexer(_PluginBase):
 
     def _fetch_vbt(self, client: RequestUtils, base_url: str, vid: str, title: str,
                    ua: str, proxies: Optional[Dict[str, str]],
-                   timeout: int, cookie: str, client_ip: str) -> List[Dict[str, Any]]:
+                   timeout: int, cookie: str, client_ip: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         调用 POST /api.php 获取单个视频的磁力/网盘链接列表。
         站点对每次请求都要求图片验证码：
@@ -471,6 +504,16 @@ class LdysgIndexer(_PluginBase):
         api_url = urljoin(base_url, "api.php")
         referer = urljoin(base_url, f"id/{vid}")
         session = self._get_thread_local_session()
+        vbt_started = perf_counter()
+        captcha_started = None
+        timing_item: Dict[str, Any] = {
+            "片名": self._display_title(title),
+            "验证码耗时": self._format_duration(0),
+            "种子总耗时": self._format_duration(0),
+            "验证码重试次数": 0,
+            "资源数": 0,
+            "状态": "未开始",
+        }
         headers = {
             "User-Agent": ua or settings.USER_AGENT,
             "Referer": referer,
@@ -482,6 +525,15 @@ class LdysgIndexer(_PluginBase):
         }
         if cookie:
             headers["Cookie"] = cookie
+
+        def _build_timing(status: str, retries: int = 0) -> Dict[str, Any]:
+            total_cost = perf_counter() - vbt_started
+            captcha_cost = 0 if captcha_started is None else perf_counter() - captcha_started
+            timing_item["验证码耗时"] = self._format_duration(captcha_cost)
+            timing_item["种子总耗时"] = self._format_duration(total_cost)
+            timing_item["验证码重试次数"] = retries
+            timing_item["状态"] = status
+            return timing_item
 
         def _post_vbt(vcode: str) -> Optional[dict]:
             try:
@@ -500,31 +552,33 @@ class LdysgIndexer(_PluginBase):
         # 第一次请求（触发验证码）
         resp1 = _post_vbt("1")
         if resp1 is None:
-            return []
+            return [], _build_timing("首请求失败")
 
         # 直接返回 200，说明本次无需验证码（偶发）
         if resp1.status_code == 200:
             try:
-                return self._extract_vbt_items(resp1.json())
+                items = self._extract_vbt_items(resp1.json())
+                return items, _build_timing("无需验证码")
             except Exception:
-                return []
+                return [], _build_timing("响应解析失败")
 
         # 返回 401 → 拿验证码图片 URL 并 OCR
         if resp1.status_code == 401:
             captcha_resp = resp1
             max_captcha_rounds = 3
+            captcha_started = perf_counter()
 
             for captcha_round in range(1, max_captcha_rounds + 1):
                 try:
                     err_data = captcha_resp.json()
                 except Exception:
                     logger.debug(f"老电影资源(ldysg)401 响应解析失败：vid={vid}")
-                    return []
+                    return [], _build_timing("验证码响应解析失败", captcha_round - 1)
 
                 captcha_url = str(err_data.get("vcode") or "").strip()
                 if not captcha_url:
                     logger.debug(f"老电影资源(ldysg)401 无验证码 URL：vid={vid}")
-                    return []
+                    return [], _build_timing("缺少验证码地址", captcha_round - 1)
 
                 # 验证码 URL 可能是相对路径
                 if not captcha_url.startswith("http"):
@@ -533,7 +587,7 @@ class LdysgIndexer(_PluginBase):
                 # 跳过视频验证码（无法 OCR）
                 if captcha_url.lower().endswith(".mp4"):
                     logger.debug(f"老电影资源(ldysg)视频验证码无法识别，跳过：vid={vid}")
-                    return []
+                    return [], _build_timing("视频验证码跳过", captcha_round - 1)
 
                 solved = self._ocr_captcha(
                     captcha_url,
@@ -559,9 +613,9 @@ class LdysgIndexer(_PluginBase):
                                 f"status={captcha_resp.status_code if captcha_resp is not None else 'None'}，"
                                 f"body='{self._preview_response_body(captcha_resp) or '重新获取验证码失败'}'"
                             )
-                            return []
+                            return [], _build_timing("重新获取验证码失败", captcha_round)
                         continue
-                    return []
+                    return [], _build_timing("验证码识别失败", captcha_round - 1)
 
                 resp2 = _post_vbt(solved)
                 retry_prefix = f"验证码重试第{captcha_round - 1}次，" if captcha_round > 1 else ""
@@ -573,9 +627,10 @@ class LdysgIndexer(_PluginBase):
                         f"片名='{self._display_title(title)}'"
                     )
                     try:
-                        return self._extract_vbt_items(resp2.json())
+                        items = self._extract_vbt_items(resp2.json())
+                        return items, _build_timing("验证码通过", captcha_round - 1)
                     except Exception:
-                        return []
+                        return [], _build_timing("种子响应解析失败", captcha_round - 1)
 
                 body_preview = self._preview_response_body(resp2)
                 logger.debug(
@@ -593,7 +648,7 @@ class LdysgIndexer(_PluginBase):
                             f"老电影资源(ldysg)验证码验证失败，"
                             f"片名='{self._display_title(title)}'，status=None，body='重新获取验证码失败'"
                         )
-                        return []
+                        return [], _build_timing("重新获取验证码失败", captcha_round)
                     if captcha_resp.status_code != 401:
                         logger.debug(
                             f"老电影资源(ldysg)验证码验证失败，"
@@ -601,10 +656,10 @@ class LdysgIndexer(_PluginBase):
                             f"status={captcha_resp.status_code}，"
                             f"body='{self._preview_response_body(captcha_resp)}'"
                         )
-                        return []
+                        return [], _build_timing("重新获取验证码异常", captcha_round)
                     continue
 
-                return []
+                return [], _build_timing("验证码验证失败", captcha_round - 1)
 
         if resp1.status_code == 406:
             try:
@@ -612,9 +667,10 @@ class LdysgIndexer(_PluginBase):
             except Exception:
                 msg = ""
             logger.warning(f"老电影资源(ldysg)今日访问已达上限，请24小时后重试：{msg}")
+            return [], _build_timing("今日访问上限")
         else:
             logger.debug(f"老电影资源(ldysg)获取资源失败：vid={vid}，status={resp1.status_code}")
-        return []
+            return [], _build_timing(f"获取资源失败({resp1.status_code})")
 
     @staticmethod
     def _extract_vbt_items(data: dict) -> List[Dict[str, Any]]:
@@ -644,6 +700,10 @@ class LdysgIndexer(_PluginBase):
     def _display_title(title: Any) -> str:
         text = str(title or "").strip().replace("'", " ")
         return text or "未知片名"
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        return f"{max(0, seconds):.2f}s"
 
     @staticmethod
     def _is_captcha_wrong_response(resp: Any) -> bool:
