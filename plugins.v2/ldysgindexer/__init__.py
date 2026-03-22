@@ -18,7 +18,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影资源（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/ldysg.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -266,8 +266,8 @@ class LdysgIndexer(_PluginBase):
     def _search_videos(self, client: RequestUtils, base_url: str, keyword: str,
                        ua: str, proxies: Optional[Dict[str, str]],
                        timeout: int, cookie: str) -> List[Dict[str, Any]]:
-        """调用 POST /get_video 搜索视频列表，分页合并所有结果"""
-        api_url = urljoin(base_url, "get_video")
+        """调用 POST /api.php?fun=get_video 搜索视频列表，分页合并所有结果"""
+        api_url = urljoin(base_url, "api.php")
         all_items: List[Dict[str, Any]] = []
         seen_ids = set()
         page = 1
@@ -275,6 +275,7 @@ class LdysgIndexer(_PluginBase):
 
         while page <= max_pages:
             payload = {
+                "fun": "get_video",
                 "title": keyword,
                 "p": str(page),
                 "issear": "1",
@@ -326,7 +327,7 @@ class LdysgIndexer(_PluginBase):
                    ua: str, proxies: Optional[Dict[str, str]],
                    timeout: int, cookie: str) -> List[Dict[str, Any]]:
         """
-        调用 POST /get_vbt 获取单个视频的磁力/网盘链接列表。
+        调用 POST /api.php 获取单个视频的磁力/网盘链接列表。
         站点对每次请求都要求图片验证码：
           1. 首次以 vcode='1' 发起请求，服务端返回 401 及验证码图片 URL
           2. 下载验证码图片，用 ddddocr OCR 识别数字
@@ -334,7 +335,7 @@ class LdysgIndexer(_PluginBase):
         """
         import requests as _requests
 
-        api_url = urljoin(base_url, "get_vbt")
+        api_url = urljoin(base_url, "api.php")
         referer = urljoin(base_url, f"id/{vid}")
         headers = {
             "User-Agent": ua or settings.USER_AGENT,
@@ -350,7 +351,7 @@ class LdysgIndexer(_PluginBase):
             try:
                 resp = _requests.post(
                     api_url,
-                    data={"id": vid, "issear": "1", "vcode": vcode},
+                    data={"fun": "get_vbt", "id": vid, "issear": "1", "vcode": vcode},
                     headers=headers,
                     proxies=proxies,
                     timeout=max(5, timeout),
