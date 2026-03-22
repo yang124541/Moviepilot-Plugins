@@ -1,4 +1,17 @@
 {
+  "LoumeIndexer": {
+    "name": "BT之家（1lou.me）",
+    "description": "为 MoviePilot 增加 1lou.me BT论坛种子搜索支持，支持账号登录与分页抓取。",
+    "labels": "站点,索引",
+    "version": "1.0.1",
+    "icon": "https://www.1lou.me/view/img/favicon.ico",
+    "author": "yang124541",
+    "level": 2,
+    "history": {
+      "v1.0.1": "使用网站官方 favicon 作为插件图标。",
+      "v1.0.0": "初始版本：自动注册 1lou 索引器并接管搜索，支持账号登录、关键词搜索、分页抓取与种子附件解析。"
+    }
+  },
   "LdysgIndexer": {
     "name": "老电影资源（ldysg）",
     "description": "为 MoviePilot 增加 ldysg.com 老旧电影磁力搜索支持，自动 OCR 识别验证码。",
