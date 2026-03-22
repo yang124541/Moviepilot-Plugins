@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.6.6"
+    plugin_version = "1.6.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -811,6 +811,7 @@ class GyingIndexer(_PluginBase):
                     ua=ua or settings.USER_AGENT,
                     proxies=proxies,
                     timeout=timeout,
+                    target_url=base_url,
                 )
                 if not ok:
                     return ""
@@ -995,134 +996,79 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _solve_pow(challenge_hashes: List[str], diff: int, salt: str) -> List[int]:
         """
-        暴力求解 PoW，同时尝试两种 salt 编码方式：
-          1. SHA256(str(nonce) + salt_as_ascii)   — JS 纯字符串拼接方式
-          2. SHA256(str(nonce) + hex_decoded_salt) — WASM 可能使用二进制 salt
-        返回与 challenge_hashes 顺序严格对应的 nonce 列表。
+        暴力求解 PoW。
+        算法：SHA256(str(nonce) + salt_ascii)，nonce 从 0 枚举到 diff。
+        返回按发现顺序（数值升序）排列的 nonce 列表，与 powSolve.js 行为一致。
         """
-        hash_to_idx: Dict[str, int] = {h: i for i, h in enumerate(challenge_hashes)}
-        found: List[Optional[int]] = [None] * len(challenge_hashes)
         remaining: Set[str] = set(challenge_hashes)
-
-        salt_ascii = salt.encode("ascii")
-        try:
-            salt_hex_decoded = bytes.fromhex(salt)
-        except Exception:
-            salt_hex_decoded = None
+        found: List[int] = []
+        salt_bytes = salt.encode("ascii")
 
         for nonce in range(diff + 2):
             if not remaining:
                 break
-            nonce_bytes = str(nonce).encode("ascii")
-
-            # 方式1：salt 作为 ASCII 字符串（纯 JS 方式）
-            h = hashlib.sha256(nonce_bytes + salt_ascii).hexdigest()
+            h = hashlib.sha256(str(nonce).encode("ascii") + salt_bytes).hexdigest()
             if h in remaining:
-                found[hash_to_idx[h]] = nonce
+                found.append(nonce)
                 remaining.discard(h)
-                continue
 
-            # 方式2：salt hex 解码为二进制字节（WASM HashVerifier 可能使用的方式）
-            if salt_hex_decoded is not None:
-                h2 = hashlib.sha256(nonce_bytes + salt_hex_decoded).hexdigest()
-                if h2 in remaining:
-                    found[hash_to_idx[h2]] = nonce
-                    remaining.discard(h2)
-
-        return [n for n in found if n is not None]
+        return found
 
     def _submit_pow_solution(self, session: requests.Session, base_url: str,
                              challenge_id: str, nonces: List[int],
                              ua: str, proxies: Optional[Dict[str, str]],
-                             timeout: int) -> bool:
+                             timeout: int, target_url: str = "") -> bool:
         """
-        将 PoW 解答提交给服务端，验证通过后服务端会在 session 中写入 cookie。
-        尝试多个可能的提交端点。
+        将 PoW 解答提交给服务端（POST 到触发 PoW 的当前页面 URL）。
+        格式：application/x-www-form-urlencoded
+        Body：action=verify&id=ID&nonce[]=N0&nonce[]=N1
+        服务端验证通过后在 session 中写入 browser_verified cookie。
         """
+        submit_url = str(target_url or base_url or "").strip() or base_url
+        body_parts = [f"action=verify", f"id={challenge_id}"]
+        for n in nonces:
+            body_parts.append(f"nonce[]={n}")
+        body = "&".join(body_parts)
+
         headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Origin": f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}",
+            "Content-Type": "application/x-www-form-urlencoded",
             "Referer": base_url,
+            "Origin": f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}",
         }
-        payload = {"id": challenge_id, "nonces": nonces}
-
-        endpoints = [
-            urljoin(base_url, "pow/verify"),
-            urljoin(base_url, "pow/v"),
-            urljoin(base_url, "challenge/verify"),
-        ]
-        for endpoint in endpoints:
-            try:
-                resp = session.post(
-                    endpoint,
-                    json=payload,
-                    headers=headers,
-                    proxies=proxies,
-                    timeout=max(5, int(timeout or 20)),
-                )
-                if resp.status_code == 404:
-                    continue
-                if not resp.ok:
-                    continue
-
-                # 方式1：服务端通过 Set-Cookie 头写入（requests.Session 自动捕获）
-                if session.cookies:
-                    return True
-
-                # 方式2：服务端在响应 body 中返回 token，需手动写入 session.cookies
-                body_text = str(resp.text or "").strip()
-                logger.debug(f"观影(GYing)PoW 提交响应：status={resp.status_code}，body={body_text[:300]}")
-
-                # 若响应明确返回 success:false，当前 nonce 被拒绝，不继续
+        try:
+            resp = session.post(
+                submit_url,
+                data=body,
+                headers=headers,
+                proxies=proxies,
+                timeout=max(5, int(timeout or 20)),
+            )
+            body_text = str(resp.text or "").strip()
+            logger.debug(f"观影(GYing)PoW 提交响应：status={resp.status_code}，body={body_text[:200]}")
+            if resp.ok:
                 try:
-                    resp_obj = json.loads(body_text)
-                    if isinstance(resp_obj, dict) and resp_obj.get("success") is False:
-                        logger.warn(f"观影(GYing)PoW 端点 {endpoint} 拒绝 nonce（success:false），nonce 可能有误")
+                    obj = json.loads(body_text)
+                    if isinstance(obj, dict) and obj.get("success") is True:
+                        return True
+                    if isinstance(obj, dict) and obj.get("success") is False:
+                        logger.warn(f"观影(GYing)PoW 验证被拒绝：{body_text[:100]}")
                         return False
                 except Exception:
                     pass
-
-                token = self._extract_pow_token(body_text)
-                if token:
-                    for cookie_name in ("pow", "pow_pass", "_pow", "pow_token", "pow_verify"):
-                        session.cookies.set(cookie_name, token, domain=urlparse(base_url).netloc)
-                    logger.info(f"观影(GYing)PoW body token 已写入 session cookie：{token[:40]}...")
+                # 无法解析 JSON，但有 cookie 也视为成功
+                if session.cookies:
                     return True
-
-                # 方式3：200 OK 但无明确结果，视为通过（服务端可能用 session 状态授权）
-                return True
-
-            except Exception as e:
-                logger.debug(f"观影(GYing)PoW 提交端点 {endpoint} 异常：{e}")
-                continue
+        except Exception as e:
+            logger.debug(f"观影(GYing)PoW 提交异常：{e}")
         return False
-
-    @staticmethod
-    def _extract_pow_token(body: str) -> str:
-        """从响应 body 中提取 token/cookie 字段值。"""
-        if not body:
-            return ""
-        try:
-            obj = json.loads(body)
-            if isinstance(obj, dict):
-                for key in ("token", "cookie", "value", "data", "pass", "result", "key"):
-                    val = obj.get(key)
-                    if isinstance(val, str) and len(val) >= 8:
-                        return val.strip()
-        except Exception:
-            pass
-        m = re.search(r'"token"\s*:\s*"([^"]{8,})"', body)
-        if m:
-            return m.group(1)
-        return ""
 
     def _handle_pow_in_session(self, session: requests.Session, base_url: str,
                                html_text: str, ua: str,
                                proxies: Optional[Dict[str, str]],
-                               timeout: int) -> bool:
+                               timeout: int, target_url: str = "") -> bool:
         """
         若当前页面为 PoW 验证页，则自动求解并通过 session 提交，返回是否成功。
+        target_url：触发 PoW 的页面 URL，提交 nonce 将 POST 到该 URL。
         """
         pow_data = self._detect_pow_challenge(html_text)
         if not pow_data:
@@ -1143,7 +1089,6 @@ class GyingIndexer(_PluginBase):
             logger.warn("观影(GYing)PoW 求解失败：在指定范围内未找到匹配 nonce")
             return False
 
-        nonces = self._solve_pow(challenge_hashes, diff, salt)
         logger.info(f"观影(GYing)PoW 计算完成，nonces={nonces}，正在提交...")
         ok = self._submit_pow_solution(
             session=session,
@@ -1153,11 +1098,12 @@ class GyingIndexer(_PluginBase):
             ua=ua,
             proxies=proxies,
             timeout=timeout,
+            target_url=target_url or base_url,
         )
         if ok:
             logger.info("观影(GYing)PoW 验证提交成功")
         else:
-            logger.warn("观影(GYing)PoW 验证提交失败，未找到匹配的提交端点")
+            logger.warn("观影(GYing)PoW 验证提交失败")
         return ok
 
     def _is_search_response_ready(self, base_url: str, keyword: str, ua: str,
@@ -1188,6 +1134,7 @@ class GyingIndexer(_PluginBase):
                     ok = self._handle_pow_in_session(
                         session=session, base_url=base_url,
                         html_text=body, ua=ua, proxies=proxies, timeout=timeout,
+                        target_url=url,
                     )
                     if not ok:
                         return False, cookie
@@ -1228,6 +1175,7 @@ class GyingIndexer(_PluginBase):
                             ua=ua or settings.USER_AGENT,
                             proxies=proxies,
                             timeout=timeout,
+                            target_url=root,
                         )
                         # PoW 验证后重新加载首页以确认通过
                         resp = session.get(root, timeout=max(5, int(timeout or 20)))
@@ -1399,6 +1347,7 @@ class GyingIndexer(_PluginBase):
                     base_url=base_url,
                     html_text=fresh_html,
                     ua=ua, proxies=proxies, timeout=timeout,
+                    target_url=target_url,
                 )
                 if not ok:
                     logger.warn("观影(GYing)PoW 验证提交失败")
