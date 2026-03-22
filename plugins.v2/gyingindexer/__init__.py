@@ -24,7 +24,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.6.9"
+    plugin_version = "1.7.0"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1275,43 +1275,64 @@ class GyingIndexer(_PluginBase):
                 return url_cache[target]
 
             request_state["http"] = int(request_state.get("http") or 0) + 1
+
+            # 已解过 PoW：直接用新 cookie 发请求，跳过旧 cookie 的 client
+            if pow_resolved_cookie[0]:
+                try:
+                    resp = requests.get(
+                        target,
+                        headers={
+                            "User-Agent": ua or settings.USER_AGENT,
+                            "Referer": base_url,
+                            "Cookie": pow_resolved_cookie[0],
+                        },
+                        proxies=proxies,
+                        timeout=max(5, int(timeout or 20)),
+                    )
+                    text = resp.text if resp.ok else ""
+                except Exception as err:
+                    logger.warn(f"观影(GYing)请求异常：{err}")
+                    text = ""
+                url_cache[target] = text or ""
+                return text or ""
+
             text = client.get(target) or ""
 
             # 若响应为 PoW 验证页，自动求解并重试
             if self._is_pow_page(text) and base_url:
-                if not pow_resolved_cookie[0]:
-                    logger.info(f"观影(GYing)搜索中途遇到 PoW 验证（URL={target}），正在自动求解...")
-                    existing = str(cookie or "").strip()
-                    pow_extra = self._solve_pow_from_html(
-                        html_text=text,
-                        target_url=target,
-                        base_url=base_url,
-                        ua=ua, proxies=proxies, timeout=timeout,
-                        existing_cookie=existing,
-                    )
-                    if pow_extra:
-                        merged = self._merge_cookie_str(existing, pow_extra)
-                        pow_resolved_cookie[0] = merged
-                        logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
-                        # 回写 cookie，避免下次搜索重复验证
-                        if site is not None:
-                            site["cookie"] = merged
-                            self._persist_site_cookie(site=site, cookie=merged)
-                    else:
-                        logger.warn(f"观影(GYing)搜索中途 PoW 求解失败，跳过 URL={target}")
-                        url_cache[target] = ""
-                        return ""
+                logger.info(f"观影(GYing)搜索中途遇到 PoW 验证（URL={target}），正在自动求解...")
+                existing = str(cookie or "").strip()
+                pow_extra = self._solve_pow_from_html(
+                    html_text=text,
+                    target_url=target,
+                    base_url=base_url,
+                    ua=ua, proxies=proxies, timeout=timeout,
+                    existing_cookie=existing,
+                )
+                if not pow_extra:
+                    logger.warn(f"观影(GYing)搜索中途 PoW 求解失败，跳过 URL={target}")
+                    url_cache[target] = ""
+                    return ""
 
-                # 用 PoW cookie 重试
+                merged = self._merge_cookie_str(existing, pow_extra)
+                pow_resolved_cookie[0] = merged
+                logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
+                # 回写 cookie，后续搜索直接使用新 cookie
+                if site is not None:
+                    site["cookie"] = merged
+                    self._persist_site_cookie(site=site, cookie=merged)
+
+                # 用新 cookie 重试当前 URL
                 try:
-                    retry_headers = {
-                        "User-Agent": ua or settings.USER_AGENT,
-                        "Referer": base_url,
-                        "Cookie": pow_resolved_cookie[0],
-                    }
                     resp = requests.get(
-                        target, headers=retry_headers,
-                        proxies=proxies, timeout=max(5, int(timeout or 20))
+                        target,
+                        headers={
+                            "User-Agent": ua or settings.USER_AGENT,
+                            "Referer": base_url,
+                            "Cookie": merged,
+                        },
+                        proxies=proxies,
+                        timeout=max(5, int(timeout or 20)),
                     )
                     text = resp.text if resp.ok else ""
                 except Exception as err:
