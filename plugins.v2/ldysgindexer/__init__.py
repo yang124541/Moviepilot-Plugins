@@ -23,7 +23,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.2.3"
+    plugin_version = "1.2.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -247,18 +247,24 @@ class LdysgIndexer(_PluginBase):
             )
 
             total_cost = perf_counter() - search_started
+            total_cost_text = self._format_duration(total_cost)
             cost = (datetime.now() - start_at).seconds
             timing_summary = {
+                "搜索总耗时": total_cost_text,
                 "关键词": keyword,
                 "视频列表耗时": self._format_duration(video_list_cost),
                 "视频数": len(video_items),
                 "视频明细": timing_items,
                 "返回磁力": len(results),
-                "搜索总耗时": self._format_duration(total_cost),
                 "日志耗时秒": cost,
             }
             logger.info(
-                "老电影资源(ldysg)搜索完成："
+                f"老电影资源(ldysg)搜索完成：关键词='{keyword}'，"
+                f"搜索总耗时={total_cost_text}，"
+                f"找到视频={len(video_items)}，返回磁力={len(results)}"
+            )
+            logger.info(
+                "老电影资源(ldysg)搜索耗时明细："
                 f"{json.dumps(timing_summary, ensure_ascii=False)}"
             )
             return results
