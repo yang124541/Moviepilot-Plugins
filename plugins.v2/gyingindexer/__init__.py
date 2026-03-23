@@ -4,7 +4,8 @@ import importlib
 import json
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urljoin, urlparse
@@ -26,7 +27,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.4"
+    plugin_version = "1.7.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -419,153 +420,130 @@ class GyingIndexer(_PluginBase):
             shared_lock = threading.RLock()
             worker_count = min(len(search_entries), max(1, int(self._detail_concurrency or 1)))
             ordered_results: Dict[int, Optional[Tuple[str, TorrentInfo]]] = {}
-            if worker_count <= 1:
-                for index, entry in enumerate(search_entries):
-                    ordered_results[index] = self._build_search_result_entry(
-                        entry=entry,
-                        site=site,
-                        keyword=keyword,
-                        client=client,
-                        base_url=base_url,
-                        fetcher=guarded_get,
-                        parent_meta_cache=parent_meta_cache,
-                        parent_default_dir=parent_default_dir,
-                        parent_down_entries_cache=parent_down_entries_cache,
-                        parent_down_entry_map_cache=parent_down_entry_map_cache,
-                        bt_parent_cache=bt_parent_cache,
-                        skip_keyword_parent_keys=skip_keyword_parent_keys,
-                        shared_lock=shared_lock,
-                    )
-            else:
-                with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="gying") as executor:
-                    future_map = {
-                        executor.submit(
-                            self._build_search_result_entry,
-                            entry,
-                            site,
-                            keyword,
-                            client,
-                            base_url,
-                            guarded_get,
-                            parent_meta_cache,
-                            parent_default_dir,
-                            parent_down_entries_cache,
-                            parent_down_entry_map_cache,
-                            bt_parent_cache,
-                            skip_keyword_parent_keys,
-                            shared_lock,
-                        ): index
-                        for index, entry in enumerate(search_entries)
-                    }
-                    for future in as_completed(future_map):
-                        index = future_map[future]
-                        try:
-                            ordered_results[index] = future.result()
-                        except Exception as err:
-                            logger.debug(f"观影(GYing)并发处理搜索条目异常：{err}")
-                            ordered_results[index] = None
+            pending_child_ids: Set[str] = set()
+            resolved_result_ids: Set[str] = set()
+            outstanding_search_ids: Set[str] = {
+                str(entry.get("id") or "").strip()
+                for entry in search_entries
+                if str(entry.get("id") or "").strip()
+            }
+            task_queue = deque(
+                {
+                    "kind": "search",
+                    "order": index,
+                    "entry": entry,
+                    "resource_id": str(entry.get("id") or "").strip(),
+                }
+                for index, entry in enumerate(search_entries)
+            )
+            next_order = len(search_entries)
 
-            for index in range(len(search_entries)):
+            def _submit_task(executor: ThreadPoolExecutor, task: Dict[str, Any]):
+                task_kind = str(task.get("kind") or "search").strip().lower()
+                if task_kind == "child":
+                    return executor.submit(
+                        self._build_child_result_entry,
+                        task["cache_key"],
+                        task["parent_dir"],
+                        task["parent_id"],
+                        task["down_item"],
+                        site,
+                        keyword,
+                        client,
+                        base_url,
+                        guarded_get,
+                        parent_meta_cache,
+                        skip_keyword_parent_keys,
+                        shared_lock,
+                        task["default_dir"],
+                    )
+                return executor.submit(
+                    self._build_search_result_entry,
+                    task["entry"],
+                    site,
+                    keyword,
+                    client,
+                    base_url,
+                    guarded_get,
+                    parent_meta_cache,
+                    parent_default_dir,
+                    parent_down_entries_cache,
+                    parent_down_entry_map_cache,
+                    bt_parent_cache,
+                    skip_keyword_parent_keys,
+                    shared_lock,
+                )
+
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="gying") as executor:
+                running_tasks: Dict[Any, Dict[str, Any]] = {}
+                while task_queue or running_tasks:
+                    while task_queue and len(running_tasks) < worker_count:
+                        task = task_queue.popleft()
+                        running_tasks[_submit_task(executor, task)] = task
+
+                    if not running_tasks:
+                        break
+
+                    done, _ = wait(tuple(running_tasks.keys()), return_when=FIRST_COMPLETED)
+                    for future in done:
+                        task = running_tasks.pop(future)
+                        task_kind = str(task.get("kind") or "search").strip().lower()
+                        task_order = int(task.get("order") or 0)
+                        task_resource_id = str(task.get("resource_id") or "").strip()
+
+                        try:
+                            item = future.result()
+                        except Exception as err:
+                            if task_kind == "child":
+                                logger.debug(f"观影(GYing)并发处理父级子资源异常：{err}")
+                            else:
+                                logger.debug(f"观影(GYing)并发处理搜索条目异常：{err}")
+                            item = None
+
+                        ordered_results[task_order] = item
+
+                        if task_kind == "search" and task_resource_id:
+                            outstanding_search_ids.discard(task_resource_id)
+
+                        if item:
+                            resolved_result_ids.add(item[0])
+
+                        if task_kind != "search":
+                            continue
+
+                        pending_children = self._collect_pending_child_tasks(
+                            parent_default_dir=parent_default_dir,
+                            parent_down_entries_cache=parent_down_entries_cache,
+                            outstanding_search_ids=outstanding_search_ids,
+                            pending_child_ids=pending_child_ids,
+                            resolved_result_ids=resolved_result_ids,
+                            shared_lock=shared_lock,
+                        )
+                        for cache_key, parent_dir, parent_id, down_item, default_dir in pending_children:
+                            child_id = str(down_item.get("id") or "").strip()
+                            task_queue.append(
+                                {
+                                    "kind": "child",
+                                    "order": next_order,
+                                    "resource_id": child_id,
+                                    "cache_key": cache_key,
+                                    "parent_dir": parent_dir,
+                                    "parent_id": parent_id,
+                                    "down_item": down_item,
+                                    "default_dir": default_dir,
+                                }
+                            )
+                            next_order += 1
+
+            for index in sorted(ordered_results.keys()):
                 item = ordered_results.get(index)
                 if not item:
                     continue
                 res_id, torrent = item
+                if res_id in result_ids:
+                    continue
                 results.append(torrent)
                 result_ids.add(res_id)
-
-            # 站点搜索页可能漏掉同父级下的部分条目，补充抓取父级 downlist 全量条目。
-            pending_children: List[Tuple[str, str, str, Dict[str, Any]]] = []
-            pending_child_ids: Set[str] = set()
-            for cache_key, down_entries in parent_down_entries_cache.items():
-                try:
-                    parent_dir, parent_id = cache_key.split("/", 1)
-                except Exception:
-                    continue
-                default_dir = str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt"
-                if not down_entries:
-                    continue
-
-                for down_item in down_entries:
-                    child_id = str(down_item.get("id") or "").strip()
-                    if not child_id or child_id in result_ids or child_id in pending_child_ids:
-                        continue
-
-                    child_title = str(down_item.get("title") or "").strip()
-                    if not child_title:
-                        continue
-                    child_quality_code = str(down_item.get("quality") or "").strip().lower()
-                    child_quality_label = str(
-                        down_item.get("quality_label")
-                        or self._quality_label_by_code.get(child_quality_code)
-                        or ""
-                    ).strip()
-                    if not self._should_keep_entry(
-                        title=child_title,
-                        quality_code=child_quality_code,
-                        quality_label=child_quality_label
-                    ):
-                        continue
-                    pending_child_ids.add(child_id)
-                    pending_children.append((cache_key, parent_dir, parent_id, dict(down_item)))
-
-            ordered_child_results: Dict[int, Optional[Tuple[str, TorrentInfo]]] = {}
-            if pending_children:
-                child_worker_count = min(len(pending_children), max(1, int(self._detail_concurrency or 1)))
-                if child_worker_count <= 1:
-                    for index, (cache_key, parent_dir, parent_id, down_item) in enumerate(pending_children):
-                        ordered_child_results[index] = self._build_child_result_entry(
-                            cache_key=cache_key,
-                            parent_dir=parent_dir,
-                            parent_id=parent_id,
-                            down_item=down_item,
-                            site=site,
-                            keyword=keyword,
-                            client=client,
-                            base_url=base_url,
-                            fetcher=guarded_get,
-                            parent_meta_cache=parent_meta_cache,
-                            skip_keyword_parent_keys=skip_keyword_parent_keys,
-                            shared_lock=shared_lock,
-                            default_dir=str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt",
-                        )
-                else:
-                    with ThreadPoolExecutor(max_workers=child_worker_count, thread_name_prefix="gying-child") as executor:
-                        future_map = {
-                            executor.submit(
-                                self._build_child_result_entry,
-                                cache_key,
-                                parent_dir,
-                                parent_id,
-                                down_item,
-                                site,
-                                keyword,
-                                client,
-                                base_url,
-                                guarded_get,
-                                parent_meta_cache,
-                                skip_keyword_parent_keys,
-                                shared_lock,
-                                str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt",
-                            ): index
-                            for index, (cache_key, parent_dir, parent_id, down_item) in enumerate(pending_children)
-                        }
-                        for future in as_completed(future_map):
-                            index = future_map[future]
-                            try:
-                                ordered_child_results[index] = future.result()
-                            except Exception as err:
-                                logger.debug(f"观影(GYing)并发处理父级子资源异常：{err}")
-                                ordered_child_results[index] = None
-
-                for index in range(len(pending_children)):
-                    item = ordered_child_results.get(index)
-                    if not item:
-                        continue
-                    child_id, torrent = item
-                    if child_id in result_ids:
-                        continue
-                    results.append(torrent)
-                    result_ids.add(child_id)
 
             cost = (datetime.now() - start_at).seconds
             logger.info(
@@ -861,6 +839,60 @@ class GyingIndexer(_PluginBase):
             downloadvolumefactor=0,
             uploadvolumefactor=1,
         )
+
+    def _collect_pending_child_tasks(self,
+                                     parent_default_dir: Dict[str, str],
+                                     parent_down_entries_cache: Dict[str, List[Dict[str, Any]]],
+                                     outstanding_search_ids: Set[str],
+                                     pending_child_ids: Set[str],
+                                     resolved_result_ids: Set[str],
+                                     shared_lock: threading.RLock) -> List[Tuple[str, str, str, Dict[str, Any], str]]:
+        with shared_lock:
+            parent_snapshots = [
+                (
+                    str(cache_key or "").strip(),
+                    str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt",
+                    [dict(item) for item in (down_entries or []) if isinstance(item, dict)],
+                )
+                for cache_key, down_entries in parent_down_entries_cache.items()
+            ]
+
+        pending_children: List[Tuple[str, str, str, Dict[str, Any], str]] = []
+        for cache_key, default_dir, down_entries in parent_snapshots:
+            if not cache_key or not down_entries:
+                continue
+            try:
+                parent_dir, parent_id = cache_key.split("/", 1)
+            except Exception:
+                continue
+
+            for down_item in down_entries:
+                child_id = str(down_item.get("id") or "").strip()
+                if not child_id:
+                    continue
+                if child_id in outstanding_search_ids or child_id in pending_child_ids or child_id in resolved_result_ids:
+                    continue
+
+                child_title = str(down_item.get("title") or "").strip()
+                if not child_title:
+                    continue
+                child_quality_code = str(down_item.get("quality") or "").strip().lower()
+                child_quality_label = str(
+                    down_item.get("quality_label")
+                    or self._quality_label_by_code.get(child_quality_code)
+                    or ""
+                ).strip()
+                if not self._should_keep_entry(
+                    title=child_title,
+                    quality_code=child_quality_code,
+                    quality_label=child_quality_label
+                ):
+                    continue
+
+                pending_child_ids.add(child_id)
+                pending_children.append((cache_key, parent_dir, parent_id, dict(down_item), default_dir))
+
+        return pending_children
 
     def _ensure_parent_down_entries_cached(self, client: RequestUtils, base_url: str,
                                            parent_dir: str, parent_id: str,
@@ -1486,6 +1518,7 @@ class GyingIndexer(_PluginBase):
         cache_lock = threading.RLock()
         pow_lock = threading.Lock()
         cache_miss = object()
+        inflight_events: Dict[str, threading.Event] = {}
 
         def _getter(url: str) -> str:
             target = str(url or "").strip()
@@ -1496,100 +1529,114 @@ class GyingIndexer(_PluginBase):
                 if cached is not cache_miss:
                     request_state["cache_hit"] = int(request_state.get("cache_hit") or 0) + 1
                     return str(cached or "")
+                waiter = inflight_events.get(target)
+                if waiter is None:
+                    waiter = threading.Event()
+                    inflight_events[target] = waiter
+                    is_leader = True
+                    request_state["http"] = int(request_state.get("http") or 0) + 1
+                    resolved_cookie = str(pow_resolved_cookie[0] or "").strip()
+                else:
+                    is_leader = False
+                    resolved_cookie = ""
 
-            with cache_lock:
-                request_state["http"] = int(request_state.get("http") or 0) + 1
-                resolved_cookie = str(pow_resolved_cookie[0] or "").strip()
+            if not is_leader:
+                waiter.wait()
+                with cache_lock:
+                    cached = url_cache.get(target, "")
+                    request_state["cache_hit"] = int(request_state.get("cache_hit") or 0) + 1
+                return str(cached or "")
 
             # 已解过 PoW：直接用新 cookie 发请求，跳过旧 cookie 的 client
-            if resolved_cookie:
-                try:
-                    resp = requests.get(
-                        target,
-                        headers={
-                            "User-Agent": ua or settings.USER_AGENT,
-                            "Referer": base_url,
-                            "Cookie": resolved_cookie,
-                        },
-                        proxies=proxies,
-                        timeout=max(5, int(timeout or 20)),
-                    )
-                    text = resp.text if resp.ok else ""
-                except Exception as err:
-                    logger.warn(f"观影(GYing)请求异常：{err}")
-                    text = ""
+            try:
+                if resolved_cookie:
+                    try:
+                        resp = requests.get(
+                            target,
+                            headers={
+                                "User-Agent": ua or settings.USER_AGENT,
+                                "Referer": base_url,
+                                "Cookie": resolved_cookie,
+                            },
+                            proxies=proxies,
+                            timeout=max(5, int(timeout or 20)),
+                        )
+                        text = resp.text if resp.ok else ""
+                    except Exception as err:
+                        logger.warn(f"观影(GYing)请求异常：{err}")
+                        text = ""
+                else:
+                    text = client.get(target) or ""
+
+                # 若响应为 PoW 验证页，自动求解并重试
+                if self._is_pow_page(text) and base_url:
+                    logger.info(f"观影(GYing)搜索中途遇到 PoW 验证（URL={target}），正在自动求解...")
+                    with pow_lock:
+                        with cache_lock:
+                            latest_cookie = str(pow_resolved_cookie[0] or "").strip()
+                        if latest_cookie:
+                            try:
+                                resp = requests.get(
+                                    target,
+                                    headers={
+                                        "User-Agent": ua or settings.USER_AGENT,
+                                        "Referer": base_url,
+                                        "Cookie": latest_cookie,
+                                    },
+                                    proxies=proxies,
+                                    timeout=max(5, int(timeout or 20)),
+                                )
+                                text = resp.text if resp.ok else ""
+                            except Exception as err:
+                                logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
+                                text = ""
+                        else:
+                            existing = str(cookie or "").strip()
+                            pow_extra = self._solve_pow_from_html(
+                                html_text=text,
+                                target_url=target,
+                                base_url=base_url,
+                                ua=ua, proxies=proxies, timeout=timeout,
+                                existing_cookie=existing,
+                            )
+                            if not pow_extra:
+                                logger.warn(f"观影(GYing)搜索中途 PoW 求解失败，跳过 URL={target}")
+                                text = ""
+                            else:
+                                merged = self._merge_cookie_str(existing, pow_extra)
+                                with cache_lock:
+                                    pow_resolved_cookie[0] = merged
+                                logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
+                                # 回写 cookie，后续搜索直接使用新 cookie
+                                if site is not None:
+                                    site["cookie"] = merged
+                                    self._persist_site_cookie(site=site, cookie=merged)
+
+                                # 用新 cookie 重试当前 URL
+                                try:
+                                    resp = requests.get(
+                                        target,
+                                        headers={
+                                            "User-Agent": ua or settings.USER_AGENT,
+                                            "Referer": base_url,
+                                            "Cookie": merged,
+                                        },
+                                        proxies=proxies,
+                                        timeout=max(5, int(timeout or 20)),
+                                    )
+                                    text = resp.text if resp.ok else ""
+                                except Exception as err:
+                                    logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
+                                    text = ""
+
                 with cache_lock:
                     url_cache[target] = text or ""
                 return text or ""
-
-            text = client.get(target) or ""
-
-            # 若响应为 PoW 验证页，自动求解并重试
-            if self._is_pow_page(text) and base_url:
-                logger.info(f"观影(GYing)搜索中途遇到 PoW 验证（URL={target}），正在自动求解...")
-                with pow_lock:
-                    with cache_lock:
-                        latest_cookie = str(pow_resolved_cookie[0] or "").strip()
-                    if latest_cookie:
-                        try:
-                            resp = requests.get(
-                                target,
-                                headers={
-                                    "User-Agent": ua or settings.USER_AGENT,
-                                    "Referer": base_url,
-                                    "Cookie": latest_cookie,
-                                },
-                                proxies=proxies,
-                                timeout=max(5, int(timeout or 20)),
-                            )
-                            text = resp.text if resp.ok else ""
-                        except Exception as err:
-                            logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
-                            text = ""
-                    else:
-                        existing = str(cookie or "").strip()
-                        pow_extra = self._solve_pow_from_html(
-                            html_text=text,
-                            target_url=target,
-                            base_url=base_url,
-                            ua=ua, proxies=proxies, timeout=timeout,
-                            existing_cookie=existing,
-                        )
-                        if not pow_extra:
-                            logger.warn(f"观影(GYing)搜索中途 PoW 求解失败，跳过 URL={target}")
-                            with cache_lock:
-                                url_cache[target] = ""
-                            return ""
-
-                        merged = self._merge_cookie_str(existing, pow_extra)
-                        with cache_lock:
-                            pow_resolved_cookie[0] = merged
-                        logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
-                        # 回写 cookie，后续搜索直接使用新 cookie
-                        if site is not None:
-                            site["cookie"] = merged
-                            self._persist_site_cookie(site=site, cookie=merged)
-
-                        # 用新 cookie 重试当前 URL
-                        try:
-                            resp = requests.get(
-                                target,
-                                headers={
-                                    "User-Agent": ua or settings.USER_AGENT,
-                                    "Referer": base_url,
-                                    "Cookie": merged,
-                                },
-                                proxies=proxies,
-                                timeout=max(5, int(timeout or 20)),
-                            )
-                            text = resp.text if resp.ok else ""
-                        except Exception as err:
-                            logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
-                            text = ""
-
-            with cache_lock:
-                url_cache[target] = text or ""
-            return text or ""
+            finally:
+                with cache_lock:
+                    current = inflight_events.pop(target, None)
+                if current is not None:
+                    current.set()
 
         return _getter
 
