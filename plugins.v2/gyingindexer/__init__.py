@@ -27,7 +27,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.9"
+    plugin_version = "1.7.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -411,6 +411,7 @@ class GyingIndexer(_PluginBase):
 
             results: List[TorrentInfo] = []
             parent_title_cache: Dict[str, str] = {}
+            parent_year_cache: Dict[str, str] = {}
             parent_default_dir: Dict[str, str] = {}
             parent_down_entries_cache: Dict[str, List[Dict[str, Any]]] = {}
             parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -454,6 +455,7 @@ class GyingIndexer(_PluginBase):
                         base_url,
                         guarded_get,
                         parent_title_cache,
+                        parent_year_cache,
                         skip_keyword_parent_keys,
                         shared_lock,
                         task["default_dir"],
@@ -467,6 +469,7 @@ class GyingIndexer(_PluginBase):
                     base_url,
                     guarded_get,
                     parent_title_cache,
+                    parent_year_cache,
                     parent_default_dir,
                     parent_down_entries_cache,
                     parent_down_entry_map_cache,
@@ -561,6 +564,7 @@ class GyingIndexer(_PluginBase):
                                    client: RequestUtils, base_url: str,
                                    fetcher: Callable[[str], str],
                                    parent_title_cache: Dict[str, str],
+                                   parent_year_cache: Dict[str, str],
                                    parent_default_dir: Dict[str, str],
                                    parent_down_entries_cache: Dict[str, List[Dict[str, Any]]],
                                    parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]],
@@ -588,6 +592,7 @@ class GyingIndexer(_PluginBase):
                 parent_id=res_id,
                 fetcher=fetcher,
                 parent_title_cache=parent_title_cache,
+                parent_year_cache=parent_year_cache,
                 parent_default_dir=parent_default_dir,
                 parent_down_entries_cache=parent_down_entries_cache,
                 parent_down_entry_map_cache=parent_down_entry_map_cache,
@@ -633,6 +638,7 @@ class GyingIndexer(_PluginBase):
                     parent_id=parent_id,
                     fetcher=fetcher,
                     parent_title_cache=parent_title_cache,
+                    parent_year_cache=parent_year_cache,
                     parent_default_dir=parent_default_dir,
                     parent_down_entries_cache=parent_down_entries_cache,
                     parent_down_entry_map_cache=parent_down_entry_map_cache,
@@ -688,6 +694,7 @@ class GyingIndexer(_PluginBase):
 
         with shared_lock:
             parent_title = str(parent_title_cache.get(cache_key) or "").strip()
+            parent_year = str(parent_year_cache.get(cache_key) or "").strip()
 
         down_size_text = str(down_item.get("size") or "").strip()
         detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
@@ -700,7 +707,7 @@ class GyingIndexer(_PluginBase):
         title_for_match = self._build_match_title(
             title=title,
             parent_title=parent_title,
-            parent_year=""
+            parent_year=parent_year
         )
         if parent_title and cache_key not in skip_keyword_parent_keys:
             if not self._is_keyword_related(
@@ -713,6 +720,8 @@ class GyingIndexer(_PluginBase):
                 return None
         desc_parts = [x for x in [tag_text, detail_title, parent_title] if x]
         description = " | ".join(desc_parts[:3])
+        if parent_year and not re.search(r"(19|20)\d{2}", description):
+            description = f"{description} {parent_year}".strip()
         description = self._append_unique_marker(
             description=description or detail_title or title,
             resource_id=res_id,
@@ -745,6 +754,7 @@ class GyingIndexer(_PluginBase):
                                   client: RequestUtils, base_url: str,
                                    fetcher: Callable[[str], str],
                                    parent_title_cache: Dict[str, str],
+                                   parent_year_cache: Dict[str, str],
                                    skip_keyword_parent_keys: Set[str],
                                    shared_lock: threading.RLock,
                                    default_dir: str = "bt") -> Optional[Tuple[str, TorrentInfo]]:
@@ -779,6 +789,7 @@ class GyingIndexer(_PluginBase):
 
         with shared_lock:
             parent_title = str(parent_title_cache.get(cache_key) or "").strip()
+            parent_year = str(parent_year_cache.get(cache_key) or "").strip()
 
         down_size_text = str(down_item.get("size") or "").strip()
         detail_size_text = str(child_detail_data.get("s") or child_detail_data.get("size") or "").strip()
@@ -790,7 +801,7 @@ class GyingIndexer(_PluginBase):
         title_for_match = self._build_match_title(
             title=child_title,
             parent_title=parent_title,
-            parent_year=""
+            parent_year=parent_year
         )
         if parent_title and cache_key not in skip_keyword_parent_keys:
             if not self._is_keyword_related(
@@ -803,6 +814,8 @@ class GyingIndexer(_PluginBase):
                 return None
         desc_parts = [x for x in [tag_text, detail_title, parent_title] if x]
         description = " | ".join(desc_parts[:3])
+        if parent_year and not re.search(r"(19|20)\d{2}", description):
+            description = f"{description} {parent_year}".strip()
         description = self._append_unique_marker(
             description=description or detail_title or child_title,
             resource_id=child_id,
@@ -889,6 +902,7 @@ class GyingIndexer(_PluginBase):
                                            parent_dir: str, parent_id: str,
                                            fetcher: Callable[[str], str],
                                            parent_title_cache: Dict[str, str],
+                                           parent_year_cache: Dict[str, str],
                                            parent_default_dir: Dict[str, str],
                                            parent_down_entries_cache: Dict[str, List[Dict[str, Any]]],
                                            parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]],
@@ -937,6 +951,9 @@ class GyingIndexer(_PluginBase):
                 if cache_key not in parent_down_entries_cache:
                     parent_down_entries_cache[cache_key] = down_entries
                     parent_down_entry_map_cache[cache_key] = id_map
+                inferred_year = self._infer_parent_year_from_entries(down_entries=down_entries)
+                if inferred_year:
+                    parent_year_cache.setdefault(cache_key, inferred_year)
                 existing_map = parent_down_entry_map_cache.get(cache_key, {})
                 for child_id in existing_map:
                     bt_parent_cache[child_id] = cache_key
@@ -2158,6 +2175,27 @@ class GyingIndexer(_PluginBase):
                 "hash": str(self._safe_at(hashes, idx) or "").strip(),
             })
         return entries
+
+    @staticmethod
+    def _infer_parent_year_from_entries(down_entries: List[Dict[str, Any]]) -> str:
+        year_counts: Dict[str, int] = {}
+        for item in down_entries or []:
+            title = str((item or {}).get("title") or "").strip()
+            if not title:
+                continue
+            seen: Set[str] = set()
+            for year in re.findall(r"(?:19|20)\d{2}", title):
+                token = str(year or "").strip()
+                if token and token not in seen:
+                    year_counts[token] = year_counts.get(token, 0) + 1
+                    seen.add(token)
+        if not year_counts:
+            return ""
+        sorted_years = sorted(year_counts.items(), key=lambda item: (-item[1], -int(item[0])))
+        best_year, best_count = sorted_years[0]
+        if best_count <= 0:
+            return ""
+        return best_year
 
     @staticmethod
     def _build_match_title(title: str, parent_title: str = "", parent_year: str = "") -> str:
