@@ -26,7 +26,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.3"
+    plugin_version = "1.7.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -474,6 +474,8 @@ class GyingIndexer(_PluginBase):
                 result_ids.add(res_id)
 
             # 站点搜索页可能漏掉同父级下的部分条目，补充抓取父级 downlist 全量条目。
+            pending_children: List[Tuple[str, str, str, Dict[str, Any]]] = []
+            pending_child_ids: Set[str] = set()
             for cache_key, down_entries in parent_down_entries_cache.items():
                 try:
                     parent_dir, parent_id = cache_key.split("/", 1)
@@ -483,12 +485,9 @@ class GyingIndexer(_PluginBase):
                 if not down_entries:
                     continue
 
-                parent_meta = parent_meta_cache.get(cache_key) or {}
-                parent_meta_loaded = bool(parent_meta)
-
                 for down_item in down_entries:
                     child_id = str(down_item.get("id") or "").strip()
-                    if not child_id or child_id in result_ids:
+                    if not child_id or child_id in result_ids or child_id in pending_child_ids:
                         continue
 
                     child_title = str(down_item.get("title") or "").strip()
@@ -506,88 +505,66 @@ class GyingIndexer(_PluginBase):
                         quality_label=child_quality_label
                     ):
                         continue
+                    pending_child_ids.add(child_id)
+                    pending_children.append((cache_key, parent_dir, parent_id, dict(down_item)))
 
-                    child_dir = str(down_item.get("dir") or default_dir).strip().lower() or "bt"
-                    child_detail_url = urljoin(base_url, f"{child_dir}/{child_id}")
-                    child_hash = str(down_item.get("hash") or "").strip()
-                    child_detail_data: Dict[str, Any] = {}
-                    enclosure, child_detail_data = self._resolve_enclosure(
-                        client=client,
-                        base_url=base_url,
-                        resource_dir=child_dir,
-                        resource_id=child_id,
-                        title=child_title,
-                        info_hash=child_hash,
-                        detail_data=child_detail_data,
-                        fetcher=guarded_get
-                    )
-                    if not enclosure:
-                        continue
-
-                    if not parent_meta_loaded:
-                        parent_meta = self._fetch_parent_meta(
-                            client=client,
-                            base_url=base_url,
+            ordered_child_results: Dict[int, Optional[Tuple[str, TorrentInfo]]] = {}
+            if pending_children:
+                child_worker_count = min(len(pending_children), max(1, int(self._detail_concurrency or 1)))
+                if child_worker_count <= 1:
+                    for index, (cache_key, parent_dir, parent_id, down_item) in enumerate(pending_children):
+                        ordered_child_results[index] = self._build_child_result_entry(
+                            cache_key=cache_key,
                             parent_dir=parent_dir,
                             parent_id=parent_id,
-                            fetcher=guarded_get
+                            down_item=down_item,
+                            site=site,
+                            keyword=keyword,
+                            client=client,
+                            base_url=base_url,
+                            fetcher=guarded_get,
+                            parent_meta_cache=parent_meta_cache,
+                            skip_keyword_parent_keys=skip_keyword_parent_keys,
+                            shared_lock=shared_lock,
+                            default_dir=str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt",
                         )
-                        parent_meta_cache[cache_key] = parent_meta
-                        parent_meta_loaded = True
+                else:
+                    with ThreadPoolExecutor(max_workers=child_worker_count, thread_name_prefix="gying-child") as executor:
+                        future_map = {
+                            executor.submit(
+                                self._build_child_result_entry,
+                                cache_key,
+                                parent_dir,
+                                parent_id,
+                                down_item,
+                                site,
+                                keyword,
+                                client,
+                                base_url,
+                                guarded_get,
+                                parent_meta_cache,
+                                skip_keyword_parent_keys,
+                                shared_lock,
+                                str(parent_default_dir.get(cache_key) or "bt").strip().lower() or "bt",
+                            ): index
+                            for index, (cache_key, parent_dir, parent_id, down_item) in enumerate(pending_children)
+                        }
+                        for future in as_completed(future_map):
+                            index = future_map[future]
+                            try:
+                                ordered_child_results[index] = future.result()
+                            except Exception as err:
+                                logger.debug(f"观影(GYing)并发处理父级子资源异常：{err}")
+                                ordered_child_results[index] = None
 
-                    down_size_text = str(down_item.get("size") or "").strip()
-                    detail_size_text = str(child_detail_data.get("s") or child_detail_data.get("size") or "").strip()
-                    size_bytes = self._parse_size_bytes(down_size_text, detail_size_text)
-                    seeds_text = down_item.get("seeds")
-                    elapsed_text = str(down_item.get("time") or "").strip()
-                    tag_text = child_quality_label
-                    detail_title = str(child_detail_data.get("title") or child_title).strip()
-                    parent_year = str(parent_meta.get("year") or "").strip()
-                    title_for_match = self._build_match_title(
-                        title=child_title,
-                        parent_title=str(parent_meta.get("title") or "").strip(),
-                        parent_year=parent_year
-                    )
-                    if cache_key not in skip_keyword_parent_keys:
-                        if not self._is_keyword_related(
-                            keyword,
-                            title_for_match,
-                            detail_title,
-                            str(parent_meta.get("title") or "").strip(),
-                            child_title
-                        ):
-                            continue
-                    desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
-                    description = " | ".join(desc_parts[:3])
-                    if parent_year and not re.search(r"(19|20)\d{2}", description):
-                        description = f"{description} {parent_year}".strip()
-                    description = self._append_unique_marker(
-                        description=description or detail_title or child_title,
-                        resource_id=child_id,
-                        enclosure=enclosure
-                    )
-
-                    results.append(TorrentInfo(
-                        site=site.get("id"),
-                        site_name=site.get("name"),
-                        site_cookie=site.get("cookie"),
-                        site_ua=site.get("ua"),
-                        site_proxy=site.get("proxy"),
-                        site_order=site.get("pri"),
-                        site_downloader=site.get("downloader"),
-                        title=title_for_match or child_title,
-                        description=description,
-                        enclosure=enclosure,
-                        page_url=child_detail_url,
-                        size=size_bytes,
-                        seeders=self._to_int(seeds_text),
-                        peers=0,
-                        grabs=0,
-                        pubdate=None,
-                        date_elapsed=elapsed_text,
-                        downloadvolumefactor=0,
-                        uploadvolumefactor=1,
-                    ))
+                for index in range(len(pending_children)):
+                    item = ordered_child_results.get(index)
+                    if not item:
+                        continue
+                    child_id, torrent = item
+                    if child_id in result_ids:
+                        continue
+                    results.append(torrent)
                     result_ids.add(child_id)
 
             cost = (datetime.now() - start_at).seconds
@@ -775,6 +752,106 @@ class GyingIndexer(_PluginBase):
             description=description,
             enclosure=enclosure,
             page_url=detail_url,
+            size=size_bytes,
+            seeders=self._to_int(seeds_text),
+            peers=0,
+            grabs=0,
+            pubdate=None,
+            date_elapsed=elapsed_text,
+            downloadvolumefactor=0,
+            uploadvolumefactor=1,
+        )
+
+    def _build_child_result_entry(self, cache_key: str, parent_dir: str, parent_id: str,
+                                  down_item: Dict[str, Any], site: dict, keyword: str,
+                                  client: RequestUtils, base_url: str,
+                                  fetcher: Callable[[str], str],
+                                  parent_meta_cache: Dict[str, Dict[str, Any]],
+                                  skip_keyword_parent_keys: Set[str],
+                                  shared_lock: threading.RLock,
+                                  default_dir: str = "bt") -> Optional[Tuple[str, TorrentInfo]]:
+        child_id = str(down_item.get("id") or "").strip()
+        if not child_id:
+            return None
+        child_title = str(down_item.get("title") or "").strip()
+        if not child_title:
+            return None
+        child_quality_code = str(down_item.get("quality") or "").strip().lower()
+        child_quality_label = str(
+            down_item.get("quality_label")
+            or self._quality_label_by_code.get(child_quality_code)
+            or ""
+        ).strip()
+        child_dir = str(down_item.get("dir") or default_dir).strip().lower() or "bt"
+        child_detail_url = urljoin(base_url, f"{child_dir}/{child_id}")
+        child_hash = str(down_item.get("hash") or "").strip()
+        child_detail_data: Dict[str, Any] = {}
+        enclosure, child_detail_data = self._resolve_enclosure(
+            client=client,
+            base_url=base_url,
+            resource_dir=child_dir,
+            resource_id=child_id,
+            title=child_title,
+            info_hash=child_hash,
+            detail_data=child_detail_data,
+            fetcher=fetcher
+        )
+        if not enclosure:
+            return None
+
+        parent_meta = self._ensure_parent_meta_cached(
+            client=client,
+            base_url=base_url,
+            cache_key=cache_key,
+            parent_meta_cache=parent_meta_cache,
+            fetcher=fetcher,
+            shared_lock=shared_lock,
+        )
+
+        down_size_text = str(down_item.get("size") or "").strip()
+        detail_size_text = str(child_detail_data.get("s") or child_detail_data.get("size") or "").strip()
+        size_bytes = self._parse_size_bytes(down_size_text, detail_size_text)
+        seeds_text = down_item.get("seeds")
+        elapsed_text = str(down_item.get("time") or "").strip()
+        tag_text = child_quality_label
+        detail_title = str(child_detail_data.get("title") or child_title).strip()
+        parent_year = str(parent_meta.get("year") or "").strip()
+        title_for_match = self._build_match_title(
+            title=child_title,
+            parent_title=str(parent_meta.get("title") or "").strip(),
+            parent_year=parent_year
+        )
+        if cache_key not in skip_keyword_parent_keys:
+            if not self._is_keyword_related(
+                keyword,
+                title_for_match,
+                detail_title,
+                str(parent_meta.get("title") or "").strip(),
+                child_title
+            ):
+                return None
+        desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
+        description = " | ".join(desc_parts[:3])
+        if parent_year and not re.search(r"(19|20)\d{2}", description):
+            description = f"{description} {parent_year}".strip()
+        description = self._append_unique_marker(
+            description=description or detail_title or child_title,
+            resource_id=child_id,
+            enclosure=enclosure
+        )
+
+        return child_id, TorrentInfo(
+            site=site.get("id"),
+            site_name=site.get("name"),
+            site_cookie=site.get("cookie"),
+            site_ua=site.get("ua"),
+            site_proxy=site.get("proxy"),
+            site_order=site.get("pri"),
+            site_downloader=site.get("downloader"),
+            title=title_for_match or child_title,
+            description=description,
+            enclosure=enclosure,
+            page_url=child_detail_url,
             size=size_bytes,
             seeders=self._to_int(seeds_text),
             peers=0,
