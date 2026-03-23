@@ -3,6 +3,8 @@ import html
 import importlib
 import json
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urljoin, urlparse
@@ -24,7 +26,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.1"
+    plugin_version = "1.7.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -40,6 +42,7 @@ class GyingIndexer(_PluginBase):
     _extra_hosts = ""
     _login_username = ""
     _login_password = ""
+    _detail_concurrency = 6
 
     _default_hosts: Set[str] = {
         "gying.si",
@@ -391,202 +394,61 @@ class GyingIndexer(_PluginBase):
             bt_parent_cache: Dict[str, str] = {}
             skip_keyword_parent_keys: Set[str] = set()
             result_ids: Set[str] = set()
-            for entry in search_entries:
-                res_id = str(entry.get("id") or "").strip()
-                if not res_id:
+            shared_lock = threading.RLock()
+            worker_count = min(len(search_entries), max(1, int(self._detail_concurrency or 1)))
+            ordered_results: Dict[int, Optional[Tuple[str, TorrentInfo]]] = {}
+            if worker_count <= 1:
+                for index, entry in enumerate(search_entries):
+                    ordered_results[index] = self._build_search_result_entry(
+                        entry=entry,
+                        site=site,
+                        keyword=keyword,
+                        client=client,
+                        base_url=base_url,
+                        fetcher=guarded_get,
+                        parent_meta_cache=parent_meta_cache,
+                        parent_default_dir=parent_default_dir,
+                        parent_down_entries_cache=parent_down_entries_cache,
+                        parent_down_entry_map_cache=parent_down_entry_map_cache,
+                        bt_parent_cache=bt_parent_cache,
+                        skip_keyword_parent_keys=skip_keyword_parent_keys,
+                        shared_lock=shared_lock,
+                    )
+            else:
+                with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="gying") as executor:
+                    future_map = {
+                        executor.submit(
+                            self._build_search_result_entry,
+                            entry,
+                            site,
+                            keyword,
+                            client,
+                            base_url,
+                            guarded_get,
+                            parent_meta_cache,
+                            parent_default_dir,
+                            parent_down_entries_cache,
+                            parent_down_entry_map_cache,
+                            bt_parent_cache,
+                            skip_keyword_parent_keys,
+                            shared_lock,
+                        ): index
+                        for index, entry in enumerate(search_entries)
+                    }
+                    for future in as_completed(future_map):
+                        index = future_map[future]
+                        try:
+                            ordered_results[index] = future.result()
+                        except Exception as err:
+                            logger.debug(f"观影(GYing)并发处理搜索条目异常：{err}")
+                            ordered_results[index] = None
+
+            for index in range(len(search_entries)):
+                item = ordered_results.get(index)
+                if not item:
                     continue
-                res_dir = str(entry.get("dir") or "bt").strip().lower()
-                if not res_dir:
-                    res_dir = "bt"
-                skip_keyword_match = bool(entry.get("__skip_keyword_match"))
-
-                title = str(entry.get("title") or "").strip()
-                if not title:
-                    continue
-                search_quality_code = str(entry.get("quality") or "").strip().lower()
-                search_tag_label = str(entry.get("tag") or "").strip()
-
-                # 父级搜索路由返回 tv/mv/ac 条目，直接按父级 downlist 拉取子资源，避免逐条请求 bt 详情页。
-                if res_dir in ("tv", "ac", "mv"):
-                    cache_key = f"{res_dir}/{res_id}"
-                    parent_default_dir.setdefault(cache_key, "bt")
-                    if skip_keyword_match:
-                        skip_keyword_parent_keys.add(cache_key)
-                    if cache_key not in parent_down_entries_cache:
-                        _down_entries = self._fetch_parent_down_entries(
-                            client=client,
-                            base_url=base_url,
-                            parent_dir=res_dir,
-                            parent_id=res_id,
-                            fetcher=guarded_get
-                        )
-                        parent_down_entries_cache[cache_key] = _down_entries
-                        _id_map: Dict[str, Dict[str, Any]] = {}
-                        for _item in _down_entries:
-                            _cid = str(_item.get("id") or "").strip()
-                            if not _cid:
-                                continue
-                            _id_map[_cid] = _item
-                            bt_parent_cache[_cid] = cache_key
-                        parent_down_entry_map_cache[cache_key] = _id_map
-                    continue
-
-                detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
-                detail_data: Dict[str, Any] = {}
-
-                tag_code = ""
-                tag_label = ""
-                parent_meta: Dict[str, Any] = {}
-                down_item: Dict[str, Any] = {}
-                cache_key = str(bt_parent_cache.get(res_id) or "").strip()
-                if cache_key:
-                    down_item = parent_down_entry_map_cache.get(cache_key, {}).get(res_id) or {}
-                    if down_item:
-                        res_dir = str(down_item.get("dir") or res_dir).strip().lower() or res_dir
-                        title = str(down_item.get("title") or title).strip() or title
-                        detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
-                        tag_code = str(down_item.get("quality") or "").strip().lower()
-                        tag_label = str(down_item.get("quality_label") or "").strip()
-                else:
-                    detail_html = guarded_get(detail_url)
-                    if detail_html:
-                        _detail_data = self._extract_js_object(detail_html, "_obj.d")
-                        if isinstance(_detail_data, dict):
-                            detail_data = _detail_data
-
-                    parent_dir, parent_id = self._parse_parent_route(detail_data.get("du"))
-                    if parent_dir and parent_id:
-                        cache_key = f"{parent_dir}/{parent_id}"
-                        parent_default_dir.setdefault(cache_key, res_dir)
-
-                        if cache_key not in parent_down_entries_cache:
-                            _down_entries = self._fetch_parent_down_entries(
-                                client=client,
-                                base_url=base_url,
-                                parent_dir=parent_dir,
-                                parent_id=parent_id,
-                                fetcher=guarded_get
-                            )
-                            parent_down_entries_cache[cache_key] = _down_entries
-                            _id_map: Dict[str, Dict[str, Any]] = {}
-                            for _item in _down_entries:
-                                _cid = str(_item.get("id") or "").strip()
-                                if not _cid:
-                                    continue
-                                _id_map[_cid] = _item
-                                bt_parent_cache[_cid] = cache_key
-                            parent_down_entry_map_cache[cache_key] = _id_map
-
-                        down_item = parent_down_entry_map_cache.get(cache_key, {}).get(res_id) or {}
-                        if down_item:
-                            res_dir = str(down_item.get("dir") or res_dir).strip().lower() or res_dir
-                            title = str(down_item.get("title") or title).strip() or title
-                            detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
-                            tag_code = str(down_item.get("quality") or "").strip().lower()
-                            tag_label = str(down_item.get("quality_label") or "").strip()
-
-                filter_title = str(
-                    detail_data.get("title")
-                    or down_item.get("title")
-                    or title
-                    or ""
-                ).strip()
-                quality_code_for_filter = tag_code or search_quality_code
-                quality_label_for_filter = (
-                    tag_label
-                    or str(self._quality_label_by_code.get(quality_code_for_filter) or "").strip()
-                    or search_tag_label
-                )
-                if not self._should_keep_entry(
-                    title=filter_title,
-                    quality_code=quality_code_for_filter,
-                    quality_label=quality_label_for_filter
-                ):
-                    continue
-
-                entry_hash = str(down_item.get("hash") or "").strip()
-                enclosure, detail_data = self._resolve_enclosure(
-                    client=client,
-                    base_url=base_url,
-                    resource_dir=res_dir,
-                    resource_id=res_id,
-                    title=title,
-                    info_hash=entry_hash,
-                    detail_data=detail_data,
-                    fetcher=guarded_get
-                )
-                if not enclosure:
-                    continue
-
-                if cache_key and cache_key not in parent_meta_cache:
-                    try:
-                        parent_dir, parent_id = cache_key.split("/", 1)
-                    except Exception:
-                        parent_dir, parent_id = "", ""
-                    if parent_dir and parent_id:
-                        parent_meta_cache[cache_key] = self._fetch_parent_meta(
-                            client=client,
-                            base_url=base_url,
-                            parent_dir=parent_dir,
-                            parent_id=parent_id,
-                            fetcher=guarded_get
-                        )
-                parent_meta = parent_meta_cache.get(cache_key) or {}
-
-                down_size_text = str(down_item.get("size") or "").strip()
-                detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
-                search_size_text = str(entry.get("size") or "").strip()
-                size_bytes = self._parse_size_bytes(down_size_text, detail_size_text, search_size_text)
-                seeds_text = down_item.get("seeds") or entry.get("seeds")
-                elapsed_text = str(down_item.get("time") or entry.get("time") or "").strip()
-                tag_text = tag_label or search_tag_label
-                detail_title = str(detail_data.get("title") or title).strip()
-                parent_year = str(parent_meta.get("year") or "").strip()
-                title_for_match = self._build_match_title(
-                    title=title,
-                    parent_title=str(parent_meta.get("title") or "").strip(),
-                    parent_year=parent_year
-                )
-                if cache_key not in skip_keyword_parent_keys:
-                    if not self._is_keyword_related(
-                        keyword,
-                        title_for_match,
-                        detail_title,
-                        str(parent_meta.get("title") or "").strip(),
-                        title
-                    ):
-                        continue
-                desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
-                description = " | ".join(desc_parts[:3])
-                if parent_year and not re.search(r"(19|20)\d{2}", description):
-                    description = f"{description} {parent_year}".strip()
-                description = self._append_unique_marker(
-                    description=description or detail_title or title,
-                    resource_id=res_id,
-                    enclosure=enclosure
-                )
-
-                results.append(TorrentInfo(
-                    site=site.get("id"),
-                    site_name=site.get("name"),
-                    site_cookie=site.get("cookie"),
-                    site_ua=site.get("ua"),
-                    site_proxy=site.get("proxy"),
-                    site_order=site.get("pri"),
-                    site_downloader=site.get("downloader"),
-                    title=title_for_match or title,
-                    description=description,
-                    enclosure=enclosure,
-                    page_url=detail_url,
-                    size=size_bytes,
-                    seeders=self._to_int(seeds_text),
-                    peers=0,
-                    grabs=0,
-                    pubdate=None,
-                    date_elapsed=elapsed_text,
-                    downloadvolumefactor=0,
-                    uploadvolumefactor=1,
-                ))
+                res_id, torrent = item
+                results.append(torrent)
                 result_ids.add(res_id)
 
             # 站点搜索页可能漏掉同父级下的部分条目，补充抓取父级 downlist 全量条目。
@@ -715,6 +577,262 @@ class GyingIndexer(_PluginBase):
         except Exception as err:
             logger.error(f"观影(GYing)搜索异常：关键词='{keyword}'，错误={err}")
             return []
+
+    def _build_search_result_entry(self, entry: Dict[str, Any], site: dict, keyword: str,
+                                   client: RequestUtils, base_url: str,
+                                   fetcher: Callable[[str], str],
+                                   parent_meta_cache: Dict[str, Dict[str, Any]],
+                                   parent_default_dir: Dict[str, str],
+                                   parent_down_entries_cache: Dict[str, List[Dict[str, Any]]],
+                                   parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]],
+                                   bt_parent_cache: Dict[str, str],
+                                   skip_keyword_parent_keys: Set[str],
+                                   shared_lock: threading.RLock) -> Optional[Tuple[str, TorrentInfo]]:
+        res_id = str(entry.get("id") or "").strip()
+        if not res_id:
+            return None
+        res_dir = str(entry.get("dir") or "bt").strip().lower() or "bt"
+        skip_keyword_match = bool(entry.get("__skip_keyword_match"))
+
+        title = str(entry.get("title") or "").strip()
+        if not title:
+            return None
+        search_quality_code = str(entry.get("quality") or "").strip().lower()
+        search_tag_label = str(entry.get("tag") or "").strip()
+
+        if res_dir in ("tv", "ac", "mv"):
+            self._ensure_parent_down_entries_cached(
+                client=client,
+                base_url=base_url,
+                parent_dir=res_dir,
+                parent_id=res_id,
+                fetcher=fetcher,
+                parent_default_dir=parent_default_dir,
+                parent_down_entries_cache=parent_down_entries_cache,
+                parent_down_entry_map_cache=parent_down_entry_map_cache,
+                bt_parent_cache=bt_parent_cache,
+                skip_keyword_parent_keys=skip_keyword_parent_keys,
+                shared_lock=shared_lock,
+                default_dir="bt",
+                skip_keyword_match=skip_keyword_match,
+            )
+            return None
+
+        detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
+        detail_data: Dict[str, Any] = {}
+        tag_code = ""
+        tag_label = ""
+        down_item: Dict[str, Any] = {}
+        with shared_lock:
+            cache_key = str(bt_parent_cache.get(res_id) or "").strip()
+            if cache_key:
+                down_item = parent_down_entry_map_cache.get(cache_key, {}).get(res_id) or {}
+
+        if down_item:
+            res_dir = str(down_item.get("dir") or res_dir).strip().lower() or res_dir
+            title = str(down_item.get("title") or title).strip() or title
+            detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
+            tag_code = str(down_item.get("quality") or "").strip().lower()
+            tag_label = str(down_item.get("quality_label") or "").strip()
+        else:
+            detail_html = fetcher(detail_url)
+            if detail_html:
+                _detail_data = self._extract_js_object(detail_html, "_obj.d")
+                if isinstance(_detail_data, dict):
+                    detail_data = _detail_data
+
+            parent_dir, parent_id = self._parse_parent_route(detail_data.get("du"))
+            if parent_dir and parent_id:
+                cache_key = self._ensure_parent_down_entries_cached(
+                    client=client,
+                    base_url=base_url,
+                    parent_dir=parent_dir,
+                    parent_id=parent_id,
+                    fetcher=fetcher,
+                    parent_default_dir=parent_default_dir,
+                    parent_down_entries_cache=parent_down_entries_cache,
+                    parent_down_entry_map_cache=parent_down_entry_map_cache,
+                    bt_parent_cache=bt_parent_cache,
+                    skip_keyword_parent_keys=skip_keyword_parent_keys,
+                    shared_lock=shared_lock,
+                    default_dir=res_dir,
+                    skip_keyword_match=False,
+                )
+                with shared_lock:
+                    down_item = parent_down_entry_map_cache.get(cache_key, {}).get(res_id) or {}
+                if down_item:
+                    res_dir = str(down_item.get("dir") or res_dir).strip().lower() or res_dir
+                    title = str(down_item.get("title") or title).strip() or title
+                    detail_url = urljoin(base_url, f"{res_dir}/{res_id}")
+                    tag_code = str(down_item.get("quality") or "").strip().lower()
+                    tag_label = str(down_item.get("quality_label") or "").strip()
+
+        filter_title = str(
+            detail_data.get("title")
+            or down_item.get("title")
+            or title
+            or ""
+        ).strip()
+        quality_code_for_filter = tag_code or search_quality_code
+        quality_label_for_filter = (
+            tag_label
+            or str(self._quality_label_by_code.get(quality_code_for_filter) or "").strip()
+            or search_tag_label
+        )
+        if not self._should_keep_entry(
+            title=filter_title,
+            quality_code=quality_code_for_filter,
+            quality_label=quality_label_for_filter
+        ):
+            return None
+
+        entry_hash = str(down_item.get("hash") or "").strip()
+        enclosure, detail_data = self._resolve_enclosure(
+            client=client,
+            base_url=base_url,
+            resource_dir=res_dir,
+            resource_id=res_id,
+            title=title,
+            info_hash=entry_hash,
+            detail_data=detail_data,
+            fetcher=fetcher
+        )
+        if not enclosure:
+            return None
+
+        parent_meta = self._ensure_parent_meta_cached(
+            client=client,
+            base_url=base_url,
+            cache_key=cache_key,
+            parent_meta_cache=parent_meta_cache,
+            fetcher=fetcher,
+            shared_lock=shared_lock,
+        )
+
+        down_size_text = str(down_item.get("size") or "").strip()
+        detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
+        search_size_text = str(entry.get("size") or "").strip()
+        size_bytes = self._parse_size_bytes(down_size_text, detail_size_text, search_size_text)
+        seeds_text = down_item.get("seeds") or entry.get("seeds")
+        elapsed_text = str(down_item.get("time") or entry.get("time") or "").strip()
+        tag_text = tag_label or search_tag_label
+        detail_title = str(detail_data.get("title") or title).strip()
+        parent_year = str(parent_meta.get("year") or "").strip()
+        title_for_match = self._build_match_title(
+            title=title,
+            parent_title=str(parent_meta.get("title") or "").strip(),
+            parent_year=parent_year
+        )
+        if cache_key not in skip_keyword_parent_keys:
+            if not self._is_keyword_related(
+                keyword,
+                title_for_match,
+                detail_title,
+                str(parent_meta.get("title") or "").strip(),
+                title
+            ):
+                return None
+        desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
+        description = " | ".join(desc_parts[:3])
+        if parent_year and not re.search(r"(19|20)\d{2}", description):
+            description = f"{description} {parent_year}".strip()
+        description = self._append_unique_marker(
+            description=description or detail_title or title,
+            resource_id=res_id,
+            enclosure=enclosure
+        )
+        return res_id, TorrentInfo(
+            site=site.get("id"),
+            site_name=site.get("name"),
+            site_cookie=site.get("cookie"),
+            site_ua=site.get("ua"),
+            site_proxy=site.get("proxy"),
+            site_order=site.get("pri"),
+            site_downloader=site.get("downloader"),
+            title=title_for_match or title,
+            description=description,
+            enclosure=enclosure,
+            page_url=detail_url,
+            size=size_bytes,
+            seeders=self._to_int(seeds_text),
+            peers=0,
+            grabs=0,
+            pubdate=None,
+            date_elapsed=elapsed_text,
+            downloadvolumefactor=0,
+            uploadvolumefactor=1,
+        )
+
+    def _ensure_parent_down_entries_cached(self, client: RequestUtils, base_url: str,
+                                           parent_dir: str, parent_id: str,
+                                           fetcher: Callable[[str], str],
+                                           parent_default_dir: Dict[str, str],
+                                           parent_down_entries_cache: Dict[str, List[Dict[str, Any]]],
+                                           parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]],
+                                           bt_parent_cache: Dict[str, str],
+                                           skip_keyword_parent_keys: Set[str],
+                                           shared_lock: threading.RLock,
+                                           default_dir: str = "bt",
+                                           skip_keyword_match: bool = False) -> str:
+        cache_key = f"{parent_dir}/{parent_id}"
+        with shared_lock:
+            parent_default_dir.setdefault(cache_key, default_dir)
+            if skip_keyword_match:
+                skip_keyword_parent_keys.add(cache_key)
+            cached_entries = parent_down_entries_cache.get(cache_key)
+        if cached_entries is None:
+            down_entries = self._fetch_parent_down_entries(
+                client=client,
+                base_url=base_url,
+                parent_dir=parent_dir,
+                parent_id=parent_id,
+                fetcher=fetcher
+            )
+            id_map: Dict[str, Dict[str, Any]] = {}
+            for item in down_entries:
+                child_id = str(item.get("id") or "").strip()
+                if not child_id:
+                    continue
+                id_map[child_id] = item
+            with shared_lock:
+                if cache_key not in parent_down_entries_cache:
+                    parent_down_entries_cache[cache_key] = down_entries
+                    parent_down_entry_map_cache[cache_key] = id_map
+                    for child_id in id_map:
+                        bt_parent_cache[child_id] = cache_key
+                else:
+                    existing_map = parent_down_entry_map_cache.get(cache_key, {})
+                    for child_id in existing_map:
+                        bt_parent_cache[child_id] = cache_key
+        return cache_key
+
+    def _ensure_parent_meta_cached(self, client: RequestUtils, base_url: str,
+                                   cache_key: str,
+                                   parent_meta_cache: Dict[str, Dict[str, Any]],
+                                   fetcher: Callable[[str], str],
+                                   shared_lock: threading.RLock) -> Dict[str, Any]:
+        cache_token = str(cache_key or "").strip()
+        if not cache_token:
+            return {}
+        with shared_lock:
+            cached = parent_meta_cache.get(cache_token)
+        if cached is not None:
+            return cached
+        try:
+            parent_dir, parent_id = cache_token.split("/", 1)
+        except Exception:
+            return {}
+        parent_meta = self._fetch_parent_meta(
+            client=client,
+            base_url=base_url,
+            parent_dir=parent_dir,
+            parent_id=parent_id,
+            fetcher=fetcher
+        )
+        with shared_lock:
+            if cache_token not in parent_meta_cache:
+                parent_meta_cache[cache_token] = parent_meta
+            return parent_meta_cache.get(cache_token) or {}
 
     def _resolve_site_cookie(self, site: dict, base_url: str, ua: str,
                              proxies: Optional[Dict[str, str]], timeout: int,
@@ -1266,26 +1384,33 @@ class GyingIndexer(_PluginBase):
         当任意请求返回 PoW 验证页时，自动求解并用新 cookie 重试，保证搜索全程不被拦截。
         """
         pow_resolved_cookie: List[str] = [""]  # 已解决的 PoW cookie（闭包共享）
+        cache_lock = threading.RLock()
+        pow_lock = threading.Lock()
+        cache_miss = object()
 
         def _getter(url: str) -> str:
             target = str(url or "").strip()
             if not target:
                 return ""
-            if target in url_cache:
-                request_state["cache_hit"] = int(request_state.get("cache_hit") or 0) + 1
-                return url_cache[target]
+            with cache_lock:
+                cached = url_cache.get(target, cache_miss)
+                if cached is not cache_miss:
+                    request_state["cache_hit"] = int(request_state.get("cache_hit") or 0) + 1
+                    return str(cached or "")
 
-            request_state["http"] = int(request_state.get("http") or 0) + 1
+            with cache_lock:
+                request_state["http"] = int(request_state.get("http") or 0) + 1
+                resolved_cookie = str(pow_resolved_cookie[0] or "").strip()
 
             # 已解过 PoW：直接用新 cookie 发请求，跳过旧 cookie 的 client
-            if pow_resolved_cookie[0]:
+            if resolved_cookie:
                 try:
                     resp = requests.get(
                         target,
                         headers={
                             "User-Agent": ua or settings.USER_AGENT,
                             "Referer": base_url,
-                            "Cookie": pow_resolved_cookie[0],
+                            "Cookie": resolved_cookie,
                         },
                         proxies=proxies,
                         timeout=max(5, int(timeout or 20)),
@@ -1294,7 +1419,8 @@ class GyingIndexer(_PluginBase):
                 except Exception as err:
                     logger.warn(f"观影(GYing)请求异常：{err}")
                     text = ""
-                url_cache[target] = text or ""
+                with cache_lock:
+                    url_cache[target] = text or ""
                 return text or ""
 
             text = client.get(target) or ""
@@ -1302,45 +1428,68 @@ class GyingIndexer(_PluginBase):
             # 若响应为 PoW 验证页，自动求解并重试
             if self._is_pow_page(text) and base_url:
                 logger.info(f"观影(GYing)搜索中途遇到 PoW 验证（URL={target}），正在自动求解...")
-                existing = str(cookie or "").strip()
-                pow_extra = self._solve_pow_from_html(
-                    html_text=text,
-                    target_url=target,
-                    base_url=base_url,
-                    ua=ua, proxies=proxies, timeout=timeout,
-                    existing_cookie=existing,
-                )
-                if not pow_extra:
-                    logger.warn(f"观影(GYing)搜索中途 PoW 求解失败，跳过 URL={target}")
-                    url_cache[target] = ""
-                    return ""
+                with pow_lock:
+                    with cache_lock:
+                        latest_cookie = str(pow_resolved_cookie[0] or "").strip()
+                    if latest_cookie:
+                        try:
+                            resp = requests.get(
+                                target,
+                                headers={
+                                    "User-Agent": ua or settings.USER_AGENT,
+                                    "Referer": base_url,
+                                    "Cookie": latest_cookie,
+                                },
+                                proxies=proxies,
+                                timeout=max(5, int(timeout or 20)),
+                            )
+                            text = resp.text if resp.ok else ""
+                        except Exception as err:
+                            logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
+                            text = ""
+                    else:
+                        existing = str(cookie or "").strip()
+                        pow_extra = self._solve_pow_from_html(
+                            html_text=text,
+                            target_url=target,
+                            base_url=base_url,
+                            ua=ua, proxies=proxies, timeout=timeout,
+                            existing_cookie=existing,
+                        )
+                        if not pow_extra:
+                            logger.warn(f"观影(GYing)搜索中途 PoW 求解失败，跳过 URL={target}")
+                            with cache_lock:
+                                url_cache[target] = ""
+                            return ""
 
-                merged = self._merge_cookie_str(existing, pow_extra)
-                pow_resolved_cookie[0] = merged
-                logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
-                # 回写 cookie，后续搜索直接使用新 cookie
-                if site is not None:
-                    site["cookie"] = merged
-                    self._persist_site_cookie(site=site, cookie=merged)
+                        merged = self._merge_cookie_str(existing, pow_extra)
+                        with cache_lock:
+                            pow_resolved_cookie[0] = merged
+                        logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
+                        # 回写 cookie，后续搜索直接使用新 cookie
+                        if site is not None:
+                            site["cookie"] = merged
+                            self._persist_site_cookie(site=site, cookie=merged)
 
-                # 用新 cookie 重试当前 URL
-                try:
-                    resp = requests.get(
-                        target,
-                        headers={
-                            "User-Agent": ua or settings.USER_AGENT,
-                            "Referer": base_url,
-                            "Cookie": merged,
-                        },
-                        proxies=proxies,
-                        timeout=max(5, int(timeout or 20)),
-                    )
-                    text = resp.text if resp.ok else ""
-                except Exception as err:
-                    logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
-                    text = ""
+                        # 用新 cookie 重试当前 URL
+                        try:
+                            resp = requests.get(
+                                target,
+                                headers={
+                                    "User-Agent": ua or settings.USER_AGENT,
+                                    "Referer": base_url,
+                                    "Cookie": merged,
+                                },
+                                proxies=proxies,
+                                timeout=max(5, int(timeout or 20)),
+                            )
+                            text = resp.text if resp.ok else ""
+                        except Exception as err:
+                            logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
+                            text = ""
 
-            url_cache[target] = text or ""
+            with cache_lock:
+                url_cache[target] = text or ""
             return text or ""
 
         return _getter
