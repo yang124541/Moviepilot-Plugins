@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.9.1"
+    plugin_version = "1.9.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1077,7 +1077,12 @@ class GyingIndexer(_PluginBase):
         )
         if not refreshed:
             logger.warn("观影(GYing)自动登录失败，继续使用现有 cookie 搜索。")
-            return cookie, warm_cache
+            fallback_cookie = self._normalize_cookie_header(effective_cookie or cookie)
+            if fallback_cookie and fallback_cookie != cookie:
+                site["cookie"] = fallback_cookie
+                self._remember_runtime_site_cookie(site=site, base_url=base_url, cookie=fallback_cookie)
+                self._persist_site_cookie(site=site, cookie=fallback_cookie)
+            return fallback_cookie or cookie, warm_cache
 
         # 登录成功后直接回写，不再发第二次预检请求（避免再次触发 PoW）
         site["cookie"] = refreshed
@@ -1725,6 +1730,7 @@ class GyingIndexer(_PluginBase):
                                 # 回写 cookie，后续搜索直接使用新 cookie
                                 if site is not None:
                                     site["cookie"] = merged
+                                    self._remember_runtime_site_cookie(site=site, base_url=base_url, cookie=merged)
                                     self._persist_site_cookie(site=site, cookie=merged)
 
                                 # 用新 cookie 重试当前 URL
