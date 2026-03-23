@@ -7,6 +7,7 @@ import threading
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
+from time import perf_counter
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urljoin, urlparse
 
@@ -27,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.8.2"
+    plugin_version = "1.8.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -355,6 +356,7 @@ class GyingIndexer(_PluginBase):
             return None
 
         start_at = datetime.now()
+        total_started_at = perf_counter()
         base_url = self._resolve_base_url(site)
         if not base_url:
             return []
@@ -386,7 +388,7 @@ class GyingIndexer(_PluginBase):
                 timeout=timeout,
                 referer=referer
             )
-            request_state: Dict[str, int] = {"http": 0, "cache_hit": 0}
+            request_state: Dict[str, Any] = {"http": 0, "cache_hit": 0, "http_time_ms": 0.0}
             url_cache: Dict[str, str] = dict(warm_cache or {})
             guarded_get = self._make_cached_get(
                 client=client,
@@ -399,11 +401,17 @@ class GyingIndexer(_PluginBase):
                 cookie=cookie,
                 site=site,
             )
+            collect_started_at = perf_counter()
             search_entries = self._collect_search_entries(
                 client=client,
                 base_url=base_url,
                 keyword=keyword,
                 fetcher=guarded_get
+            )
+            collect_elapsed_ms = (perf_counter() - collect_started_at) * 1000
+            logger.debug(
+                f"观影(GYing)搜索页采集耗时：关键词='{keyword}'，条目数={len(search_entries)}，"
+                f"耗时={collect_elapsed_ms:.1f}ms"
             )
             if not search_entries:
                 logger.warn(f"观影(GYing)搜索结果为空：关键词='{keyword}'，分页后无可用条目")
@@ -440,8 +448,19 @@ class GyingIndexer(_PluginBase):
             )
             next_order = len(search_entries)
 
-            def _submit_task(executor: ThreadPoolExecutor, task: Dict[str, Any]):
+            def _task_title(task: Dict[str, Any]) -> str:
                 task_kind = str(task.get("kind") or "search").strip().lower()
+                if task_kind == "child":
+                    return str((task.get("down_item") or {}).get("title") or "").strip()
+                return str((task.get("entry") or {}).get("title") or "").strip()
+
+            def _submit_task(executor: ThreadPoolExecutor, task: Dict[str, Any]):
+                task["started_at"] = perf_counter()
+                task_kind = str(task.get("kind") or "search").strip().lower()
+                logger.debug(
+                    f"观影(GYing)并发任务开始：kind={task_kind}，resource_id={str(task.get('resource_id') or '').strip() or '-'}，"
+                    f"title={_task_title(task) or '-'}，queue_left={len(task_queue)}"
+                )
                 if task_kind == "child":
                     return executor.submit(
                         self._build_child_result_entry,
@@ -479,6 +498,7 @@ class GyingIndexer(_PluginBase):
                     shared_lock,
                 )
 
+            concurrent_started_at = perf_counter()
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="gying") as executor:
                 running_tasks: Dict[Any, Dict[str, Any]] = {}
                 while task_queue or running_tasks:
@@ -495,6 +515,7 @@ class GyingIndexer(_PluginBase):
                         task_kind = str(task.get("kind") or "search").strip().lower()
                         task_order = int(task.get("order") or 0)
                         task_resource_id = str(task.get("resource_id") or "").strip()
+                        task_elapsed_ms = (perf_counter() - float(task.get("started_at") or perf_counter())) * 1000
 
                         try:
                             item = future.result()
@@ -505,6 +526,11 @@ class GyingIndexer(_PluginBase):
                                 logger.debug(f"观影(GYing)并发处理搜索条目异常：{err}")
                             item = None
 
+                        logger.debug(
+                            f"观影(GYing)并发任务耗时：kind={task_kind}，resource_id={task_resource_id or '-'}，"
+                            f"title={_task_title(task) or '-'}，order={task_order}，"
+                            f"耗时={task_elapsed_ms:.1f}ms，结果={'命中' if item else '空'}"
+                        )
                         ordered_results[task_order] = item
 
                         if task_kind == "search" and task_resource_id:
@@ -540,6 +566,7 @@ class GyingIndexer(_PluginBase):
                             )
                             next_order += 1
 
+            concurrent_elapsed_ms = (perf_counter() - concurrent_started_at) * 1000
             for index in sorted(ordered_results.keys()):
                 item = ordered_results.get(index)
                 if not item:
@@ -550,6 +577,12 @@ class GyingIndexer(_PluginBase):
                 results.append(torrent)
                 result_ids.add(res_id)
 
+            total_elapsed_ms = (perf_counter() - total_started_at) * 1000
+            logger.debug(
+                f"观影(GYing)耗时汇总：关键词='{keyword}'，搜索页采集={collect_elapsed_ms:.1f}ms，"
+                f"并发阶段={concurrent_elapsed_ms:.1f}ms，总耗时={total_elapsed_ms:.1f}ms，"
+                f"HTTP累计={float(request_state.get('http_time_ms') or 0.0):.1f}ms"
+            )
             cost = (datetime.now() - start_at).seconds
             logger.info(
                 f"观影(GYing)搜索完成：关键词='{keyword}'，返回条数={len(results)}，耗时={cost}s，"
@@ -1509,7 +1542,7 @@ class GyingIndexer(_PluginBase):
 
     def _make_cached_get(self, client: RequestUtils,
                          url_cache: Dict[str, str],
-                         request_state: Dict[str, int],
+                         request_state: Dict[str, Any],
                          base_url: str = "",
                          ua: str = "",
                          proxies: Optional[Dict[str, str]] = None,
@@ -1526,6 +1559,17 @@ class GyingIndexer(_PluginBase):
         cache_miss = object()
         inflight_events: Dict[str, threading.Event] = {}
 
+        def _record_http_timing(phase: str, target: str, started_at: float,
+                                status: str = "", extra: str = "") -> None:
+            elapsed_ms = (perf_counter() - started_at) * 1000
+            with cache_lock:
+                request_state["http_time_ms"] = float(request_state.get("http_time_ms") or 0.0) + elapsed_ms
+            suffix = f"，{extra}" if extra else ""
+            logger.debug(
+                f"观影(GYing)HTTP耗时：phase={phase}，url={target}，status={status or '-'}，"
+                f"耗时={elapsed_ms:.1f}ms{suffix}"
+            )
+
         def _getter(url: str) -> str:
             target = str(url or "").strip()
             if not target:
@@ -1534,6 +1578,7 @@ class GyingIndexer(_PluginBase):
                 cached = url_cache.get(target, cache_miss)
                 if cached is not cache_miss:
                     request_state["cache_hit"] = int(request_state.get("cache_hit") or 0) + 1
+                    logger.debug(f"观影(GYing)请求缓存命中：url={target}")
                     return str(cached or "")
                 waiter = inflight_events.get(target)
                 if waiter is None:
@@ -1547,15 +1592,19 @@ class GyingIndexer(_PluginBase):
                     resolved_cookie = ""
 
             if not is_leader:
+                wait_started_at = perf_counter()
                 waiter.wait()
+                wait_elapsed_ms = (perf_counter() - wait_started_at) * 1000
                 with cache_lock:
                     cached = url_cache.get(target, "")
                     request_state["cache_hit"] = int(request_state.get("cache_hit") or 0) + 1
+                logger.debug(f"观影(GYing)请求单飞复用：url={target}，等待耗时={wait_elapsed_ms:.1f}ms")
                 return str(cached or "")
 
             # 已解过 PoW：直接用新 cookie 发请求，跳过旧 cookie 的 client
             try:
                 if resolved_cookie:
+                    req_started_at = perf_counter()
                     try:
                         resp = requests.get(
                             target,
@@ -1568,11 +1617,33 @@ class GyingIndexer(_PluginBase):
                             timeout=max(5, int(timeout or 20)),
                         )
                         text = resp.text if resp.ok else ""
+                        _record_http_timing(
+                            phase="resolved-cookie",
+                            target=target,
+                            started_at=req_started_at,
+                            status=str(resp.status_code),
+                            extra=f"body={'有' if text else '空'}"
+                        )
                     except Exception as err:
                         logger.warn(f"观影(GYing)请求异常：{err}")
+                        _record_http_timing(
+                            phase="resolved-cookie",
+                            target=target,
+                            started_at=req_started_at,
+                            status="EXC",
+                            extra=str(err)
+                        )
                         text = ""
                 else:
+                    req_started_at = perf_counter()
                     text = client.get(target) or ""
+                    _record_http_timing(
+                        phase="client",
+                        target=target,
+                        started_at=req_started_at,
+                        status="OK",
+                        extra=f"body={'有' if text else '空'}"
+                    )
 
                 # 若响应为 PoW 验证页，自动求解并重试
                 if self._is_pow_page(text) and base_url:
@@ -1581,6 +1652,7 @@ class GyingIndexer(_PluginBase):
                         with cache_lock:
                             latest_cookie = str(pow_resolved_cookie[0] or "").strip()
                         if latest_cookie:
+                            retry_started_at = perf_counter()
                             try:
                                 resp = requests.get(
                                     target,
@@ -1593,8 +1665,22 @@ class GyingIndexer(_PluginBase):
                                     timeout=max(5, int(timeout or 20)),
                                 )
                                 text = resp.text if resp.ok else ""
+                                _record_http_timing(
+                                    phase="pow-reuse-retry",
+                                    target=target,
+                                    started_at=retry_started_at,
+                                    status=str(resp.status_code),
+                                    extra=f"body={'有' if text else '空'}"
+                                )
                             except Exception as err:
                                 logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
+                                _record_http_timing(
+                                    phase="pow-reuse-retry",
+                                    target=target,
+                                    started_at=retry_started_at,
+                                    status="EXC",
+                                    extra=str(err)
+                                )
                                 text = ""
                         else:
                             existing = str(cookie or "").strip()
@@ -1619,6 +1705,7 @@ class GyingIndexer(_PluginBase):
                                     self._persist_site_cookie(site=site, cookie=merged)
 
                                 # 用新 cookie 重试当前 URL
+                                retry_started_at = perf_counter()
                                 try:
                                     resp = requests.get(
                                         target,
@@ -1631,8 +1718,22 @@ class GyingIndexer(_PluginBase):
                                         timeout=max(5, int(timeout or 20)),
                                     )
                                     text = resp.text if resp.ok else ""
+                                    _record_http_timing(
+                                        phase="pow-retry",
+                                        target=target,
+                                        started_at=retry_started_at,
+                                        status=str(resp.status_code),
+                                        extra=f"body={'有' if text else '空'}"
+                                    )
                                 except Exception as err:
                                     logger.warn(f"观影(GYing)PoW 重试请求异常：{err}")
+                                    _record_http_timing(
+                                        phase="pow-retry",
+                                        target=target,
+                                        started_at=retry_started_at,
+                                        status="EXC",
+                                        extra=str(err)
+                                    )
                                     text = ""
 
                 with cache_lock:
