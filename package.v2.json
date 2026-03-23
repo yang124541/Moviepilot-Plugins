@@ -46,11 +46,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.7.10",
+    "version": "1.8.1",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.8.1": "GYing 主链路继续优化：保持并发直连父级 downurl，不再访问父级详情页，同时补回父级年份推断，确保像“过家家”这类中字1080P/中字4K结果完整命中。",
       "v1.7.10": "修复 GYing 直连父级 downurl 后的年份丢失：从父级 downlist 子资源标题中自动推断父级年份，补回像“过家家”这类标题本身不带年份的中字1080P/中字4K结果。",
       "v1.7.9": "修复 GYing 直连父级 downurl 后的误过滤：当部分 bt 搜索结果尚未拿到父级标题时，不再提前做父级关键词强校验，避免中字1080P/中字4K结果被漏掉。",
       "v1.7.8": "GYing 主链路改为并发直连父级 downurl：搜索命中父级后不再额外请求父级详情页补元数据，直接展开 downlist；仅对 downlist 中缺少 hash 的子项再补详情，进一步降低请求次数。",
