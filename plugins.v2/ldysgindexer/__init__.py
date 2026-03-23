@@ -23,7 +23,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.2.2"
+    plugin_version = "1.2.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -35,6 +35,9 @@ class LdysgIndexer(_PluginBase):
     _extra_hosts = ""
     _detail_concurrency = 5
     _thread_local = threading.local()
+    _shared_ocr = None
+    _shared_ocr_init_lock = threading.Lock()
+    _shared_ocr_predict_lock = threading.Lock()
 
     _default_host = "ldysg.com"
     _default_base_url = "https://www.ldysg.com/"
@@ -340,6 +343,7 @@ class LdysgIndexer(_PluginBase):
                         "OCR识别耗时": self._format_duration(0),
                         "验证码提交耗时": self._format_duration(0),
                         "成功返回种子列表耗时": self._format_duration(0),
+                        "重试重新取验证码耗时": self._format_duration(0),
                         "种子总耗时": self._format_duration(0),
                         "验证码重试次数": 0,
                         "资源数": 0,
@@ -519,6 +523,7 @@ class LdysgIndexer(_PluginBase):
             "OCR识别耗时": self._format_duration(0),
             "验证码提交耗时": self._format_duration(0),
             "成功返回种子列表耗时": self._format_duration(0),
+            "重试重新取验证码耗时": self._format_duration(0),
             "种子总耗时": self._format_duration(0),
             "验证码重试次数": 0,
             "资源数": 0,
@@ -529,6 +534,7 @@ class LdysgIndexer(_PluginBase):
         captcha_ocr_cost = 0.0
         captcha_submit_cost = 0.0
         success_return_cost = 0.0
+        retry_refresh_cost = 0.0
         headers = {
             "User-Agent": ua or settings.USER_AGENT,
             "Referer": referer,
@@ -550,6 +556,7 @@ class LdysgIndexer(_PluginBase):
             timing_item["OCR识别耗时"] = self._format_duration(captcha_ocr_cost)
             timing_item["验证码提交耗时"] = self._format_duration(captcha_submit_cost)
             timing_item["成功返回种子列表耗时"] = self._format_duration(success_return_cost)
+            timing_item["重试重新取验证码耗时"] = self._format_duration(retry_refresh_cost)
             timing_item["种子总耗时"] = self._format_duration(total_cost)
             timing_item["验证码重试次数"] = retries
             timing_item["状态"] = status
@@ -568,6 +575,13 @@ class LdysgIndexer(_PluginBase):
             except Exception as e:
                 logger.debug(f"老电影资源(ldysg)请求异常：vid={vid}，{e}")
                 return None
+
+        def _refresh_captcha_resp() -> Optional[dict]:
+            nonlocal retry_refresh_cost
+            refresh_started = perf_counter()
+            resp = _post_vbt("1")
+            retry_refresh_cost += perf_counter() - refresh_started
+            return resp
 
         # 第一次请求（触发验证码）
         first_vbt_started = perf_counter()
@@ -629,7 +643,7 @@ class LdysgIndexer(_PluginBase):
                         f"片名='{self._display_title(title)}'，body='验证码识别失败'"
                     )
                     if captcha_round < max_captcha_rounds:
-                        captcha_resp = _post_vbt("1")
+                        captcha_resp = _refresh_captcha_resp()
                         if captcha_resp is None or captcha_resp.status_code != 401:
                             logger.debug(
                                 f"老电影资源(ldysg)验证码验证失败，"
@@ -656,7 +670,7 @@ class LdysgIndexer(_PluginBase):
                     try:
                         success_return_started = perf_counter()
                         items = self._extract_vbt_items(resp2.json())
-                        success_return_cost = submit_cost + (perf_counter() - success_return_started)
+                        success_return_cost = perf_counter() - success_return_started
                         return items, _build_timing("验证码通过", captcha_round - 1)
                     except Exception:
                         return [], _build_timing("种子响应解析失败", captcha_round - 1)
@@ -671,7 +685,7 @@ class LdysgIndexer(_PluginBase):
                 )
 
                 if captcha_round < max_captcha_rounds:
-                    captcha_resp = _post_vbt("1")
+                    captcha_resp = _refresh_captcha_resp()
                     if captcha_resp is None:
                         logger.debug(
                             f"老电影资源(ldysg)验证码验证失败，"
@@ -784,9 +798,10 @@ class LdysgIndexer(_PluginBase):
             if not img_bytes:
                 return "", {"download_cost": download_cost, "ocr_cost": 0.0}
 
-            ocr = LdysgIndexer._get_thread_local_ocr()
+            ocr = LdysgIndexer._get_shared_ocr()
             ocr_started = perf_counter()
-            result = str(ocr.classification(img_bytes) or "").strip()
+            with LdysgIndexer._shared_ocr_predict_lock:
+                result = str(ocr.classification(img_bytes) or "").strip()
             ocr_cost = perf_counter() - ocr_started
             # 只保留数字和字母，去除空白
             result = re.sub(r"\s+", "", result)
@@ -805,12 +820,15 @@ class LdysgIndexer(_PluginBase):
         return session
 
     @classmethod
-    def _get_thread_local_ocr(cls):
-        ocr = getattr(cls._thread_local, "ocr", None)
+    def _get_shared_ocr(cls):
+        ocr = cls._shared_ocr
         if ocr is None:
-            import ddddocr  # type: ignore
-            ocr = ddddocr.DdddOcr(show_ad=False)
-            cls._thread_local.ocr = ocr
+            with cls._shared_ocr_init_lock:
+                ocr = cls._shared_ocr
+                if ocr is None:
+                    import ddddocr  # type: ignore
+                    ocr = ddddocr.DdddOcr(show_ad=False)
+                    cls._shared_ocr = ocr
         return ocr
 
     @classmethod
@@ -824,8 +842,9 @@ class LdysgIndexer(_PluginBase):
             finally:
                 cls._thread_local.session = None
 
-        if getattr(cls._thread_local, "ocr", None) is not None:
-            cls._thread_local.ocr = None
+        with cls._shared_ocr_init_lock:
+            if cls._shared_ocr is not None:
+                cls._shared_ocr = None
 
     @staticmethod
     def _rand_ip() -> str:
