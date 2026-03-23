@@ -46,11 +46,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.8.8",
+    "version": "1.8.9",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.8.9": "调整 GYing 日志口径：开始搜索日志提前到前置预检之前，新增前置预检耗时汇总，并移除每个并发种子一条的耗时日志，便于直接区分预检耗时、搜索页采集耗时与并发阶段耗时。",
       "v1.8.8": "调整 GYing 额外域名策略：若配置额外域名，则按填写顺序优先作为主搜索域名；当前域名不可用时自动回退到下一项，不再优先使用站点原始 URL。",
       "v1.8.7": "更新 GYing 默认主地址为 https://www.xn--kivn76b41nnhi.com/，并将该域名设为默认主域优先级，避免初始化与回退链路继续优先命中旧域名。",
       "v1.8.6": "修复 GYing 旧域名切换漏判：旧域名首页先返回 PoW 时，也会直接通过 /urlop/ 发现最新地址，不再卡在 www.gying.si；同时自动登录不再回退访问无 www 根域名，避免 gying.si 根域名偶发 SSL EOF 干扰登录。",

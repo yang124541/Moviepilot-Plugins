@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.8.8"
+    plugin_version = "1.8.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -361,8 +361,15 @@ class GyingIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
+        logger.info(
+            f"观影(GYing)开始搜索：关键词='{keyword}'，"
+            f"过滤开关[1080={self._enable_1080}, 中字1080={self._enable_zh1080}, "
+            f"4K={self._enable_4k}, 中字4K={self._enable_zh4k}, 原盘={self._include_original}]"
+        )
+
         start_at = datetime.now()
         total_started_at = perf_counter()
+        preflight_started_at = perf_counter()
         base_url = self._resolve_base_url(site=site, ua=ua, proxies=proxies, timeout=timeout)
         if not base_url:
             return []
@@ -375,11 +382,10 @@ class GyingIndexer(_PluginBase):
             timeout=timeout,
             keyword=keyword,
         )
-
-        logger.info(
-            f"观影(GYing)开始搜索：关键词='{keyword}'，"
-            f"过滤开关[1080={self._enable_1080}, 中字1080={self._enable_zh1080}, "
-            f"4K={self._enable_4k}, 中字4K={self._enable_zh4k}, 原盘={self._include_original}]"
+        preflight_elapsed_ms = (perf_counter() - preflight_started_at) * 1000
+        logger.debug(
+            f"观影(GYing)前置预检耗时：关键词='{keyword}'，"
+            f"base_url={base_url}，耗时={preflight_elapsed_ms:.1f}ms"
         )
 
         try:
@@ -459,10 +465,6 @@ class GyingIndexer(_PluginBase):
             def _submit_task(executor: ThreadPoolExecutor, task: Dict[str, Any]):
                 task["started_at"] = perf_counter()
                 task_kind = str(task.get("kind") or "search").strip().lower()
-                logger.debug(
-                    f"观影(GYing)并发任务开始：kind={task_kind}，resource_id={str(task.get('resource_id') or '').strip() or '-'}，"
-                    f"title={_task_title(task) or '-'}，queue_left={len(task_queue)}"
-                )
                 if task_kind == "child":
                     return executor.submit(
                         self._build_child_result_entry,
@@ -528,11 +530,6 @@ class GyingIndexer(_PluginBase):
                                 logger.debug(f"观影(GYing)并发处理搜索条目异常：{err}")
                             item = None
 
-                        logger.debug(
-                            f"观影(GYing)并发任务耗时：kind={task_kind}，resource_id={task_resource_id or '-'}，"
-                            f"title={_task_title(task) or '-'}，order={task_order}，"
-                            f"耗时={task_elapsed_ms:.1f}ms，结果={'命中' if item else '空'}"
-                        )
                         ordered_results[task_order] = item
 
                         if task_kind == "search" and task_resource_id:
@@ -581,7 +578,7 @@ class GyingIndexer(_PluginBase):
 
             total_elapsed_ms = (perf_counter() - total_started_at) * 1000
             logger.debug(
-                f"观影(GYing)耗时汇总：关键词='{keyword}'，搜索页采集={collect_elapsed_ms:.1f}ms，"
+                f"观影(GYing)耗时汇总：关键词='{keyword}'，前置预检={preflight_elapsed_ms:.1f}ms，搜索页采集={collect_elapsed_ms:.1f}ms，"
                 f"并发阶段={concurrent_elapsed_ms:.1f}ms，总耗时={total_elapsed_ms:.1f}ms，"
                 f"HTTP累计={float(request_state.get('http_time_ms') or 0.0):.1f}ms"
             )
