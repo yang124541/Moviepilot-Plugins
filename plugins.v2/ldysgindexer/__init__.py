@@ -18,11 +18,16 @@ from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
 
 
+_CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) "
+               "Chrome/120.0.0.0 Safari/537.36")
+
+
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.2.7"
+    plugin_version = "1.2.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -558,7 +563,7 @@ class LdysgIndexer(_PluginBase):
         success_return_cost = 0.0
         retry_refresh_cost = 0.0
         headers = {
-            "User-Agent": ua or settings.USER_AGENT,
+            "User-Agent": _CHROME_UA,
             "Referer": referer,
             "X-Requested-With": "XMLHttpRequest",
             "Content-Type": "application/x-www-form-urlencoded",
@@ -800,9 +805,8 @@ class LdysgIndexer(_PluginBase):
             session = LdysgIndexer._get_thread_local_session()
             headers = {
                 "Referer": referer or "https://www.ldysg.com/",
+                "User-Agent": _CHROME_UA,
             }
-            if ua:
-                headers["User-Agent"] = ua
             if client_ip:
                 headers["X-Forwarded-For"] = client_ip
                 headers["X-Real-IP"] = client_ip
