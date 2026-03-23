@@ -46,11 +46,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.9.3",
+    "version": "1.9.4",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.4": "优化 GYing 登录前置预检：自动登录时优先尝试 www 根域，并在通过 PoW 后直接发起 AJAX 登录，不再额外重载首页，减少裸域回退与重复请求带来的多次 PoW 和预检耗时。",
       "v1.9.3": "修复 GYing 只保留配置域名后不接管搜索的问题：索引器注册和日志仍只显示 extra_hosts 中配置的域名，但站点识别继续兼容 GYing 名称与内置已知域名，避免因注册列表收紧导致搜索阶段完全不进入插件。",
       "v1.9.2": "修复 GYing 重复 PoW 的 cookie 回退问题：预检阶段解出 PoW 后，即使自动登录失败也会继续复用新拿到的 browser_verified cookie；搜索中途新解出的 cookie 也会同步写入运行时缓存，避免下一次搜索再次做人机验证。",
       "v1.9.1": "收紧 GYing 域名来源：填写 extra_hosts 后，索引器注册域名列表与实际搜索候选都只按配置项顺序使用，不再混入内置 gying/gyg 老域名；同时保留“当前配置域名失效才回退下一项”的策略。",

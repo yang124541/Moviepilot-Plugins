@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.9.3"
+    plugin_version = "1.9.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1492,7 +1492,7 @@ class GyingIndexer(_PluginBase):
 
                     # 处理 PoW 人机验证
                     if resp.ok and self._is_pow_page(resp.text):
-                        self._handle_pow_in_session(
+                        pow_ok = self._handle_pow_in_session(
                             session=session,
                             base_url=root,
                             html_text=resp.text,
@@ -1501,8 +1501,8 @@ class GyingIndexer(_PluginBase):
                             timeout=timeout,
                             target_url=root,
                         )
-                        # PoW 验证后重新加载首页以确认通过
-                        resp = session.get(root, timeout=max(5, int(timeout or 20)))
+                        if not pow_ok:
+                            continue
 
                     login_url = urljoin(root, "/user/login")
                     payload = {
@@ -1553,9 +1553,10 @@ class GyingIndexer(_PluginBase):
         if not host:
             return ["https://www.xn--kivn76b41nnhi.com/"]
         pure = host[4:] if host.startswith("www.") else host
-        candidates: List[str] = [f"{scheme}://{host}/"]
+        candidates: List[str] = []
         if pure and not host.startswith("www."):
             candidates.append(f"{scheme}://www.{pure}/")
+        candidates.append(f"{scheme}://{host}/")
         ret: List[str] = []
         seen: Set[str] = set()
         for item in candidates:
