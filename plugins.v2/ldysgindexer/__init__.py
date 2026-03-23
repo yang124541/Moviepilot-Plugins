@@ -23,7 +23,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.2.1"
+    plugin_version = "1.2.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -334,7 +334,12 @@ class LdysgIndexer(_PluginBase):
                     ordered_results[index] = []
                     ordered_timing_items[index] = {
                         "片名": title,
+                        "首次get_vbt耗时": self._format_duration(0),
                         "验证码耗时": self._format_duration(0),
+                        "验证码图片下载耗时": self._format_duration(0),
+                        "OCR识别耗时": self._format_duration(0),
+                        "验证码提交耗时": self._format_duration(0),
+                        "成功返回种子列表耗时": self._format_duration(0),
                         "种子总耗时": self._format_duration(0),
                         "验证码重试次数": 0,
                         "资源数": 0,
@@ -508,12 +513,22 @@ class LdysgIndexer(_PluginBase):
         captcha_started = None
         timing_item: Dict[str, Any] = {
             "片名": self._display_title(title),
+            "首次get_vbt耗时": self._format_duration(0),
             "验证码耗时": self._format_duration(0),
+            "验证码图片下载耗时": self._format_duration(0),
+            "OCR识别耗时": self._format_duration(0),
+            "验证码提交耗时": self._format_duration(0),
+            "成功返回种子列表耗时": self._format_duration(0),
             "种子总耗时": self._format_duration(0),
             "验证码重试次数": 0,
             "资源数": 0,
             "状态": "未开始",
         }
+        first_vbt_cost = 0.0
+        captcha_download_cost = 0.0
+        captcha_ocr_cost = 0.0
+        captcha_submit_cost = 0.0
+        success_return_cost = 0.0
         headers = {
             "User-Agent": ua or settings.USER_AGENT,
             "Referer": referer,
@@ -529,7 +544,12 @@ class LdysgIndexer(_PluginBase):
         def _build_timing(status: str, retries: int = 0) -> Dict[str, Any]:
             total_cost = perf_counter() - vbt_started
             captcha_cost = 0 if captcha_started is None else perf_counter() - captcha_started
+            timing_item["首次get_vbt耗时"] = self._format_duration(first_vbt_cost)
             timing_item["验证码耗时"] = self._format_duration(captcha_cost)
+            timing_item["验证码图片下载耗时"] = self._format_duration(captcha_download_cost)
+            timing_item["OCR识别耗时"] = self._format_duration(captcha_ocr_cost)
+            timing_item["验证码提交耗时"] = self._format_duration(captcha_submit_cost)
+            timing_item["成功返回种子列表耗时"] = self._format_duration(success_return_cost)
             timing_item["种子总耗时"] = self._format_duration(total_cost)
             timing_item["验证码重试次数"] = retries
             timing_item["状态"] = status
@@ -550,7 +570,9 @@ class LdysgIndexer(_PluginBase):
                 return None
 
         # 第一次请求（触发验证码）
+        first_vbt_started = perf_counter()
         resp1 = _post_vbt("1")
+        first_vbt_cost = perf_counter() - first_vbt_started
         if resp1 is None:
             return [], _build_timing("首请求失败")
 
@@ -589,7 +611,7 @@ class LdysgIndexer(_PluginBase):
                     logger.debug(f"老电影资源(ldysg)视频验证码无法识别，跳过：vid={vid}")
                     return [], _build_timing("视频验证码跳过", captcha_round - 1)
 
-                solved = self._ocr_captcha(
+                solved, ocr_timing = self._ocr_captcha(
                     captcha_url,
                     proxies=proxies,
                     timeout=timeout,
@@ -597,6 +619,8 @@ class LdysgIndexer(_PluginBase):
                     ua=ua,
                     client_ip=client_ip,
                 )
+                captcha_download_cost += float(ocr_timing.get("download_cost") or 0)
+                captcha_ocr_cost += float(ocr_timing.get("ocr_cost") or 0)
                 if not solved:
                     retry_prefix = f"验证码重试第{captcha_round - 1}次，" if captcha_round > 1 else ""
                     logger.debug(
@@ -617,7 +641,10 @@ class LdysgIndexer(_PluginBase):
                         continue
                     return [], _build_timing("验证码识别失败", captcha_round - 1)
 
+                submit_started = perf_counter()
                 resp2 = _post_vbt(solved)
+                submit_cost = perf_counter() - submit_started
+                captcha_submit_cost += submit_cost
                 retry_prefix = f"验证码重试第{captcha_round - 1}次，" if captcha_round > 1 else ""
 
                 if resp2 is not None and resp2.status_code == 200:
@@ -627,7 +654,9 @@ class LdysgIndexer(_PluginBase):
                         f"片名='{self._display_title(title)}'"
                     )
                     try:
+                        success_return_started = perf_counter()
                         items = self._extract_vbt_items(resp2.json())
+                        success_return_cost = submit_cost + (perf_counter() - success_return_started)
                         return items, _build_timing("验证码通过", captcha_round - 1)
                     except Exception:
                         return [], _build_timing("种子响应解析失败", captcha_round - 1)
@@ -718,7 +747,7 @@ class LdysgIndexer(_PluginBase):
     @staticmethod
     def _ocr_captcha(captcha_url: str, proxies: Optional[Dict[str, str]] = None,
                      timeout: int = 10, referer: str = "https://www.ldysg.com/",
-                     ua: str = "", client_ip: str = "") -> str:
+                     ua: str = "", client_ip: str = "") -> Tuple[str, Dict[str, float]]:
         """
         下载验证码图片并用 ddddocr 识别。
         ddddocr 专为中文网站图片验证码设计，识别效果好。
@@ -729,7 +758,7 @@ class LdysgIndexer(_PluginBase):
         except ImportError:
             logger.warning("老电影资源(ldysg)未安装 ddddocr，无法自动识别验证码。"
                            "请在 MoviePilot 环境中执行：pip install ddddocr")
-            return ""
+            return "", {"download_cost": 0.0, "ocr_cost": 0.0}
 
         try:
             session = LdysgIndexer._get_thread_local_session()
@@ -741,26 +770,30 @@ class LdysgIndexer(_PluginBase):
             if client_ip:
                 headers["X-Forwarded-For"] = client_ip
                 headers["X-Real-IP"] = client_ip
+            download_started = perf_counter()
             img_resp = session.get(
                 captcha_url,
                 proxies=proxies,
                 timeout=max(5, timeout),
                 headers=headers,
             )
+            download_cost = perf_counter() - download_started
             if not img_resp.ok:
-                return ""
+                return "", {"download_cost": download_cost, "ocr_cost": 0.0}
             img_bytes = img_resp.content
             if not img_bytes:
-                return ""
+                return "", {"download_cost": download_cost, "ocr_cost": 0.0}
 
             ocr = LdysgIndexer._get_thread_local_ocr()
+            ocr_started = perf_counter()
             result = str(ocr.classification(img_bytes) or "").strip()
+            ocr_cost = perf_counter() - ocr_started
             # 只保留数字和字母，去除空白
             result = re.sub(r"\s+", "", result)
-            return result
+            return result, {"download_cost": download_cost, "ocr_cost": ocr_cost}
         except Exception as e:
             logger.debug(f"老电影资源(ldysg)验证码 OCR 异常：{e}")
-            return ""
+            return "", {"download_cost": 0.0, "ocr_cost": 0.0}
 
     @classmethod
     def _get_thread_local_session(cls):
