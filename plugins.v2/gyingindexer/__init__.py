@@ -27,7 +27,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.8"
+    plugin_version = "1.7.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -702,7 +702,7 @@ class GyingIndexer(_PluginBase):
             parent_title=parent_title,
             parent_year=""
         )
-        if cache_key not in skip_keyword_parent_keys:
+        if parent_title and cache_key not in skip_keyword_parent_keys:
             if not self._is_keyword_related(
                 keyword,
                 title_for_match,
@@ -792,7 +792,7 @@ class GyingIndexer(_PluginBase):
             parent_title=parent_title,
             parent_year=""
         )
-        if cache_key not in skip_keyword_parent_keys:
+        if parent_title and cache_key not in skip_keyword_parent_keys:
             if not self._is_keyword_related(
                 keyword,
                 title_for_match,
