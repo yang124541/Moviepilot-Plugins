@@ -27,7 +27,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.6"
+    plugin_version = "1.7.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -363,7 +363,7 @@ class GyingIndexer(_PluginBase):
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
         referer = base_url
-        cookie = self._resolve_site_cookie(
+        cookie, warm_cache = self._resolve_site_cookie(
             site=site,
             base_url=base_url,
             ua=ua,
@@ -387,7 +387,7 @@ class GyingIndexer(_PluginBase):
                 referer=referer
             )
             request_state: Dict[str, int] = {"http": 0, "cache_hit": 0}
-            url_cache: Dict[str, str] = {}
+            url_cache: Dict[str, str] = dict(warm_cache or {})
             guarded_get = self._make_cached_get(
                 client=client,
                 url_cache=url_cache,
@@ -410,7 +410,7 @@ class GyingIndexer(_PluginBase):
                 return []
 
             results: List[TorrentInfo] = []
-            parent_meta_cache: Dict[str, Dict[str, Any]] = {}
+            parent_title_cache: Dict[str, str] = {}
             parent_default_dir: Dict[str, str] = {}
             parent_down_entries_cache: Dict[str, List[Dict[str, Any]]] = {}
             parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -418,6 +418,7 @@ class GyingIndexer(_PluginBase):
             skip_keyword_parent_keys: Set[str] = set()
             result_ids: Set[str] = set()
             shared_lock = threading.RLock()
+            parent_down_waiters: Dict[str, threading.Event] = {}
             worker_count = min(len(search_entries), max(1, int(self._detail_concurrency or 1)))
             ordered_results: Dict[int, Optional[Tuple[str, TorrentInfo]]] = {}
             pending_child_ids: Set[str] = set()
@@ -452,7 +453,7 @@ class GyingIndexer(_PluginBase):
                         client,
                         base_url,
                         guarded_get,
-                        parent_meta_cache,
+                        parent_title_cache,
                         skip_keyword_parent_keys,
                         shared_lock,
                         task["default_dir"],
@@ -465,12 +466,13 @@ class GyingIndexer(_PluginBase):
                     client,
                     base_url,
                     guarded_get,
-                    parent_meta_cache,
+                    parent_title_cache,
                     parent_default_dir,
                     parent_down_entries_cache,
                     parent_down_entry_map_cache,
                     bt_parent_cache,
                     skip_keyword_parent_keys,
+                    parent_down_waiters,
                     shared_lock,
                 )
 
@@ -558,12 +560,13 @@ class GyingIndexer(_PluginBase):
     def _build_search_result_entry(self, entry: Dict[str, Any], site: dict, keyword: str,
                                    client: RequestUtils, base_url: str,
                                    fetcher: Callable[[str], str],
-                                   parent_meta_cache: Dict[str, Dict[str, Any]],
+                                   parent_title_cache: Dict[str, str],
                                    parent_default_dir: Dict[str, str],
                                    parent_down_entries_cache: Dict[str, List[Dict[str, Any]]],
                                    parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]],
                                    bt_parent_cache: Dict[str, str],
                                    skip_keyword_parent_keys: Set[str],
+                                   parent_down_waiters: Dict[str, threading.Event],
                                    shared_lock: threading.RLock) -> Optional[Tuple[str, TorrentInfo]]:
         res_id = str(entry.get("id") or "").strip()
         if not res_id:
@@ -584,13 +587,16 @@ class GyingIndexer(_PluginBase):
                 parent_dir=res_dir,
                 parent_id=res_id,
                 fetcher=fetcher,
+                parent_title_cache=parent_title_cache,
                 parent_default_dir=parent_default_dir,
                 parent_down_entries_cache=parent_down_entries_cache,
                 parent_down_entry_map_cache=parent_down_entry_map_cache,
                 bt_parent_cache=bt_parent_cache,
                 skip_keyword_parent_keys=skip_keyword_parent_keys,
+                parent_down_waiters=parent_down_waiters,
                 shared_lock=shared_lock,
                 default_dir="bt",
+                parent_title=title,
                 skip_keyword_match=skip_keyword_match,
             )
             return None
@@ -626,13 +632,16 @@ class GyingIndexer(_PluginBase):
                     parent_dir=parent_dir,
                     parent_id=parent_id,
                     fetcher=fetcher,
+                    parent_title_cache=parent_title_cache,
                     parent_default_dir=parent_default_dir,
                     parent_down_entries_cache=parent_down_entries_cache,
                     parent_down_entry_map_cache=parent_down_entry_map_cache,
                     bt_parent_cache=bt_parent_cache,
                     skip_keyword_parent_keys=skip_keyword_parent_keys,
+                    parent_down_waiters=parent_down_waiters,
                     shared_lock=shared_lock,
                     default_dir=res_dir,
+                    parent_title="",
                     skip_keyword_match=False,
                 )
                 with shared_lock:
@@ -677,14 +686,8 @@ class GyingIndexer(_PluginBase):
         if not enclosure:
             return None
 
-        parent_meta = self._ensure_parent_meta_cached(
-            client=client,
-            base_url=base_url,
-            cache_key=cache_key,
-            parent_meta_cache=parent_meta_cache,
-            fetcher=fetcher,
-            shared_lock=shared_lock,
-        )
+        with shared_lock:
+            parent_title = str(parent_title_cache.get(cache_key) or "").strip()
 
         down_size_text = str(down_item.get("size") or "").strip()
         detail_size_text = str(detail_data.get("s") or detail_data.get("size") or "").strip()
@@ -694,25 +697,22 @@ class GyingIndexer(_PluginBase):
         elapsed_text = str(down_item.get("time") or entry.get("time") or "").strip()
         tag_text = tag_label or search_tag_label
         detail_title = str(detail_data.get("title") or title).strip()
-        parent_year = str(parent_meta.get("year") or "").strip()
         title_for_match = self._build_match_title(
             title=title,
-            parent_title=str(parent_meta.get("title") or "").strip(),
-            parent_year=parent_year
+            parent_title=parent_title,
+            parent_year=""
         )
         if cache_key not in skip_keyword_parent_keys:
             if not self._is_keyword_related(
                 keyword,
                 title_for_match,
                 detail_title,
-                str(parent_meta.get("title") or "").strip(),
+                parent_title,
                 title
             ):
                 return None
-        desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
+        desc_parts = [x for x in [tag_text, detail_title, parent_title] if x]
         description = " | ".join(desc_parts[:3])
-        if parent_year and not re.search(r"(19|20)\d{2}", description):
-            description = f"{description} {parent_year}".strip()
         description = self._append_unique_marker(
             description=description or detail_title or title,
             resource_id=res_id,
@@ -743,11 +743,11 @@ class GyingIndexer(_PluginBase):
     def _build_child_result_entry(self, cache_key: str, parent_dir: str, parent_id: str,
                                   down_item: Dict[str, Any], site: dict, keyword: str,
                                   client: RequestUtils, base_url: str,
-                                  fetcher: Callable[[str], str],
-                                  parent_meta_cache: Dict[str, Dict[str, Any]],
-                                  skip_keyword_parent_keys: Set[str],
-                                  shared_lock: threading.RLock,
-                                  default_dir: str = "bt") -> Optional[Tuple[str, TorrentInfo]]:
+                                   fetcher: Callable[[str], str],
+                                   parent_title_cache: Dict[str, str],
+                                   skip_keyword_parent_keys: Set[str],
+                                   shared_lock: threading.RLock,
+                                   default_dir: str = "bt") -> Optional[Tuple[str, TorrentInfo]]:
         child_id = str(down_item.get("id") or "").strip()
         if not child_id:
             return None
@@ -777,14 +777,8 @@ class GyingIndexer(_PluginBase):
         if not enclosure:
             return None
 
-        parent_meta = self._ensure_parent_meta_cached(
-            client=client,
-            base_url=base_url,
-            cache_key=cache_key,
-            parent_meta_cache=parent_meta_cache,
-            fetcher=fetcher,
-            shared_lock=shared_lock,
-        )
+        with shared_lock:
+            parent_title = str(parent_title_cache.get(cache_key) or "").strip()
 
         down_size_text = str(down_item.get("size") or "").strip()
         detail_size_text = str(child_detail_data.get("s") or child_detail_data.get("size") or "").strip()
@@ -793,25 +787,22 @@ class GyingIndexer(_PluginBase):
         elapsed_text = str(down_item.get("time") or "").strip()
         tag_text = child_quality_label
         detail_title = str(child_detail_data.get("title") or child_title).strip()
-        parent_year = str(parent_meta.get("year") or "").strip()
         title_for_match = self._build_match_title(
             title=child_title,
-            parent_title=str(parent_meta.get("title") or "").strip(),
-            parent_year=parent_year
+            parent_title=parent_title,
+            parent_year=""
         )
         if cache_key not in skip_keyword_parent_keys:
             if not self._is_keyword_related(
                 keyword,
                 title_for_match,
                 detail_title,
-                str(parent_meta.get("title") or "").strip(),
+                parent_title,
                 child_title
             ):
                 return None
-        desc_parts = [x for x in [tag_text, detail_title, str(parent_meta.get("title") or "").strip()] if x]
+        desc_parts = [x for x in [tag_text, detail_title, parent_title] if x]
         description = " | ".join(desc_parts[:3])
-        if parent_year and not re.search(r"(19|20)\d{2}", description):
-            description = f"{description} {parent_year}".strip()
         description = self._append_unique_marker(
             description=description or detail_title or child_title,
             resource_id=child_id,
@@ -897,21 +888,38 @@ class GyingIndexer(_PluginBase):
     def _ensure_parent_down_entries_cached(self, client: RequestUtils, base_url: str,
                                            parent_dir: str, parent_id: str,
                                            fetcher: Callable[[str], str],
+                                           parent_title_cache: Dict[str, str],
                                            parent_default_dir: Dict[str, str],
                                            parent_down_entries_cache: Dict[str, List[Dict[str, Any]]],
                                            parent_down_entry_map_cache: Dict[str, Dict[str, Dict[str, Any]]],
                                            bt_parent_cache: Dict[str, str],
                                            skip_keyword_parent_keys: Set[str],
+                                           parent_down_waiters: Dict[str, threading.Event],
                                            shared_lock: threading.RLock,
                                            default_dir: str = "bt",
+                                           parent_title: str = "",
                                            skip_keyword_match: bool = False) -> str:
         cache_key = f"{parent_dir}/{parent_id}"
         with shared_lock:
             parent_default_dir.setdefault(cache_key, default_dir)
+            if parent_title:
+                parent_title_cache.setdefault(cache_key, parent_title)
             if skip_keyword_match:
                 skip_keyword_parent_keys.add(cache_key)
             cached_entries = parent_down_entries_cache.get(cache_key)
-        if cached_entries is None:
+            if cached_entries is not None:
+                return cache_key
+            waiter = parent_down_waiters.get(cache_key)
+            if waiter is None:
+                waiter = threading.Event()
+                parent_down_waiters[cache_key] = waiter
+                is_leader = True
+            else:
+                is_leader = False
+        if not is_leader:
+            waiter.wait()
+            return cache_key
+        try:
             down_entries = self._fetch_parent_down_entries(
                 client=client,
                 base_url=base_url,
@@ -929,46 +937,21 @@ class GyingIndexer(_PluginBase):
                 if cache_key not in parent_down_entries_cache:
                     parent_down_entries_cache[cache_key] = down_entries
                     parent_down_entry_map_cache[cache_key] = id_map
-                    for child_id in id_map:
-                        bt_parent_cache[child_id] = cache_key
-                else:
-                    existing_map = parent_down_entry_map_cache.get(cache_key, {})
-                    for child_id in existing_map:
-                        bt_parent_cache[child_id] = cache_key
+                existing_map = parent_down_entry_map_cache.get(cache_key, {})
+                for child_id in existing_map:
+                    bt_parent_cache[child_id] = cache_key
+        finally:
+            with shared_lock:
+                current = parent_down_waiters.pop(cache_key, None)
+            if current is not None:
+                current.set()
         return cache_key
-
-    def _ensure_parent_meta_cached(self, client: RequestUtils, base_url: str,
-                                   cache_key: str,
-                                   parent_meta_cache: Dict[str, Dict[str, Any]],
-                                   fetcher: Callable[[str], str],
-                                   shared_lock: threading.RLock) -> Dict[str, Any]:
-        cache_token = str(cache_key or "").strip()
-        if not cache_token:
-            return {}
-        with shared_lock:
-            cached = parent_meta_cache.get(cache_token)
-        if cached is not None:
-            return cached
-        try:
-            parent_dir, parent_id = cache_token.split("/", 1)
-        except Exception:
-            return {}
-        parent_meta = self._fetch_parent_meta(
-            client=client,
-            base_url=base_url,
-            parent_dir=parent_dir,
-            parent_id=parent_id,
-            fetcher=fetcher
-        )
-        with shared_lock:
-            if cache_token not in parent_meta_cache:
-                parent_meta_cache[cache_token] = parent_meta
-            return parent_meta_cache.get(cache_token) or {}
 
     def _resolve_site_cookie(self, site: dict, base_url: str, ua: str,
                              proxies: Optional[Dict[str, str]], timeout: int,
-                             keyword: str) -> str:
+                             keyword: str) -> Tuple[str, Dict[str, str]]:
         cookie = str(site.get("cookie") or "").strip()
+        warm_cache: Dict[str, str] = {}
 
         username = str(
             self._login_username
@@ -989,17 +972,19 @@ class GyingIndexer(_PluginBase):
         has_credentials = bool(username and password)
 
         # 预检搜索页是否就绪；遇到 PoW 会在同一 session 内自动解决
-        ready, effective_cookie = self._is_search_response_ready(
+        ready, effective_cookie, ready_url, ready_body = self._is_search_response_ready(
             base_url=base_url, keyword=keyword, ua=ua,
             proxies=proxies, timeout=timeout, cookie=cookie,
         )
         if ready:
+            if ready_url and ready_body:
+                warm_cache[ready_url] = ready_body
             # 如果解了 PoW 导致 cookie 有更新，回写持久化
             if effective_cookie and effective_cookie != cookie:
                 site["cookie"] = effective_cookie
                 self._persist_site_cookie(site=site, cookie=effective_cookie)
                 logger.info("观影(GYing)PoW 验证通过，已回写站点 cookie。")
-            return effective_cookie
+            return effective_cookie, warm_cache
 
         if not has_credentials:
             # 无账号密码时，尝试独立解决 PoW 挑战
@@ -1007,19 +992,21 @@ class GyingIndexer(_PluginBase):
                 base_url=base_url, ua=ua, proxies=proxies, timeout=timeout, existing_cookie=cookie
             )
             if pow_cookie:
-                merged = self._merge_cookie_str(cookie, pow_cookie)
-                ready2, merged = self._is_search_response_ready(
+                merged_cookie = self._merge_cookie_str(cookie, pow_cookie)
+                ready2, merged_cookie, ready_url2, ready_body2 = self._is_search_response_ready(
                     base_url=base_url, keyword=keyword, ua=ua,
-                    proxies=proxies, timeout=timeout, cookie=merged
+                    proxies=proxies, timeout=timeout, cookie=merged_cookie
                 )
                 if ready2:
-                    site["cookie"] = merged
-                    persisted = self._persist_site_cookie(site=site, cookie=merged)
+                    if ready_url2 and ready_body2:
+                        warm_cache[ready_url2] = ready_body2
+                    site["cookie"] = merged_cookie
+                    persisted = self._persist_site_cookie(site=site, cookie=merged_cookie)
                     if persisted:
                         logger.info("观影(GYing)PoW 验证通过，已回写站点 cookie。")
-                    return merged
+                    return merged_cookie, warm_cache
             logger.warn("观影(GYing)cookie 已失效且未配置可用账号密码，无法自动登录。")
-            return cookie
+            return cookie, warm_cache
 
         refreshed = self._login_and_get_cookie(
             base_url=base_url,
@@ -1031,7 +1018,7 @@ class GyingIndexer(_PluginBase):
         )
         if not refreshed:
             logger.warn("观影(GYing)自动登录失败，继续使用现有 cookie 搜索。")
-            return cookie
+            return cookie, warm_cache
 
         # 登录成功后直接回写，不再发第二次预检请求（避免再次触发 PoW）
         site["cookie"] = refreshed
@@ -1041,7 +1028,7 @@ class GyingIndexer(_PluginBase):
         else:
             logger.info("观影(GYing)检测到 cookie 失效，已自动登录并刷新会话。")
             logger.warn("观影(GYing)未能回写站点 cookie，本次搜索仍将使用新会话。")
-        return refreshed
+        return refreshed, warm_cache
 
     def _try_solve_pow_standalone(self, base_url: str, ua: str,
                                   proxies: Optional[Dict[str, str]],
@@ -1363,9 +1350,9 @@ class GyingIndexer(_PluginBase):
 
     def _is_search_response_ready(self, base_url: str, keyword: str, ua: str,
                                   proxies: Optional[Dict[str, str]], timeout: int,
-                                  cookie: str) -> Tuple[bool, str]:
+                                  cookie: str) -> Tuple[bool, str, str, str]:
         """
-        检查搜索页是否就绪，返回 (ready, effective_cookie)。
+        检查搜索页是否就绪，返回 (ready, effective_cookie, search_url, response_body)。
         若遇到 PoW，在同一 session 内自动求解后再验证，并将新 cookie 一并返回。
         """
         try:
@@ -1378,11 +1365,11 @@ class GyingIndexer(_PluginBase):
 
                 resp = session.get(url=url, timeout=max(5, int(timeout or 20)))
                 if not resp.ok:
-                    return False, cookie
+                    return False, cookie, url, ""
 
                 body = str(resp.text or "")
                 if self._is_login_shell(body):
-                    return False, cookie
+                    return False, cookie, url, ""
 
                 # 遇到 PoW：在同一 session 内解题，然后重试搜索 URL
                 if self._is_pow_page(body):
@@ -1392,22 +1379,22 @@ class GyingIndexer(_PluginBase):
                         target_url=url,
                     )
                     if not ok:
-                        return False, cookie
+                        return False, cookie, url, ""
                     # PoW 解决后重试
                     try:
                         resp2 = session.get(url=url, timeout=max(5, int(timeout or 20)))
                         body = str(resp2.text or "") if resp2.ok else ""
                     except Exception:
-                        return False, cookie
+                        return False, cookie, url, ""
                     # 合并原有 cookie + 新 cookie（browser_verified 等），避免丢失登录 session
                     new_cookie = self._merge_cookie_str(cookie, self._cookie_jar_to_header(session.cookies))
                     if "_obj.search" in body:
-                        return True, new_cookie or cookie
-                    return False, new_cookie or cookie
+                        return True, new_cookie or cookie, url, body
+                    return False, new_cookie or cookie, url, body
 
-                return "_obj.search" in body, cookie
+                return "_obj.search" in body, cookie, url, body
         except Exception:
-            return False, cookie
+            return False, cookie, "", ""
 
     def _login_and_get_cookie(self, base_url: str, username: str, password: str, ua: str,
                               proxies: Optional[Dict[str, str]], timeout: int) -> str:
@@ -2106,22 +2093,6 @@ class GyingIndexer(_PluginBase):
                 tag_by_bt[bt_key] = str(self._safe_at(tag_codes, idx) or "").strip().lower()
 
         return tag_by_bt, label_by_code
-
-    def _fetch_parent_meta(self, client: RequestUtils, base_url: str,
-                           parent_dir: str, parent_id: str,
-                           fetcher: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
-        getter = fetcher or client.get
-        detail_url = urljoin(base_url, f"{parent_dir}/{parent_id}")
-        html = getter(detail_url)
-        if not html:
-            return {}
-        detail_data = self._extract_js_object(html, "_obj.d")
-        if not isinstance(detail_data, dict):
-            return {}
-        return {
-            "title": str(detail_data.get("title") or "").strip(),
-            "year": str(detail_data.get("year") or "").strip(),
-        }
 
     def _fetch_parent_down_entries(self, client: RequestUtils, base_url: str,
                                    parent_dir: str, parent_id: str,
