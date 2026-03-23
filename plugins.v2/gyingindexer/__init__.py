@@ -26,7 +26,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.7.2"
+    plugin_version = "1.7.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -111,6 +111,10 @@ class GyingIndexer(_PluginBase):
                 or config.get("password")
                 or ""
             ).strip()
+            try:
+                self._detail_concurrency = max(1, min(20, int(config.get("detail_concurrency") or 6)))
+            except Exception:
+                self._detail_concurrency = 6
 
             # 新版 5 开关
             if any(k in config for k in ("enable_1080", "enable_zh1080", "enable_4k", "enable_zh4k")):
@@ -239,7 +243,7 @@ class GyingIndexer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "md": 4},
                                 "content": [
                                     {
                                         "component": "VTextField",
@@ -253,7 +257,7 @@ class GyingIndexer(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
+                                "props": {"cols": 12, "md": 4},
                                 "content": [
                                     {
                                         "component": "VTextField",
@@ -262,6 +266,23 @@ class GyingIndexer(_PluginBase):
                                             "label": "观影密码",
                                             "type": "password",
                                             "placeholder": "请输入 gying.si 密码",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "detail_concurrency",
+                                            "label": "详情并发数",
+                                            "type": "number",
+                                            "min": 1,
+                                            "max": 20,
+                                            "placeholder": "1-20",
                                         },
                                     }
                                 ],
@@ -300,6 +321,7 @@ class GyingIndexer(_PluginBase):
             "extra_hosts": "",
             "login_username": "",
             "login_password": "",
+            "detail_concurrency": 6,
         }
 
     def get_page(self) -> List[dict]:

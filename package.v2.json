@@ -46,11 +46,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.7.2",
+    "version": "1.7.3",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.7.3": "新增详情并发数配置项：可在插件配置页按 1-20 自定义并发，并与账号、密码同一行展示，便于按环境调节抓取速度。",
       "v1.7.2": "搜索结果详情改为受控并发抓取：并发解析详情页与下载信息，同时把共享 GET 缓存与 PoW 重试改为线程安全，显著降低多结果搜索耗时。",
       "v1.6.9": "修复每次搜索都重复过 PoW 验证的问题：预检时无论有无账号密码均在同一 session 内解 PoW，解完即回写 cookie；删除登录后多余的第二次预检；搜索中途 PoW 解完后同步持久化 cookie，整体从每次搜索 2+ 次 PoW 降为最多 1 次，cookie 有效时为 0 次。",
       "v1.6.8": "优化 PoW 流程：有账号密码时初始检查不在内部解 PoW，避免重复两次 PoW 验证；登录流程统一处理 PoW，整体验证次数从 2 次降为 1 次。",
