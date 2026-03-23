@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.8.5"
+    plugin_version = "1.8.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -49,6 +49,7 @@ class GyingIndexer(_PluginBase):
     _runtime_site_base_urls: Dict[str, str] = {}
 
     _default_hosts: Set[str] = {
+        "xn--kivn76b41nnhi.com",
         "gying.si",
         "gying.org",
         "gying.net",
@@ -1548,11 +1549,10 @@ class GyingIndexer(_PluginBase):
         host = parsed.netloc or ""
         host = host.strip()
         if not host:
-            return ["https://www.gying.si/"]
+            return ["https://www.xn--kivn76b41nnhi.com/"]
         pure = host[4:] if host.startswith("www.") else host
         candidates: List[str] = [f"{scheme}://{host}/"]
-        if pure:
-            candidates.append(f"{scheme}://{pure}/")
+        if pure and not host.startswith("www."):
             candidates.append(f"{scheme}://www.{pure}/")
         ret: List[str] = []
         seen: Set[str] = set()
@@ -1857,18 +1857,25 @@ class GyingIndexer(_PluginBase):
     def _resolve_base_url(self, site: dict, ua: str = "",
                           proxies: Optional[Dict[str, str]] = None,
                           timeout: int = 20) -> str:
-        raw = str(site.get("url") or site.get("domain") or "").strip()
-        if not raw:
-            raw = "https://www.gying.si/"
-        base_url = self._normalize_base_url(raw)
-        if not base_url:
-            return "https://www.gying.si/"
-        return self._refresh_base_url_if_needed(
-            base_url=base_url,
-            ua=ua,
-            proxies=proxies,
-            timeout=timeout,
-        )
+        candidates = self._build_base_url_candidates(site=site)
+        if not candidates:
+            candidates = ["https://www.xn--kivn76b41nnhi.com/"]
+
+        for candidate in candidates:
+            resolved = self._refresh_base_url_if_needed(
+                base_url=candidate,
+                ua=ua,
+                proxies=proxies,
+                timeout=timeout,
+            )
+            if resolved:
+                if resolved != candidate:
+                    logger.info(f"观影(GYing)主域名切换：{candidate} -> {resolved}")
+                elif candidate != candidates[0]:
+                    logger.info(f"观影(GYing)主域名回退成功：已切换到 {resolved}")
+                return resolved
+
+        return "https://www.xn--kivn76b41nnhi.com/"
 
     @staticmethod
     def _build_search_url(base_url: str, keyword: str,
@@ -1989,12 +1996,48 @@ class GyingIndexer(_PluginBase):
                 hosts.add(host)
         return hosts
 
+    def _ordered_extra_hosts(self) -> List[str]:
+        ret: List[str] = []
+        seen: Set[str] = set()
+        for line in self._extra_hosts.splitlines():
+            host = self._extract_host(line)
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            ret.append(host)
+        return ret
+
+    def _build_base_url_candidates(self, site: dict) -> List[str]:
+        candidates: List[str] = []
+        seen: Set[str] = set()
+
+        for host in self._ordered_extra_hosts():
+            base_url = self._normalize_base_url(host)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+
+        for raw in (
+            site.get("url") if isinstance(site, dict) else "",
+            site.get("domain") if isinstance(site, dict) else "",
+            "https://www.xn--kivn76b41nnhi.com/",
+        ):
+            base_url = self._normalize_base_url(raw)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+
+        return candidates
+
     def _register_builtin_indexer(self) -> None:
+        ordered_extra_hosts = self._ordered_extra_hosts()
         hosts = sorted(self._all_hosts())
         if not hosts:
             return
 
-        primary = "gying.si" if "gying.si" in hosts else hosts[0]
+        primary = ordered_extra_hosts[0] if ordered_extra_hosts else (
+            "xn--kivn76b41nnhi.com" if "xn--kivn76b41nnhi.com" in hosts else hosts[0]
+        )
         indexer = self._build_indexer_schema(primary_host=primary, all_hosts=hosts)
 
         for host in hosts:
@@ -2128,6 +2171,28 @@ class GyingIndexer(_PluginBase):
         if not target:
             return ""
 
+        target_host = self._extract_host(target)
+        if target_host in self._default_hosts:
+            latest_hosts = self._fetch_latest_hosts(
+                base_url=target,
+                ua=ua,
+                proxies=proxies,
+                timeout=timeout,
+            )
+            switched = self._pick_available_latest_base_url(
+                current_target=target,
+                latest_hosts=latest_hosts,
+                ua=ua,
+                proxies=proxies,
+                timeout=timeout,
+            )
+            if switched:
+                self._runtime_site_base_urls[runtime_key] = switched
+                if switched != target:
+                    logger.info(f"观影(GYing)检测到旧域名已失效，已切换到最新地址：{switched}")
+                return switched
+            return ""
+
         try:
             resp = requests.get(
                 target,
@@ -2142,8 +2207,8 @@ class GyingIndexer(_PluginBase):
                 self._runtime_site_base_urls[runtime_key] = target
                 return target
         except Exception as err:
-            logger.warn(f"观影(GYing)探测站点域名状态失败：{err}")
-            return target
+            logger.warn(f"观影(GYing)探测站点域名状态失败：host={target}，err={err}")
+            return ""
 
         latest_hosts = self._fetch_latest_hosts(
             base_url=target,
@@ -2151,10 +2216,27 @@ class GyingIndexer(_PluginBase):
             proxies=proxies,
             timeout=timeout,
         )
-        if not latest_hosts:
-            return target
+        switched = self._pick_available_latest_base_url(
+            current_target=target,
+            latest_hosts=latest_hosts,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+        )
+        if switched:
+            self._runtime_site_base_urls[runtime_key] = switched
+            if switched != target:
+                logger.info(f"观影(GYing)检测到旧域名已失效，已切换到最新地址：{switched}")
+            return switched
+        return ""
 
-        scheme = urlparse(target).scheme or "https"
+    def _pick_available_latest_base_url(self, current_target: str, latest_hosts: List[str],
+                                        ua: str, proxies: Optional[Dict[str, str]],
+                                        timeout: int) -> str:
+        if not latest_hosts:
+            return current_target
+
+        scheme = urlparse(current_target).scheme or "https"
         for host in latest_hosts:
             candidate = f"{scheme}://www.{host}/"
             try:
@@ -2168,13 +2250,11 @@ class GyingIndexer(_PluginBase):
                     timeout=max(5, int(timeout or 20)),
                 )
                 if resp.ok and not self._is_retired_host_page(resp.text):
-                    self._runtime_site_base_urls[runtime_key] = candidate
-                    logger.info(f"观影(GYing)检测到旧域名已失效，已切换到最新地址：{candidate}")
                     return candidate
             except Exception as err:
                 logger.debug(f"观影(GYing)探测最新地址失败：host={host}，err={err}")
                 continue
-        return target
+        return current_target
 
     @staticmethod
     def _site_runtime_key(site: Optional[dict], base_url: str = "") -> str:
@@ -2188,7 +2268,7 @@ class GyingIndexer(_PluginBase):
         host = GyingIndexer._extract_host(base_url)
         if host:
             return f"host:{host}"
-        return "host:gying.si"
+        return "host:xn--kivn76b41nnhi.com"
 
     def _get_runtime_site_cookie(self, site: dict, base_url: str) -> str:
         runtime_key = self._site_runtime_key(site=site, base_url=base_url)
