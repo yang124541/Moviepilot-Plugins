@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.8.9"
+    plugin_version = "1.9.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1857,6 +1857,7 @@ class GyingIndexer(_PluginBase):
         candidates = self._build_base_url_candidates(site=site)
         if not candidates:
             candidates = ["https://www.xn--kivn76b41nnhi.com/"]
+        pinned_hosts = set(self._ordered_extra_hosts())
 
         for candidate in candidates:
             resolved = self._refresh_base_url_if_needed(
@@ -1864,6 +1865,7 @@ class GyingIndexer(_PluginBase):
                 ua=ua,
                 proxies=proxies,
                 timeout=timeout,
+                pinned_primary=self._extract_host(candidate) in pinned_hosts,
             )
             if resolved:
                 if resolved != candidate:
@@ -1986,12 +1988,10 @@ class GyingIndexer(_PluginBase):
         return entries
 
     def _all_hosts(self) -> Set[str]:
-        hosts = set(self._default_hosts)
-        for line in self._extra_hosts.splitlines():
-            host = self._extract_host(line)
-            if host:
-                hosts.add(host)
-        return hosts
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        if ordered_extra_hosts:
+            return set(ordered_extra_hosts)
+        return set(self._default_hosts)
 
     def _ordered_extra_hosts(self) -> List[str]:
         ret: List[str] = []
@@ -2008,11 +2008,15 @@ class GyingIndexer(_PluginBase):
         candidates: List[str] = []
         seen: Set[str] = set()
 
-        for host in self._ordered_extra_hosts():
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        for host in ordered_extra_hosts:
             base_url = self._normalize_base_url(host)
             if base_url and base_url not in seen:
                 seen.add(base_url)
                 candidates.append(base_url)
+
+        if ordered_extra_hosts:
+            return candidates
 
         for raw in (
             site.get("url") if isinstance(site, dict) else "",
@@ -2159,13 +2163,47 @@ class GyingIndexer(_PluginBase):
             hosts.append(host)
         return hosts
 
+    def _probe_base_url(self, target: str, ua: str,
+                        proxies: Optional[Dict[str, str]],
+                        timeout: int) -> Tuple[bool, bool]:
+        try:
+            resp = requests.get(
+                target,
+                headers={
+                    "User-Agent": ua or settings.USER_AGENT,
+                    "Referer": target,
+                },
+                proxies=proxies,
+                timeout=max(5, int(timeout or 20)),
+            )
+            if not resp.ok:
+                return False, False
+            return True, self._is_retired_host_page(resp.text)
+        except Exception as err:
+            logger.warn(f"观影(GYing)探测站点域名状态失败：host={target}，err={err}")
+            return False, False
+
     def _refresh_base_url_if_needed(self, base_url: str, ua: str,
                                     proxies: Optional[Dict[str, str]],
-                                    timeout: int) -> str:
+                                    timeout: int,
+                                    pinned_primary: bool = False) -> str:
         runtime_key = self._site_runtime_key(site=None, base_url=base_url)
+        base_target = str(base_url or "").strip()
         cached_target = str(self._runtime_site_base_urls.get(runtime_key) or "").strip()
-        target = cached_target or str(base_url or "").strip()
+        target = base_target if pinned_primary and base_target else (cached_target or base_target)
         if not target:
+            return ""
+
+        target_ok, target_retired = self._probe_base_url(
+            target=target,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+        )
+        if target_ok and not target_retired:
+            self._runtime_site_base_urls[runtime_key] = target
+            return target
+        if pinned_primary:
             return ""
 
         target_host = self._extract_host(target)
@@ -2188,23 +2226,6 @@ class GyingIndexer(_PluginBase):
                 if switched != target:
                     logger.info(f"观影(GYing)检测到旧域名已失效，已切换到最新地址：{switched}")
                 return switched
-            return ""
-
-        try:
-            resp = requests.get(
-                target,
-                headers={
-                    "User-Agent": ua or settings.USER_AGENT,
-                    "Referer": target,
-                },
-                proxies=proxies,
-                timeout=max(5, int(timeout or 20)),
-            )
-            if not resp.ok or not self._is_retired_host_page(resp.text):
-                self._runtime_site_base_urls[runtime_key] = target
-                return target
-        except Exception as err:
-            logger.warn(f"观影(GYing)探测站点域名状态失败：host={target}，err={err}")
             return ""
 
         latest_hosts = self._fetch_latest_hosts(
