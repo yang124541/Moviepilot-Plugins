@@ -27,7 +27,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.8.1"
+    plugin_version = "1.8.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -602,6 +602,7 @@ class GyingIndexer(_PluginBase):
                 shared_lock=shared_lock,
                 default_dir="bt",
                 parent_title=title,
+                parent_year=str(entry.get("year") or "").strip(),
                 skip_keyword_match=skip_keyword_match,
             )
             return None
@@ -648,6 +649,7 @@ class GyingIndexer(_PluginBase):
                     shared_lock=shared_lock,
                     default_dir=res_dir,
                     parent_title="",
+                    parent_year="",
                     skip_keyword_match=False,
                 )
                 with shared_lock:
@@ -912,12 +914,15 @@ class GyingIndexer(_PluginBase):
                                            shared_lock: threading.RLock,
                                            default_dir: str = "bt",
                                            parent_title: str = "",
+                                           parent_year: str = "",
                                            skip_keyword_match: bool = False) -> str:
         cache_key = f"{parent_dir}/{parent_id}"
         with shared_lock:
             parent_default_dir.setdefault(cache_key, default_dir)
             if parent_title:
                 parent_title_cache.setdefault(cache_key, parent_title)
+            if parent_year:
+                parent_year_cache.setdefault(cache_key, parent_year)
             if skip_keyword_match:
                 skip_keyword_parent_keys.add(cache_key)
             cached_entries = parent_down_entries_cache.get(cache_key)
@@ -951,9 +956,6 @@ class GyingIndexer(_PluginBase):
                 if cache_key not in parent_down_entries_cache:
                     parent_down_entries_cache[cache_key] = down_entries
                     parent_down_entry_map_cache[cache_key] = id_map
-                inferred_year = self._infer_parent_year_from_entries(down_entries=down_entries)
-                if inferred_year:
-                    parent_year_cache.setdefault(cache_key, inferred_year)
                 existing_map = parent_down_entry_map_cache.get(cache_key, {})
                 for child_id in existing_map:
                     bt_parent_cache[child_id] = cache_key
@@ -1821,6 +1823,7 @@ class GyingIndexer(_PluginBase):
         times = self._as_list(list_obj.get("time"))
         tags = self._as_list(list_obj.get("k"))
         qualities = self._as_list(list_obj.get("p"))
+        years = self._as_list(list_obj.get("year"))
 
         entries: List[Dict[str, Any]] = []
         for idx, btid in enumerate(ids):
@@ -1841,7 +1844,8 @@ class GyingIndexer(_PluginBase):
                 "seeds": self._safe_at(seeds, idx),
                 "time": self._safe_at(times, idx),
                 "tag": self._safe_at(tags, idx),
-                "quality": row_quality
+                "quality": row_quality,
+                "year": str(self._safe_at(years, idx) or "").strip()
             })
         return entries
 
@@ -2175,27 +2179,6 @@ class GyingIndexer(_PluginBase):
                 "hash": str(self._safe_at(hashes, idx) or "").strip(),
             })
         return entries
-
-    @staticmethod
-    def _infer_parent_year_from_entries(down_entries: List[Dict[str, Any]]) -> str:
-        year_counts: Dict[str, int] = {}
-        for item in down_entries or []:
-            title = str((item or {}).get("title") or "").strip()
-            if not title:
-                continue
-            seen: Set[str] = set()
-            for year in re.findall(r"(?:19|20)\d{2}", title):
-                token = str(year or "").strip()
-                if token and token not in seen:
-                    year_counts[token] = year_counts.get(token, 0) + 1
-                    seen.add(token)
-        if not year_counts:
-            return ""
-        sorted_years = sorted(year_counts.items(), key=lambda item: (-item[1], -int(item[0])))
-        best_year, best_count = sorted_years[0]
-        if best_count <= 0:
-            return ""
-        return best_year
 
     @staticmethod
     def _build_match_title(title: str, parent_title: str = "", parent_year: str = "") -> str:
