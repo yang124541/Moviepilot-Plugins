@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.9.4"
+    plugin_version = "1.9.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1118,7 +1118,7 @@ class GyingIndexer(_PluginBase):
                     ua=ua or settings.USER_AGENT,
                     proxies=proxies,
                     timeout=timeout,
-                    target_url=base_url,
+                    target_url=resp.url or base_url,
                 )
                 if not ok:
                     return ""
@@ -1345,6 +1345,8 @@ class GyingIndexer(_PluginBase):
         服务端验证通过后在 session 中写入 browser_verified cookie。
         """
         submit_url = str(target_url or base_url or "").strip() or base_url
+        referer_url = submit_url or str(base_url or "").strip()
+        parsed_submit = urlparse(referer_url)
         body_parts = [f"action=verify", f"id={challenge_id}"]
         for n in nonces:
             body_parts.append(f"nonce[]={n}")
@@ -1352,8 +1354,8 @@ class GyingIndexer(_PluginBase):
 
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": base_url,
-            "Origin": f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}",
+            "Referer": referer_url,
+            "Origin": f"{parsed_submit.scheme or 'https'}://{parsed_submit.netloc}",
         }
         try:
             resp = session.post(
@@ -1454,7 +1456,7 @@ class GyingIndexer(_PluginBase):
                     ok = self._handle_pow_in_session(
                         session=session, base_url=base_url,
                         html_text=body, ua=ua, proxies=proxies, timeout=timeout,
-                        target_url=url,
+                        target_url=resp.url or url,
                     )
                     if not ok:
                         return False, cookie, url, ""
@@ -1489,22 +1491,23 @@ class GyingIndexer(_PluginBase):
                     if existing_cookie:
                         session.headers["Cookie"] = existing_cookie
                     resp = session.get(root, timeout=max(5, int(timeout or 20)))
+                    current_root = self._normalize_base_url(resp.url or root) or root
 
                     # 处理 PoW 人机验证
                     if resp.ok and self._is_pow_page(resp.text):
                         pow_ok = self._handle_pow_in_session(
                             session=session,
-                            base_url=root,
+                            base_url=current_root,
                             html_text=resp.text,
                             ua=ua or settings.USER_AGENT,
                             proxies=proxies,
                             timeout=timeout,
-                            target_url=root,
+                            target_url=resp.url or current_root,
                         )
                         if not pow_ok:
                             continue
 
-                    login_url = urljoin(root, "/user/login")
+                    login_url = urljoin(current_root, "/user/login")
                     payload = {
                         "username": username,
                         "password": password,
@@ -1516,7 +1519,7 @@ class GyingIndexer(_PluginBase):
                     ajax_headers = {
                         "X-Requested-With": "XMLHttpRequest",
                         "Accept": "application/json, text/javascript, */*; q=0.01",
-                        "Origin": f"{urlparse(root).scheme}://{urlparse(root).netloc}",
+                        "Origin": f"{urlparse(current_root).scheme}://{urlparse(current_root).netloc}",
                         "Referer": login_url,
                     }
                     resp = session.post(
@@ -1802,6 +1805,7 @@ class GyingIndexer(_PluginBase):
                     return ""
 
                 fresh_html = resp.text
+                final_target_url = str(resp.url or target_url or "").strip() or target_url
                 if not self._is_pow_page(fresh_html):
                     # existing_cookie 已有效，无需 PoW
                     return self._cookie_jar_to_header(session.cookies)
@@ -1812,7 +1816,7 @@ class GyingIndexer(_PluginBase):
                     base_url=base_url,
                     html_text=fresh_html,
                     ua=ua, proxies=proxies, timeout=timeout,
-                    target_url=target_url,
+                    target_url=final_target_url,
                 )
                 if not ok:
                     logger.warn("观影(GYing)PoW 验证提交失败")
@@ -1827,7 +1831,7 @@ class GyingIndexer(_PluginBase):
                 # 服务端可能通过 session 状态（而非 Set-Cookie）授权后续请求
                 logger.info("观影(GYing)PoW 提交后 session 无 cookie，尝试用同一 session 重试...")
                 try:
-                    resp2 = session.get(target_url, timeout=max(5, int(timeout or 20)))
+                    resp2 = session.get(final_target_url, timeout=max(5, int(timeout or 20)))
                     if resp2.ok and not self._is_pow_page(resp2.text):
                         # session 已通过验证，把 session cookies 返回（可能在这次请求才设置）
                         cookie_text = self._cookie_jar_to_header(session.cookies)
@@ -2181,7 +2185,7 @@ class GyingIndexer(_PluginBase):
 
     def _probe_base_url(self, target: str, ua: str,
                         proxies: Optional[Dict[str, str]],
-                        timeout: int) -> Tuple[bool, bool]:
+                        timeout: int) -> Tuple[bool, bool, str]:
         try:
             resp = requests.get(
                 target,
@@ -2193,11 +2197,12 @@ class GyingIndexer(_PluginBase):
                 timeout=max(5, int(timeout or 20)),
             )
             if not resp.ok:
-                return False, False
-            return True, self._is_retired_host_page(resp.text)
+                return False, False, ""
+            normalized = self._normalize_base_url(resp.url or target) or self._normalize_base_url(target)
+            return True, self._is_retired_host_page(resp.text), normalized
         except Exception as err:
             logger.warn(f"观影(GYing)探测站点域名状态失败：host={target}，err={err}")
-            return False, False
+            return False, False, ""
 
     def _refresh_base_url_if_needed(self, base_url: str, ua: str,
                                     proxies: Optional[Dict[str, str]],
@@ -2210,15 +2215,16 @@ class GyingIndexer(_PluginBase):
         if not target:
             return ""
 
-        target_ok, target_retired = self._probe_base_url(
+        target_ok, target_retired, resolved_target = self._probe_base_url(
             target=target,
             ua=ua,
             proxies=proxies,
             timeout=timeout,
         )
         if target_ok and not target_retired:
-            self._runtime_site_base_urls[runtime_key] = target
-            return target
+            final_target = resolved_target or target
+            self._runtime_site_base_urls[runtime_key] = final_target
+            return final_target
         if pinned_primary:
             return ""
 
