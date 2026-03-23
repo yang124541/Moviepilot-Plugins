@@ -3,7 +3,6 @@ import random
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -23,7 +22,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.2.5"
+    plugin_version = "1.2.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -196,7 +195,6 @@ class LdysgIndexer(_PluginBase):
         if not self._match_target_site(site):
             return None
 
-        start_at = datetime.now()
         search_started = perf_counter()
         base_url = self._resolve_base_url(site)
         timeout = int(site.get("timeout") or 20)
@@ -219,7 +217,6 @@ class LdysgIndexer(_PluginBase):
             )
 
             # 搜索视频列表
-            video_list_started = perf_counter()
             video_items = self._search_videos(
                 client=client,
                 base_url=base_url,
@@ -230,12 +227,16 @@ class LdysgIndexer(_PluginBase):
                 cookie=cookie,
                 client_ip=client_ip,
             )
-            video_list_cost = perf_counter() - video_list_started
             if not video_items:
-                logger.info(f"老电影资源(ldysg)搜索无结果：关键词='{keyword}'")
+                total_cost = perf_counter() - search_started
+                elapsed_seconds = max(1, int(total_cost + 0.5))
+                logger.info(
+                    f"老电影资源(ldysg)搜索完成：关键词='{keyword}'，"
+                    f"找到视频=0，返回磁力=0，耗时={elapsed_seconds}s"
+                )
                 return []
 
-            results, timing_items = self._fetch_video_details_concurrently(
+            results, _timing_items = self._fetch_video_details_concurrently(
                 site=site,
                 client=client,
                 base_url=base_url,
@@ -247,25 +248,10 @@ class LdysgIndexer(_PluginBase):
             )
 
             total_cost = perf_counter() - search_started
-            total_cost_text = self._format_duration(total_cost)
-            cost = (datetime.now() - start_at).seconds
-            timing_summary = {
-                "搜索总耗时": total_cost_text,
-                "关键词": keyword,
-                "视频列表耗时": self._format_duration(video_list_cost),
-                "视频数": len(video_items),
-                "视频明细": timing_items,
-                "返回磁力": len(results),
-                "日志耗时秒": cost,
-            }
+            elapsed_seconds = max(1, int(total_cost + 0.5))
             logger.info(
                 f"老电影资源(ldysg)搜索完成：关键词='{keyword}'，"
-                f"搜索总耗时={total_cost_text}，"
-                f"找到视频={len(video_items)}，返回磁力={len(results)}"
-            )
-            logger.info(
-                "老电影资源(ldysg)搜索耗时明细："
-                f"{json.dumps(timing_summary, ensure_ascii=False)}"
+                f"找到视频={len(video_items)}，返回磁力={len(results)}，耗时={elapsed_seconds}s"
             )
             return results
         except Exception as err:
