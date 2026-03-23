@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.8.3"
+    plugin_version = "1.8.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -45,6 +45,8 @@ class GyingIndexer(_PluginBase):
     _login_username = ""
     _login_password = ""
     _detail_concurrency = 6
+    _runtime_site_cookies: Dict[str, str] = {}
+    _runtime_site_base_urls: Dict[str, str] = {}
 
     _default_hosts: Set[str] = {
         "gying.si",
@@ -355,15 +357,14 @@ class GyingIndexer(_PluginBase):
         if not self._match_target_site(site):
             return None
 
-        start_at = datetime.now()
-        total_started_at = perf_counter()
-        base_url = self._resolve_base_url(site)
-        if not base_url:
-            return []
-
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
+        start_at = datetime.now()
+        total_started_at = perf_counter()
+        base_url = self._resolve_base_url(site=site, ua=ua, proxies=proxies, timeout=timeout)
+        if not base_url:
+            return []
         referer = base_url
         cookie, warm_cache = self._resolve_site_cookie(
             site=site,
@@ -1002,7 +1003,7 @@ class GyingIndexer(_PluginBase):
     def _resolve_site_cookie(self, site: dict, base_url: str, ua: str,
                              proxies: Optional[Dict[str, str]], timeout: int,
                              keyword: str) -> Tuple[str, Dict[str, str]]:
-        cookie = str(site.get("cookie") or "").strip()
+        cookie = self._get_runtime_site_cookie(site=site, base_url=base_url)
         warm_cache: Dict[str, str] = {}
 
         username = str(
@@ -1034,8 +1035,12 @@ class GyingIndexer(_PluginBase):
             # 如果解了 PoW 导致 cookie 有更新，回写持久化
             if effective_cookie and effective_cookie != cookie:
                 site["cookie"] = effective_cookie
-                self._persist_site_cookie(site=site, cookie=effective_cookie)
-                logger.info("观影(GYing)PoW 验证通过，已回写站点 cookie。")
+                self._remember_runtime_site_cookie(site=site, base_url=base_url, cookie=effective_cookie)
+                persisted = self._persist_site_cookie(site=site, cookie=effective_cookie)
+                if persisted:
+                    logger.info("观影(GYing)PoW 验证通过，已回写站点 cookie。")
+                else:
+                    logger.info("观影(GYing)PoW 验证通过，已刷新运行时 cookie。")
             return effective_cookie, warm_cache
 
         if not has_credentials:
@@ -1053,9 +1058,12 @@ class GyingIndexer(_PluginBase):
                     if ready_url2 and ready_body2:
                         warm_cache[ready_url2] = ready_body2
                     site["cookie"] = merged_cookie
+                    self._remember_runtime_site_cookie(site=site, base_url=base_url, cookie=merged_cookie)
                     persisted = self._persist_site_cookie(site=site, cookie=merged_cookie)
                     if persisted:
                         logger.info("观影(GYing)PoW 验证通过，已回写站点 cookie。")
+                    else:
+                        logger.info("观影(GYing)PoW 验证通过，已刷新运行时 cookie。")
                     return merged_cookie, warm_cache
             logger.warn("观影(GYing)cookie 已失效且未配置可用账号密码，无法自动登录。")
             return cookie, warm_cache
@@ -1067,6 +1075,7 @@ class GyingIndexer(_PluginBase):
             ua=ua,
             proxies=proxies,
             timeout=timeout,
+            existing_cookie=effective_cookie or cookie,
         )
         if not refreshed:
             logger.warn("观影(GYing)自动登录失败，继续使用现有 cookie 搜索。")
@@ -1074,6 +1083,7 @@ class GyingIndexer(_PluginBase):
 
         # 登录成功后直接回写，不再发第二次预检请求（避免再次触发 PoW）
         site["cookie"] = refreshed
+        self._remember_runtime_site_cookie(site=site, base_url=base_url, cookie=refreshed)
         persisted = self._persist_site_cookie(site=site, cookie=refreshed)
         if persisted:
             logger.info("观影(GYing)检测到 cookie 失效，已自动登录并刷新会话，且已回写站点 cookie。")
@@ -1268,6 +1278,11 @@ class GyingIndexer(_PluginBase):
         return ("_BT.PC.HTML('login')" in text) or ('_BT.PC.HTML("login")' in text)
 
     @staticmethod
+    def _is_retired_host_page(html_text: str) -> bool:
+        text = str(html_text or "")
+        return "当前网址将在不久后失效" in text and "获取新网址" in text and "/urlop/" in text
+
+    @staticmethod
     def _is_pow_page(html_text: str) -> bool:
         text = str(html_text or "")
         return "正在确认你是不是机器人" in text and "challenge" in text and "diff" in text
@@ -1276,11 +1291,19 @@ class GyingIndexer(_PluginBase):
     def _detect_pow_challenge(html_text: str) -> Optional[Dict[str, Any]]:
         """从人机验证页面解析 PoW 挑战参数。"""
         text = str(html_text or "")
-        match = re.search(r'const\s+json\s*=\s*(\{[^;]{20,500}\});', text)
-        if not match:
+        payload = ""
+        for pattern in (
+            r'const\s+json\s*=\s*(\{.*?\})\s*;\s*const\s+jss\s*=',
+            r'const\s+json\s*=\s*(\{.*?\})\s*;',
+        ):
+            match = re.search(pattern, text, re.S)
+            if match:
+                payload = str(match.group(1) or "").strip()
+                break
+        if not payload:
             return None
         try:
-            obj = json.loads(match.group(1))
+            obj = json.loads(payload)
             if all(k in obj for k in ("id", "challenge", "diff", "salt")):
                 return obj
         except Exception:
@@ -1449,7 +1472,8 @@ class GyingIndexer(_PluginBase):
             return False, cookie, "", ""
 
     def _login_and_get_cookie(self, base_url: str, username: str, password: str, ua: str,
-                              proxies: Optional[Dict[str, str]], timeout: int) -> str:
+                              proxies: Optional[Dict[str, str]], timeout: int,
+                              existing_cookie: str = "") -> str:
         root_candidates = self._build_login_roots(base_url=base_url)
         for root in root_candidates:
             try:
@@ -1459,6 +1483,8 @@ class GyingIndexer(_PluginBase):
                         "User-Agent": ua or settings.USER_AGENT,
                         "Referer": root,
                     })
+                    if existing_cookie:
+                        session.headers["Cookie"] = existing_cookie
                     resp = session.get(root, timeout=max(5, int(timeout or 20)))
 
                     # 处理 PoW 人机验证
@@ -1828,16 +1854,21 @@ class GyingIndexer(_PluginBase):
                 return True
         return False
 
-    def _resolve_base_url(self, site: dict) -> str:
+    def _resolve_base_url(self, site: dict, ua: str = "",
+                          proxies: Optional[Dict[str, str]] = None,
+                          timeout: int = 20) -> str:
         raw = str(site.get("url") or site.get("domain") or "").strip()
         if not raw:
             raw = "https://www.gying.si/"
-        if "://" not in raw:
-            raw = f"https://{raw}"
-        parsed = urlparse(raw)
-        if not parsed.netloc:
+        base_url = self._normalize_base_url(raw)
+        if not base_url:
             return "https://www.gying.si/"
-        return f"{parsed.scheme}://{parsed.netloc}/"
+        return self._refresh_base_url_if_needed(
+            base_url=base_url,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+        )
 
     @staticmethod
     def _build_search_url(base_url: str, keyword: str,
@@ -2024,6 +2055,156 @@ class GyingIndexer(_PluginBase):
         }
 
     @staticmethod
+    def _normalize_base_url(raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if "://" not in text:
+            text = f"https://{text}"
+        try:
+            parsed = urlparse(text)
+        except Exception:
+            return ""
+        scheme = parsed.scheme or "https"
+        host = GyingIndexer._to_ascii_host(parsed.hostname or "")
+        if not host:
+            return ""
+        netloc = host
+        if parsed.port:
+            netloc = f"{host}:{parsed.port}"
+        return f"{scheme}://{netloc}/"
+
+    @staticmethod
+    def _to_ascii_host(raw: Any) -> str:
+        text = str(raw or "").strip().lower()
+        if not text:
+            return ""
+        try:
+            return text.encode("idna").decode("ascii").lower()
+        except Exception:
+            return text
+
+    def _fetch_latest_hosts(self, base_url: str, ua: str,
+                            proxies: Optional[Dict[str, str]],
+                            timeout: int) -> List[str]:
+        discover_url = urljoin(base_url, "urlop/")
+        try:
+            resp = requests.get(
+                discover_url,
+                headers={
+                    "User-Agent": ua or settings.USER_AGENT,
+                    "Referer": base_url,
+                },
+                proxies=proxies,
+                timeout=max(5, int(timeout or 20)),
+            )
+            if not resp.ok:
+                return []
+            data = resp.json()
+        except Exception as err:
+            logger.warn(f"观影(GYing)拉取最新地址失败：{err}")
+            return []
+
+        hosts: List[str] = []
+        seen: Set[str] = set()
+        for item in data.get("host") or []:
+            host = self._to_ascii_host(item)
+            if not host:
+                continue
+            if host.startswith("www."):
+                host = host[4:]
+            if host in seen:
+                continue
+            seen.add(host)
+            hosts.append(host)
+        return hosts
+
+    def _refresh_base_url_if_needed(self, base_url: str, ua: str,
+                                    proxies: Optional[Dict[str, str]],
+                                    timeout: int) -> str:
+        runtime_key = self._site_runtime_key(site=None, base_url=base_url)
+        cached_target = str(self._runtime_site_base_urls.get(runtime_key) or "").strip()
+        target = cached_target or str(base_url or "").strip()
+        if not target:
+            return ""
+
+        try:
+            resp = requests.get(
+                target,
+                headers={
+                    "User-Agent": ua or settings.USER_AGENT,
+                    "Referer": target,
+                },
+                proxies=proxies,
+                timeout=max(5, int(timeout or 20)),
+            )
+            if not resp.ok or not self._is_retired_host_page(resp.text):
+                self._runtime_site_base_urls[runtime_key] = target
+                return target
+        except Exception as err:
+            logger.warn(f"观影(GYing)探测站点域名状态失败：{err}")
+            return target
+
+        latest_hosts = self._fetch_latest_hosts(
+            base_url=target,
+            ua=ua,
+            proxies=proxies,
+            timeout=timeout,
+        )
+        if not latest_hosts:
+            return target
+
+        scheme = urlparse(target).scheme or "https"
+        for host in latest_hosts:
+            candidate = f"{scheme}://www.{host}/"
+            try:
+                resp = requests.get(
+                    candidate,
+                    headers={
+                        "User-Agent": ua or settings.USER_AGENT,
+                        "Referer": candidate,
+                    },
+                    proxies=proxies,
+                    timeout=max(5, int(timeout or 20)),
+                )
+                if resp.ok and not self._is_retired_host_page(resp.text):
+                    self._runtime_site_base_urls[runtime_key] = candidate
+                    logger.info(f"观影(GYing)检测到旧域名已失效，已切换到最新地址：{candidate}")
+                    return candidate
+            except Exception as err:
+                logger.debug(f"观影(GYing)探测最新地址失败：host={host}，err={err}")
+                continue
+        return target
+
+    @staticmethod
+    def _site_runtime_key(site: Optional[dict], base_url: str = "") -> str:
+        if isinstance(site, dict):
+            site_id = str(site.get("id") or "").strip().lower()
+            if site_id:
+                return f"id:{site_id}"
+            host = GyingIndexer._extract_host(site.get("url") or site.get("domain"))
+            if host:
+                return f"host:{host}"
+        host = GyingIndexer._extract_host(base_url)
+        if host:
+            return f"host:{host}"
+        return "host:gying.si"
+
+    def _get_runtime_site_cookie(self, site: dict, base_url: str) -> str:
+        runtime_key = self._site_runtime_key(site=site, base_url=base_url)
+        runtime_cookie = self._normalize_cookie_header(self._runtime_site_cookies.get(runtime_key) or "")
+        site_cookie = self._normalize_cookie_header(site.get("cookie") or "")
+        if runtime_cookie:
+            return runtime_cookie
+        return site_cookie
+
+    def _remember_runtime_site_cookie(self, site: dict, base_url: str, cookie: str) -> None:
+        runtime_key = self._site_runtime_key(site=site, base_url=base_url)
+        cookie_text = self._normalize_cookie_header(cookie)
+        if cookie_text:
+            self._runtime_site_cookies[runtime_key] = cookie_text
+
+    @staticmethod
     def _extract_host(raw: Any) -> str:
         if raw is None:
             return ""
@@ -2036,6 +2217,7 @@ class GyingIndexer(_PluginBase):
             host = (urlparse(text).hostname or "").lower()
         except Exception:
             return ""
+        host = GyingIndexer._to_ascii_host(host)
         if host.startswith("www."):
             host = host[4:]
         return host
