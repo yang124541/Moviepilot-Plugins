@@ -27,7 +27,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.2.8"
+    plugin_version = "1.2.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -593,7 +593,7 @@ class LdysgIndexer(_PluginBase):
             try:
                 resp = session.post(
                     api_url,
-                    data={"fun": "get_vbt", "id": vid, "issear": "1", "vcode": vcode},
+                    data={"fun": "get_vbt", "id": vid, "issear": "0", "vcode": vcode},
                     headers=headers,
                     proxies=proxies,
                     timeout=max(5, timeout),
