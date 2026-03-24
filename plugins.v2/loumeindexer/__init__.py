@@ -19,10 +19,10 @@ from app.schemas.types import MediaType
 
 
 class LoumeIndexer(_PluginBase):
-    plugin_name = "BT之家（1lou.me）"
-    plugin_desc = "为 1lou.me 提供种子搜索支持，支持账号登录。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.ico"
-    plugin_version = "1.0.4"
+    plugin_name = "BT之家"
+    plugin_desc = "为 1lou.me 提供种子搜索支持。"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
+    plugin_version = "1.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -30,8 +30,6 @@ class LoumeIndexer(_PluginBase):
     auth_level = 2
 
     _enabled = False
-    _login_username = ""
-    _login_password = ""
     _extra_hosts = ""
     _detail_concurrency = 5
 
@@ -45,8 +43,6 @@ class LoumeIndexer(_PluginBase):
     def init_plugin(self, config: dict = None):
         if config:
             self._enabled = bool(config.get("enabled"))
-            self._login_username = str(config.get("login_username") or "").strip()
-            self._login_password = str(config.get("login_password") or "").strip()
             self._extra_hosts = (config.get("extra_hosts") or "").strip()
             self._detail_concurrency = self._clamp_detail_concurrency(
                 config.get("detail_concurrency")
@@ -93,40 +89,6 @@ class LoumeIndexer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "login_username",
-                                            "label": "账号（Email）",
-                                            "placeholder": "请输入 1lou.me 邮箱账号",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "login_password",
-                                            "label": "密码",
-                                            "type": "password",
-                                            "placeholder": "请输入 1lou.me 密码",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
                                 "props": {"cols": 12, "md": 4},
                                 "content": [
                                     {
@@ -141,10 +103,15 @@ class LoumeIndexer(_PluginBase):
                                         },
                                     }
                                 ],
-                            },
+                            }
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 8},
+                                "props": {"cols": 12},
                                 "content": [
                                     {
                                         "component": "VTextarea",
@@ -171,8 +138,7 @@ class LoumeIndexer(_PluginBase):
                                         "props": {
                                             "type": "info",
                                             "variant": "tonal",
-                                            "text": "1lou.me（BT之家）是一个BT资源论坛，提供影视剧集种子下载。"
-                                                    "登录后可下载种子附件，未登录仅能获取种子文件名信息。"
+                                            "text": "1lou.me 是一个 BT 资源论坛，提供影视剧集种子下载。"
                                                     "站点 URL 请在 MoviePilot 站点管理中配置为 https://www.1lou.me/",
                                         },
                                     }
@@ -184,8 +150,6 @@ class LoumeIndexer(_PluginBase):
             }
         ], {
             "enabled": False,
-            "login_username": "",
-            "login_password": "",
             "extra_hosts": "",
             "detail_concurrency": 5,
         }
@@ -232,20 +196,7 @@ class LoumeIndexer(_PluginBase):
             session = _requests.Session()
             cookie_from_site = str(site.get("cookie") or "").strip()
 
-            # 尝试登录获取 cookie（若有账号密码配置）
-            if self._login_username and self._login_password:
-                login_cookie = self._login(
-                    session=session,
-                    base_url=base_url,
-                    ua=ua,
-                    proxies=proxies,
-                    timeout=timeout,
-                )
-                if not login_cookie:
-                    logger.warning("BT之家(1lou)登录失败，将尝试使用站点 cookie")
-                    if cookie_from_site:
-                        session.headers.update({"Cookie": cookie_from_site})
-            elif cookie_from_site:
+            if cookie_from_site:
                 session.headers.update({"Cookie": cookie_from_site})
 
             session.headers.update({
@@ -464,52 +415,6 @@ class LoumeIndexer(_PluginBase):
         if session_cookies:
             session.cookies.update(dict(session_cookies))
         return session
-
-    def _login(self, session: _requests.Session, base_url: str,
-               ua: str, proxies: Optional[Dict[str, str]], timeout: int) -> bool:
-        """登录 1lou.me，成功后 session 会持有有效 cookie"""
-        login_url = urljoin(base_url, "user-login.htm")
-        headers = {
-            "User-Agent": ua,
-            "Referer": login_url,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-        payload = {
-            "email": self._login_username,
-            "password": self._login_password,
-        }
-        try:
-            # 先 GET 登录页（获取可能的 token/session）
-            session.get(login_url, headers=headers, proxies=proxies,
-                        timeout=timeout, verify=False)
-            # 提交登录表单
-            resp = session.post(
-                login_url,
-                data=payload,
-                headers=headers,
-                proxies=proxies,
-                timeout=timeout,
-                verify=False,
-                allow_redirects=True,
-            )
-            if resp.status_code in (200, 302):
-                # 检查是否登录成功（页面中无登录按钮，或含用户名）
-                if "user-login.htm" not in resp.url and resp.status_code == 200:
-                    # 重定向走了，可能成功
-                    logger.info("BT之家(1lou)登录成功")
-                    return True
-                # 检查响应内容
-                text = resp.text
-                if "user-login.htm" in text and "icon-user" in text:
-                    # 还在登录页，失败
-                    logger.warning("BT之家(1lou)登录失败：账号或密码错误")
-                    return False
-                logger.info("BT之家(1lou)登录成功")
-                return True
-        except Exception as e:
-            logger.warning(f"BT之家(1lou)登录异常：{e}")
-        return False
 
     @staticmethod
     def _encode_keyword(keyword: str) -> str:
