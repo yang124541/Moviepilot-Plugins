@@ -1,5 +1,9 @@
+import hashlib
 import re
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
+from html import unescape
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, quote
 
@@ -17,8 +21,8 @@ from app.schemas.types import MediaType
 class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家（1lou.me）"
     plugin_desc = "为 1lou.me 提供种子搜索支持，支持账号登录。"
-    plugin_icon = "https://www.1lou.me/view/img/favicon.ico"
-    plugin_version = "1.0.1"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.ico"
+    plugin_version = "1.0.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -29,9 +33,11 @@ class LoumeIndexer(_PluginBase):
     _login_username = ""
     _login_password = ""
     _extra_hosts = ""
+    _detail_concurrency = 5
 
     _default_host = "1lou.me"
     _default_base_url = "https://www.1lou.me/"
+    _allowed_forum_ids = {1, 2, 3, 4}
 
     # 搜索最大分页
     _max_search_pages: int = 5
@@ -42,6 +48,9 @@ class LoumeIndexer(_PluginBase):
             self._login_username = str(config.get("login_username") or "").strip()
             self._login_password = str(config.get("login_password") or "").strip()
             self._extra_hosts = (config.get("extra_hosts") or "").strip()
+            self._detail_concurrency = self._clamp_detail_concurrency(
+                config.get("detail_concurrency")
+            )
 
         if self._enabled:
             self._register_builtin_indexer()
@@ -118,7 +127,24 @@ class LoumeIndexer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12},
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "detail_concurrency",
+                                            "type": "number",
+                                            "label": "资源页并发数",
+                                            "placeholder": "5",
+                                            "hint": "并发抓取帖子详情页与种子附件，允许范围 1-20",
+                                            "persistentHint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 8},
                                 "content": [
                                     {
                                         "component": "VTextarea",
@@ -161,6 +187,7 @@ class LoumeIndexer(_PluginBase):
             "login_username": "",
             "login_password": "",
             "extra_hosts": "",
+            "detail_concurrency": 5,
         }
 
     def get_page(self) -> List[dict]:
@@ -240,9 +267,28 @@ class LoumeIndexer(_PluginBase):
                 logger.info(f"BT之家(1lou)搜索无结果：关键词='{keyword}'")
                 return []
 
+            filtered_thread_items = [
+                item for item in thread_items
+                if self._is_allowed_search_forum_id(item.get("forum_id"))
+            ]
+            if not filtered_thread_items:
+                logger.info(
+                    f"BT之家(1lou)搜索无结果：关键词='{keyword}'，"
+                    f"搜索结果均不在允许分类(1/2/3/4)内"
+                )
+                return []
+
+            attach_map = self._fetch_thread_attachments_concurrently(
+                base_url=base_url,
+                thread_items=filtered_thread_items,
+                session_headers=dict(session.headers),
+                session_cookies=session.cookies.get_dict(),
+                timeout=timeout,
+                proxies=proxies,
+            )
             results: List[TorrentInfo] = []
 
-            for item in thread_items:
+            for item in filtered_thread_items:
                 tid = str(item.get("tid") or "").strip()
                 if not tid:
                     continue
@@ -252,15 +298,7 @@ class LoumeIndexer(_PluginBase):
 
                 thread_url = urljoin(base_url, f"thread-{tid}.htm")
 
-                # 获取帖子详情页的种子附件
-                attach_items = self._fetch_thread_attachments(
-                    session=session,
-                    base_url=base_url,
-                    tid=tid,
-                    timeout=timeout,
-                    proxies=proxies,
-                )
-
+                attach_items = attach_map.get(tid) or []
                 if not attach_items:
                     # 没有附件，跳过
                     continue
@@ -268,11 +306,14 @@ class LoumeIndexer(_PluginBase):
                 for attach in attach_items:
                     aid = str(attach.get("aid") or "").strip()
                     filename = str(attach.get("filename") or "").strip()
+                    enclosure = str(attach.get("enclosure") or "").strip()
                     if not aid:
                         continue
 
                     # 种子下载 URL
                     download_url = urljoin(base_url, f"attach-download-{aid}.htm")
+                    if not enclosure:
+                        enclosure = download_url
 
                     # 用文件名或帖子标题作为 TorrentInfo 标题
                     torrent_title = filename if filename else title
@@ -294,7 +335,7 @@ class LoumeIndexer(_PluginBase):
                         site_downloader=site.get("downloader"),
                         title=torrent_title,
                         description=description,
-                        enclosure=download_url,
+                        enclosure=enclosure,
                         page_url=thread_url,
                         size=size_bytes,
                         seeders=0,
@@ -308,13 +349,121 @@ class LoumeIndexer(_PluginBase):
             cost = (datetime.now() - start_at).seconds
             logger.info(
                 f"BT之家(1lou)搜索完成：关键词='{keyword}'，"
-                f"找到帖子={len(thread_items)}，返回种子={len(results)}，耗时={cost}s"
+                f"找到帖子={len(thread_items)}，分类过滤后帖子={len(filtered_thread_items)}，返回种子={len(results)}，耗时={cost}s"
             )
             return results
 
         except Exception as err:
             logger.error(f"BT之家(1lou)搜索异常：关键词='{keyword}'，错误={err}")
             return []
+
+    def _fetch_thread_attachments_concurrently(
+            self,
+            base_url: str,
+            thread_items: List[Dict[str, Any]],
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> Dict[str, List[Dict[str, Any]]]:
+        attach_map: Dict[str, List[Dict[str, Any]]] = {}
+        worker_count = min(
+            len(thread_items),
+            self._clamp_detail_concurrency(self._detail_concurrency),
+        )
+        if worker_count <= 1:
+            for item in thread_items:
+                tid = str(item.get("tid") or "").strip()
+                if not tid:
+                    continue
+                attach_map[tid] = self._fetch_single_thread_attachments(
+                    base_url=base_url,
+                    tid=tid,
+                    session_headers=session_headers,
+                    session_cookies=session_cookies,
+                    timeout=timeout,
+                    proxies=proxies,
+                )
+            return attach_map
+
+        logger.info(
+            f"BT之家(1lou)开始并发抓取帖子详情："
+            f"帖子数={len(thread_items)}，并发数={worker_count}"
+        )
+
+        task_queue = deque(
+            (str(item.get("tid") or "").strip(), item)
+            for item in thread_items
+            if str(item.get("tid") or "").strip()
+        )
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="1lou") as executor:
+            running_tasks: Dict[Any, Tuple[str, Dict[str, Any]]] = {}
+            while task_queue or running_tasks:
+                while task_queue and len(running_tasks) < worker_count:
+                    tid, item = task_queue.popleft()
+                    future = executor.submit(
+                        self._fetch_single_thread_attachments,
+                        base_url,
+                        tid,
+                        session_headers,
+                        session_cookies,
+                        timeout,
+                        proxies,
+                    )
+                    running_tasks[future] = (tid, item)
+
+                if not running_tasks:
+                    break
+
+                done, _ = wait(tuple(running_tasks.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    tid, item = running_tasks.pop(future)
+                    try:
+                        attach_map[tid] = future.result() or []
+                    except Exception as err:
+                        title = str((item or {}).get("title") or "").strip()
+                        logger.debug(
+                            f"BT之家(1lou)并发抓取帖子详情异常："
+                            f"tid={tid}，标题='{title}'，错误={err}"
+                        )
+                        attach_map[tid] = []
+        return attach_map
+
+    def _fetch_single_thread_attachments(
+            self,
+            base_url: str,
+            tid: str,
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+        session = self._build_worker_session(
+            session_headers=session_headers,
+            session_cookies=session_cookies,
+        )
+        try:
+            return self._fetch_thread_attachments(
+                session=session,
+                base_url=base_url,
+                tid=tid,
+                timeout=timeout,
+                proxies=proxies,
+            )
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _build_worker_session(
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str]) -> _requests.Session:
+        session = _requests.Session()
+        if session_headers:
+            session.headers.update(dict(session_headers))
+        if session_cookies:
+            session.cookies.update(dict(session_cookies))
+        return session
 
     def _login(self, session: _requests.Session, base_url: str,
                ua: str, proxies: Optional[Dict[str, str]], timeout: int) -> bool:
@@ -437,39 +586,59 @@ class LoumeIndexer(_PluginBase):
         items: List[Dict[str, Any]] = []
         seen: set = set()
 
-        tid_pattern = re.compile(r'data-tid="(\d+)"')
-        matches = list(tid_pattern.finditer(html))
-
-        for i, m in enumerate(matches):
-            tid = m.group(1)
-            if tid in seen:
+        # 优先匹配当前 1lou 搜索页结构：
+        # <ul class="threadlist"> ... <li data-tid="123"> ... <a href="thread-123.htm">标题</a>
+        block_pattern = re.compile(
+            r'<li\b[^>]*\bdata-tid="(\d+)"[^>]*>(.*?)</li>',
+            re.IGNORECASE | re.DOTALL
+        )
+        for match in block_pattern.finditer(html):
+            tid = str(match.group(1) or "").strip()
+            if not tid or tid in seen:
                 continue
-            seen.add(tid)
-
-            # 当前帖子块的范围
-            start = m.start()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(html)
-            block = html[start:end]
-
-            # 在块内找 thread-{tid}.htm 对应链接，取第一个非空标题
-            link_iter = re.finditer(
+            block = match.group(2) or ""
+            link_match = re.search(
                 rf'href="thread-{tid}\.htm"[^>]*>(.*?)</a>',
                 block,
                 re.IGNORECASE | re.DOTALL
             )
-            for lm in link_iter:
-                raw = lm.group(1)
-                title = re.sub(r'<[^>]+>', '', raw).strip()
-                if title:
-                    items.append({"tid": tid, "title": title})
-                    break
+            if not link_match:
+                continue
+            title = LoumeIndexer._clean_html_text(link_match.group(1))
+            if not title:
+                continue
+            forum_id = LoumeIndexer._extract_search_forum_id(block)
+            seen.add(tid)
+            items.append({"tid": tid, "title": title, "forum_id": forum_id})
+
+        if items:
+            return items
+
+        # 回退：全局提取 thread-*.htm 链接，兼容列表块结构变化但链接规则不变的场景
+        for match in re.finditer(
+            r'href="thread-(\d+)\.htm"[^>]*>(.*?)</a>',
+            html,
+            re.IGNORECASE | re.DOTALL
+        ):
+            tid = str(match.group(1) or "").strip()
+            if not tid or tid in seen:
+                continue
+            title = LoumeIndexer._clean_html_text(match.group(2))
+            if not title:
+                continue
+            seen.add(tid)
+            items.append({"tid": tid, "title": title, "forum_id": None})
 
         return items
 
     @staticmethod
     def _has_next_page(html: str) -> bool:
         """检查是否有下一页（分页区域存在 search-*-1-N.htm 链接）"""
-        return bool(re.search(r'href="search-[^"]*-1-\d+\.htm"', html, re.IGNORECASE))
+        return bool(re.search(
+            r'href="search-[^"]*-1-\d+\.htm"|rel="next"',
+            html,
+            re.IGNORECASE
+        ))
 
     def _fetch_thread_attachments(self, session: _requests.Session, base_url: str,
                                   tid: str, timeout: int,
@@ -486,7 +655,24 @@ class LoumeIndexer(_PluginBase):
             )
             if not resp.ok:
                 return []
-            return self._parse_attachments(resp.text)
+            attach_items = self._parse_attachments(resp.text)
+            if not attach_items:
+                return []
+
+            for attach in attach_items:
+                aid = str(attach.get("aid") or "").strip()
+                filename = str(attach.get("filename") or "").strip()
+                if not aid:
+                    continue
+                download_url = urljoin(base_url, f"attach-download-{aid}.htm")
+                attach["enclosure"] = self._resolve_attachment_enclosure(
+                    session=session,
+                    download_url=download_url,
+                    filename=filename,
+                    timeout=timeout,
+                    proxies=proxies,
+                ) or download_url
+            return attach_items
         except Exception as e:
             logger.debug(f"BT之家(1lou)获取帖子详情失败：tid={tid}，{e}")
             return []
@@ -518,46 +704,124 @@ class LoumeIndexer(_PluginBase):
 
         attachlist_html = attachlist_match.group(1)
 
-        # 解析每个 li
+        # 优先按当前结构解析：
+        # <li aid="2925671"><a href="attach-download-2925671.htm">xxx.torrent</a></li>
         li_pattern = re.compile(
-            r'<li\s+aid="(\d+)"[^>]*>.*?<a\s+href="attach-download-\d+\.htm"[^>]*>'
-            r'.*?(?:<i[^>]*></i>)?\s*(.*?)\s*</a>',
+            r'<li\b[^>]*\baid="(\d+)"[^>]*>(.*?)</li>',
             re.IGNORECASE | re.DOTALL
         )
-        for m in li_pattern.finditer(attachlist_html):
-            aid = m.group(1)
-            raw_name = m.group(2)
-            # 去除 HTML 标签
-            filename = re.sub(r'<[^>]+>', '', raw_name).strip()
-
-            # 只保留 .torrent 文件
+        for match in li_pattern.finditer(attachlist_html):
+            aid = str(match.group(1) or "").strip()
+            if not aid:
+                continue
+            block = match.group(2) or ""
+            link_match = re.search(
+                r'href="attach-download-(\d+)\.htm"[^>]*>(.*?)</a>',
+                block,
+                re.IGNORECASE | re.DOTALL
+            )
+            if not link_match:
+                continue
+            filename = LoumeIndexer._clean_html_text(link_match.group(2))
             if filename.lower().endswith(".torrent"):
                 items.append({"aid": aid, "filename": filename})
 
         # 若上面正则未匹配（HTML 结构变化），尝试更宽松的方式
         if not items:
-            aid_pattern = re.compile(r'<li\s+aid="(\d+)"', re.IGNORECASE)
-            link_pattern = re.compile(
-                r'href="attach-download-(\d+)\.htm"[^>]*>.*?</a>',
+            for match in re.finditer(
+                r'href="attach-download-(\d+)\.htm"[^>]*>(.*?)</a>',
+                attachlist_html,
                 re.IGNORECASE | re.DOTALL
-            )
-            for li_m in aid_pattern.finditer(attachlist_html):
-                aid = li_m.group(1)
-                # 在这个 li 之后找链接
-                pos = li_m.end()
-                nearby = attachlist_html[pos:pos + 500]
-                lm = re.search(
-                    r'href="attach-download-\d+\.htm"[^>]*>\s*(?:<[^>]+>)?\s*(.*?)\s*</a>',
-                    nearby,
-                    re.IGNORECASE | re.DOTALL
-                )
-                if lm:
-                    raw = lm.group(1)
-                    filename = re.sub(r'<[^>]+>', '', raw).strip()
-                    if filename.lower().endswith(".torrent"):
-                        items.append({"aid": aid, "filename": filename})
+            ):
+                aid = str(match.group(1) or "").strip()
+                if not aid:
+                    continue
+                filename = LoumeIndexer._clean_html_text(match.group(2))
+                if filename.lower().endswith(".torrent"):
+                    items.append({"aid": aid, "filename": filename})
 
         return items
+
+    def _resolve_attachment_enclosure(
+            self,
+            session: _requests.Session,
+            download_url: str,
+            filename: str,
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> str:
+        try:
+            resp = session.get(
+                download_url,
+                timeout=timeout,
+                proxies=proxies,
+                verify=False,
+                allow_redirects=True,
+            )
+            if not resp.ok:
+                return download_url
+            magnet = self._torrent_to_magnet(
+                resp.content,
+                fallback_name=filename,
+                exact_source=download_url,
+            )
+            if magnet:
+                return magnet
+        except Exception as err:
+            logger.debug(f"BT之家(1lou)附件转磁力失败：文件='{filename}'，错误={err}")
+        return download_url
+
+    @staticmethod
+    def _clean_html_text(raw: Any) -> str:
+        text = str(raw or "")
+        if not text:
+            return ""
+        text = re.sub(r'<br\s*/?>', ' ', text, flags=re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = unescape(text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    @staticmethod
+    def _is_netdisk_thread_title(raw: Any) -> bool:
+        title = str(raw or "").strip().lower()
+        if not title:
+            return False
+        netdisk_tokens = (
+            "夸克下载",
+            "夸克网盘",
+            "百度网盘",
+            "百度云",
+            "阿里云盘",
+            "阿里网盘",
+            "迅雷云盘",
+            "uc网盘",
+            "uc下载",
+            "115网盘",
+            "115下载",
+            "网盘下载",
+            "网盘资源",
+        )
+        return any(token in title for token in netdisk_tokens)
+
+    def _is_allowed_search_forum_id(self, raw: Any) -> bool:
+        try:
+            forum_id = int(raw)
+        except Exception:
+            return False
+        return forum_id in self._allowed_forum_ids
+
+    @staticmethod
+    def _extract_search_forum_id(block: Any) -> Optional[int]:
+        text = str(block or "")
+        if not text:
+            return None
+        matches = re.findall(r'href="forum-(\d+)-\d+\.htm(?:\?[^"]*)?"', text, re.IGNORECASE)
+        for raw in matches:
+            try:
+                return int(raw)
+            except Exception:
+                continue
+        return None
 
     @staticmethod
     def _parse_size_from_title(title: str) -> int:
@@ -569,6 +833,155 @@ class LoumeIndexer(_PluginBase):
         unit = m.group(2).upper()
         mul = {"TB": 1 << 40, "GB": 1 << 30, "MB": 1 << 20, "KB": 1 << 10}
         return int(val * mul.get(unit, 0))
+
+    @staticmethod
+    def _torrent_to_magnet(
+            data: bytes,
+            fallback_name: str = "",
+            exact_source: str = "") -> str:
+        if not data:
+            return ""
+        try:
+            parsed, info_start, info_end = LoumeIndexer._bdecode_with_info_range(data)
+        except Exception:
+            return ""
+        if info_start < 0 or info_end <= info_start:
+            return ""
+
+        info_hash = hashlib.sha1(data[info_start:info_end]).hexdigest()
+        dn = str(fallback_name or "").strip()
+        xl = 0
+        tr_list: List[str] = []
+        ws_list: List[str] = []
+        if isinstance(parsed, dict):
+            info = parsed.get(b"info")
+            if isinstance(info, dict):
+                name_bytes = info.get(b"name.utf-8") or info.get(b"name")
+                if isinstance(name_bytes, (bytes, bytearray)):
+                    dn = bytes(name_bytes).decode("utf-8", errors="ignore").strip()
+                xl = LoumeIndexer._extract_torrent_total_length(info)
+            announce = parsed.get(b"announce")
+            if isinstance(announce, (bytes, bytearray)):
+                tr_list.append(bytes(announce).decode("utf-8", errors="ignore").strip())
+            announce_list = parsed.get(b"announce-list")
+            if isinstance(announce_list, list):
+                for tier in announce_list:
+                    if isinstance(tier, list):
+                        for item in tier:
+                            if isinstance(item, (bytes, bytearray)):
+                                tr_list.append(bytes(item).decode("utf-8", errors="ignore").strip())
+                    elif isinstance(tier, (bytes, bytearray)):
+                        tr_list.append(bytes(tier).decode("utf-8", errors="ignore").strip())
+            url_list = parsed.get(b"url-list")
+            if isinstance(url_list, list):
+                for item in url_list:
+                    if isinstance(item, (bytes, bytearray)):
+                        ws_list.append(bytes(item).decode("utf-8", errors="ignore").strip())
+            elif isinstance(url_list, (bytes, bytearray)):
+                ws_list.append(bytes(url_list).decode("utf-8", errors="ignore").strip())
+            httpseeds = parsed.get(b"httpseeds")
+            if isinstance(httpseeds, list):
+                for item in httpseeds:
+                    if isinstance(item, (bytes, bytearray)):
+                        ws_list.append(bytes(item).decode("utf-8", errors="ignore").strip())
+            elif isinstance(httpseeds, (bytes, bytearray)):
+                ws_list.append(bytes(httpseeds).decode("utf-8", errors="ignore").strip())
+
+        magnet = f"magnet:?xt=urn:btih:{info_hash}"
+        if dn:
+            magnet += f"&dn={quote(dn)}"
+        if xl > 0:
+            magnet += f"&xl={xl}"
+        if exact_source:
+            magnet += f"&xs={quote(str(exact_source).strip(), safe=':/?&=')}"
+
+        seen = set()
+        for tr in tr_list:
+            tracker = str(tr or "").strip()
+            if not tracker or tracker in seen:
+                continue
+            seen.add(tracker)
+            magnet += f"&tr={quote(tracker, safe=':/?&=')}"
+
+        ws_seen = set()
+        for ws in ws_list:
+            web_seed = str(ws or "").strip()
+            if not web_seed or web_seed in ws_seen:
+                continue
+            ws_seen.add(web_seed)
+            magnet += f"&ws={quote(web_seed, safe=':/?&=')}"
+        return magnet
+
+    @staticmethod
+    def _extract_torrent_total_length(info: Any) -> int:
+        if not isinstance(info, dict):
+            return 0
+        length = info.get(b"length")
+        if isinstance(length, int) and length > 0:
+            return length
+        files = info.get(b"files")
+        total = 0
+        if isinstance(files, list):
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                file_length = item.get(b"length")
+                if isinstance(file_length, int) and file_length > 0:
+                    total += file_length
+        return total
+
+    @staticmethod
+    def _bdecode_with_info_range(data: bytes) -> Tuple[Any, int, int]:
+        info_start = -1
+        info_end = -1
+
+        def parse(idx: int) -> Tuple[Any, int]:
+            nonlocal info_start, info_end
+            if idx >= len(data):
+                raise ValueError("unexpected eof")
+            token = data[idx:idx + 1]
+            if token == b"i":
+                end = data.index(b"e", idx + 1)
+                return int(data[idx + 1:end]), end + 1
+            if token == b"l":
+                idx += 1
+                arr = []
+                while data[idx:idx + 1] != b"e":
+                    item, idx = parse(idx)
+                    arr.append(item)
+                return arr, idx + 1
+            if token == b"d":
+                idx += 1
+                obj = {}
+                while data[idx:idx + 1] != b"e":
+                    key, idx = parse(idx)
+                    if not isinstance(key, (bytes, bytearray)):
+                        raise ValueError("invalid key")
+                    value_start = idx
+                    value, idx = parse(idx)
+                    obj[bytes(key)] = value
+                    if bytes(key) == b"info" and info_start < 0:
+                        info_start = value_start
+                        info_end = idx
+                return obj, idx + 1
+            if b"0" <= token <= b"9":
+                colon = data.index(b":", idx)
+                length = int(data[idx:colon])
+                start = colon + 1
+                end = start + length
+                return data[start:end], end
+            raise ValueError("invalid bencode")
+
+        obj, _ = parse(0)
+        return obj, info_start, info_end
+
+    @staticmethod
+    def _clamp_detail_concurrency(value: Any) -> int:
+        try:
+            concurrency = int(value or 5)
+        except Exception:
+            concurrency = 5
+        return max(1, min(concurrency, 20))
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
@@ -583,33 +996,70 @@ class LoumeIndexer(_PluginBase):
         return False
 
     def _resolve_base_url(self, site: dict) -> str:
-        raw = str(site.get("url") or site.get("domain") or "").strip()
-        if not raw:
-            return self._default_base_url
-        if "://" not in raw:
-            raw = f"https://{raw}"
-        parsed = urlparse(raw)
-        if not parsed.netloc:
-            return self._default_base_url
-        return f"{parsed.scheme}://{parsed.netloc}/"
+        candidates = self._build_base_url_candidates(site=site)
+        if candidates:
+            return candidates[0]
+        return self._default_base_url
 
     def _all_hosts(self) -> set:
         hosts = {self._default_host, "www.1lou.me"}
-        for line in (self._extra_hosts or "").splitlines():
-            host = self._extract_host(line)
-            if host:
-                hosts.add(host)
+        for host in self._ordered_extra_hosts():
+            hosts.add(host)
         return hosts
 
+    def _registered_hosts(self) -> List[str]:
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        if ordered_extra_hosts:
+            return ordered_extra_hosts
+        return sorted(self._all_hosts())
+
+    def _ordered_extra_hosts(self) -> List[str]:
+        ret: List[str] = []
+        seen = set()
+        for line in (self._extra_hosts or "").splitlines():
+            host = self._extract_host(line)
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            ret.append(host)
+        return ret
+
+    def _build_base_url_candidates(self, site: dict) -> List[str]:
+        candidates: List[str] = []
+        seen = set()
+
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        for host in ordered_extra_hosts:
+            base_url = self._normalize_base_url(host)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+
+        if ordered_extra_hosts:
+            return candidates
+
+        for raw in (
+            site.get("url") if isinstance(site, dict) else "",
+            site.get("domain") if isinstance(site, dict) else "",
+            self._default_base_url,
+        ):
+            base_url = self._normalize_base_url(raw)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+        return candidates
+
     def _register_builtin_indexer(self) -> None:
-        all_hosts = sorted(self._all_hosts())
-        indexer = self._build_indexer_schema(all_hosts)
-        for host in all_hosts:
+        hosts = self._registered_hosts()
+        if not hosts:
+            return
+        indexer = self._build_indexer_schema(hosts)
+        for host in hosts:
             try:
                 SitesHelper().add_indexer(domain=host, indexer=indexer)
             except Exception as err:
                 logger.debug(f"BT之家(1lou)索引器注册失败：域名={host}，错误={err}")
-        logger.info(f"BT之家(1lou)索引器注册完成：域名列表={', '.join(all_hosts)}")
+        logger.info(f"BT之家(1lou)索引器注册完成：域名列表={', '.join(hosts)}")
 
     @staticmethod
     def _build_indexer_schema(all_hosts: List[str]) -> Dict[str, Any]:
@@ -662,6 +1112,22 @@ class LoumeIndexer(_PluginBase):
         except Exception:
             return ""
         return host
+
+    @staticmethod
+    def _normalize_base_url(raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if "://" not in text:
+            text = f"https://{text}"
+        try:
+            parsed = urlparse(text)
+        except Exception:
+            return ""
+        if not parsed.netloc:
+            return ""
+        scheme = parsed.scheme or "https"
+        return f"{scheme}://{parsed.netloc}/"
 
     @staticmethod
     def _is_host_match(host: str, allowed_hosts: set) -> bool:
