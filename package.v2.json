@@ -46,11 +46,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "1.9.7",
+    "version": "1.9.8",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.9.8": "调整 GYing 搜索日志文案：分页采集阶段改为输出“搜索视频项”，搜索完成阶段改为输出“返回种子数”，便于区分视频列表与最终种子结果。",
       "v1.9.7": "继续优化 GYing 首次搜索的多次 PoW：当预检阶段已经拿到可用的 browser_verified cookie 时，自动登录优先直接复用该 cookie 发起登录，不再先额外 GET 根页触发新一轮 PoW；同时返回登录 cookie 时保留已有 browser_verified，减少首次搜索出现 3 次验证的概率。",
       "v1.9.6": "继续修复 GYing 重复 PoW：除向最终响应 URL 提交 PoW 外，主搜索域名也会在预检时自动规范成真实跳转后的 www 地址，避免后续请求从裸域起跳时因 302 丢失手工 Cookie 头，导致第二次搜索又重新进入人机验证。",
       "v1.9.5": "修复 GYing 多次 PoW/PoW 提交失败：站点会先从裸域跳转到 www，PoW challenge 实际绑定在最终响应 URL；插件现改为统一向响应后的真实 URL 提交 nonce，并按真实根域发起登录，避免因向裸域误提交导致同一次搜索里重复做人机验证。",

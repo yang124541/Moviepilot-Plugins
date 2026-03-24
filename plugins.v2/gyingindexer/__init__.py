@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.9.7"
+    plugin_version = "1.9.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -584,7 +584,7 @@ class GyingIndexer(_PluginBase):
             )
             cost = (datetime.now() - start_at).seconds
             logger.info(
-                f"观影(GYing)搜索完成：关键词='{keyword}'，返回条数={len(results)}，耗时={cost}s，"
+                f"观影(GYing)搜索完成：关键词='{keyword}'，返回种子数={len(results)}，耗时={cost}s，"
                 f"请求次数={request_state.get('http')}，缓存命中={request_state.get('cache_hit')}"
             )
             return results
@@ -1983,7 +1983,7 @@ class GyingIndexer(_PluginBase):
                     row["__skip_keyword_match"] = row_dir in ("tv", "ac", "mv")
                     entry_map[key] = row
 
-        logger.info(f"观影(GYing)分页采集完成：关键词='{keyword}'，去重后条目数={len(entry_map)}")
+        logger.info(f"观影(GYing)分页采集完成：关键词='{keyword}'，搜索视频项={len(entry_map)}")
         return list(entry_map.values())
 
     def _expand_search_keywords(self, client: RequestUtils, base_url: str, keyword: str) -> List[str]:
