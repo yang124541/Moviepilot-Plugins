@@ -3,11 +3,12 @@
     "name": "BT之家",
     "description": "为 MoviePilot 增加 1lou.me BT论坛种子搜索支持。",
     "labels": "站点,索引",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.7": "伪装 IP 规则调整：同一关键词的搜索结果分页共用一个随机 IP；并发访问帖子时每个帖子单独使用不同随机 IP，并沿用到该帖附件抓取。",
       "v1.0.6": "搜索主会话新增伪装 IP，请求头补充 X-Forwarded-For / X-Real-IP；并发详情与附件抓取复用同一组头，对齐老电影插件的伪装 IP 逻辑。",
       "v1.0.5": "插件名简化为“BT之家”，说明去掉登录表述；图标改为白底居中的 loume.png，并提升版本触发刷新。",
       "v1.0.4": "搜索页按分类仅保留 forum 1/2/3/4，网盘区帖子不再进入详情抓取；附件优先转为完整 magnet（保留 btih/dn/xl/xs/tr/ws）；插件图标改为仓库内引用 1lou 网页 favicon（loume.ico）。",

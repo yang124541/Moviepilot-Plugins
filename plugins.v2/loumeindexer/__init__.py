@@ -23,7 +23,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -189,7 +189,7 @@ class LoumeIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
-        client_ip = self._rand_ip()
+        search_client_ip = self._rand_ip()
 
         logger.info(f"BT之家(1lou)开始搜索：关键词='{keyword}'")
 
@@ -205,8 +205,6 @@ class LoumeIndexer(_PluginBase):
                 "User-Agent": ua,
                 "Referer": base_url,
                 "Accept-Language": "zh-CN,zh;q=0.9",
-                "X-Forwarded-For": client_ip,
-                "X-Real-IP": client_ip,
             })
 
             # 搜索帖子列表
@@ -216,6 +214,7 @@ class LoumeIndexer(_PluginBase):
                 keyword=keyword,
                 timeout=timeout,
                 proxies=proxies,
+                client_ip=search_client_ip,
             )
 
             if not thread_items:
@@ -391,9 +390,11 @@ class LoumeIndexer(_PluginBase):
             session_cookies: Dict[str, str],
             timeout: int,
             proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+        client_ip = self._rand_ip()
         session = self._build_worker_session(
             session_headers=session_headers,
             session_cookies=session_cookies,
+            client_ip=client_ip,
         )
         try:
             return self._fetch_thread_attachments(
@@ -412,10 +413,14 @@ class LoumeIndexer(_PluginBase):
     @staticmethod
     def _build_worker_session(
             session_headers: Dict[str, str],
-            session_cookies: Dict[str, str]) -> _requests.Session:
+            session_cookies: Dict[str, str],
+            client_ip: str = "") -> _requests.Session:
         session = _requests.Session()
         if session_headers:
             session.headers.update(dict(session_headers))
+        if client_ip:
+            session.headers["X-Forwarded-For"] = client_ip
+            session.headers["X-Real-IP"] = client_ip
         if session_cookies:
             session.cookies.update(dict(session_cookies))
         return session
@@ -444,7 +449,8 @@ class LoumeIndexer(_PluginBase):
 
     def _search_threads(self, session: _requests.Session, base_url: str,
                         keyword: str, timeout: int,
-                        proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+                        proxies: Optional[Dict[str, str]],
+                        client_ip: str = "") -> List[Dict[str, Any]]:
         """搜索帖子列表，分页合并结果"""
         all_items: List[Dict[str, Any]] = []
         seen_tids: set = set()
@@ -452,12 +458,17 @@ class LoumeIndexer(_PluginBase):
 
         for page_num, url in enumerate(search_urls, start=1):
             try:
+                headers = dict(session.headers)
+                if client_ip:
+                    headers["X-Forwarded-For"] = client_ip
+                    headers["X-Real-IP"] = client_ip
                 resp = session.get(
                     url,
                     timeout=timeout,
                     proxies=proxies,
                     verify=False,
                     allow_redirects=True,
+                    headers=headers,
                 )
                 if not resp.ok:
                     logger.debug(f"BT之家(1lou)搜索请求失败：status={resp.status_code}，page={page_num}")
