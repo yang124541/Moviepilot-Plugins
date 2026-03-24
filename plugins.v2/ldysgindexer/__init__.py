@@ -28,7 +28,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.3.2"
+    plugin_version = "1.3.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -943,33 +943,70 @@ class LdysgIndexer(_PluginBase):
         return False
 
     def _resolve_base_url(self, site: dict) -> str:
-        raw = str(site.get("url") or site.get("domain") or "").strip()
-        if not raw:
-            return self._default_base_url
-        if "://" not in raw:
-            raw = f"https://{raw}"
-        parsed = urlparse(raw)
-        if not parsed.netloc:
-            return self._default_base_url
-        return f"{parsed.scheme}://{parsed.netloc}/"
+        candidates = self._build_base_url_candidates(site=site)
+        if candidates:
+            return candidates[0]
+        return self._default_base_url
 
     def _all_hosts(self) -> set:
         hosts = {self._default_host, "www.ldysg.com"}
-        for line in (self._extra_hosts or "").splitlines():
-            host = self._extract_host(line)
-            if host:
-                hosts.add(host)
+        for host in self._ordered_extra_hosts():
+            hosts.add(host)
         return hosts
 
+    def _registered_hosts(self) -> List[str]:
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        if ordered_extra_hosts:
+            return ordered_extra_hosts
+        return sorted(self._all_hosts())
+
+    def _ordered_extra_hosts(self) -> List[str]:
+        ret: List[str] = []
+        seen = set()
+        for line in (self._extra_hosts or "").splitlines():
+            host = self._extract_host(line)
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            ret.append(host)
+        return ret
+
+    def _build_base_url_candidates(self, site: dict) -> List[str]:
+        candidates: List[str] = []
+        seen = set()
+
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        for host in ordered_extra_hosts:
+            base_url = self._normalize_base_url(host)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+
+        if ordered_extra_hosts:
+            return candidates
+
+        for raw in (
+            site.get("url") if isinstance(site, dict) else "",
+            site.get("domain") if isinstance(site, dict) else "",
+            self._default_base_url,
+        ):
+            base_url = self._normalize_base_url(raw)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+        return candidates
+
     def _register_builtin_indexer(self) -> None:
-        all_hosts = sorted(self._all_hosts())
-        indexer = self._build_indexer_schema(all_hosts)
-        for host in all_hosts:
+        hosts = self._registered_hosts()
+        if not hosts:
+            return
+        indexer = self._build_indexer_schema(hosts)
+        for host in hosts:
             try:
                 SitesHelper().add_indexer(domain=host, indexer=indexer)
             except Exception as err:
                 logger.debug(f"老电影资源(ldysg)索引器注册失败：域名={host}，错误={err}")
-        logger.info(f"老电影资源(ldysg)索引器注册完成：域名列表={', '.join(all_hosts)}")
+        logger.info(f"老电影资源(ldysg)索引器注册完成：域名列表={', '.join(hosts)}")
 
     @staticmethod
     def _build_indexer_schema(all_hosts: List[str]) -> Dict[str, Any]:
@@ -1022,6 +1059,22 @@ class LdysgIndexer(_PluginBase):
         except Exception:
             return ""
         return host
+
+    @staticmethod
+    def _normalize_base_url(raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if "://" not in text:
+            text = f"https://{text}"
+        try:
+            parsed = urlparse(text)
+        except Exception:
+            return ""
+        if not parsed.netloc:
+            return ""
+        scheme = parsed.scheme or "https"
+        return f"{scheme}://{parsed.netloc}/"
 
     @staticmethod
     def _is_host_match(host: str, allowed_hosts: set) -> bool:
