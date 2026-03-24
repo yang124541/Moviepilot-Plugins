@@ -3,7 +3,7 @@
     "name": "BT之家",
     "description": "为 MoviePilot 增加 1lou.me BT论坛种子搜索支持。",
     "labels": "站点,索引",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png",
     "author": "yang124541",
     "level": 2,

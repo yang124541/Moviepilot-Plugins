@@ -23,7 +23,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
