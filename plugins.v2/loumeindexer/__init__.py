@@ -23,7 +23,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
-    plugin_version = "1.1.2"
+    plugin_version = "1.1.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -748,7 +748,7 @@ class LoumeIndexer(_PluginBase):
     @staticmethod
     def _parse_size_from_text(text: str) -> int:
         """从文本中解析文件大小，如 7.26GB、10.62G、774.46M"""
-        m = re.search(r'([\d.]+)\s*(TB|GB|MB|KB|T|G|M|K)', str(text or ""), re.IGNORECASE)
+        m = re.search(r'(\d+(?:\.\d+)?)\s*(TB|GB|MB|KB|T|G|M|K)\b', str(text or ""), re.IGNORECASE)
         if not m:
             return 0
         val = float(m.group(1))
