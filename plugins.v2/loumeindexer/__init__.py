@@ -1,4 +1,5 @@
 import hashlib
+import random
 import re
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -22,7 +23,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -188,6 +189,7 @@ class LoumeIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
+        client_ip = self._rand_ip()
 
         logger.info(f"BT之家(1lou)开始搜索：关键词='{keyword}'")
 
@@ -203,6 +205,8 @@ class LoumeIndexer(_PluginBase):
                 "User-Agent": ua,
                 "Referer": base_url,
                 "Accept-Language": "zh-CN,zh;q=0.9",
+                "X-Forwarded-For": client_ip,
+                "X-Real-IP": client_ip,
             })
 
             # 搜索帖子列表
@@ -834,6 +838,11 @@ class LoumeIndexer(_PluginBase):
                 if isinstance(file_length, int) and file_length > 0:
                     total += file_length
         return total
+
+    @staticmethod
+    def _rand_ip() -> str:
+        """生成随机公网 IP，用于降低站点按 IP 维度的风控命中概率"""
+        return f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
 
     @staticmethod
     def _bdecode_with_info_range(data: bytes) -> Tuple[Any, int, int]:
