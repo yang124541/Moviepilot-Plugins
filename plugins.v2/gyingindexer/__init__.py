@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.9.6"
+    plugin_version = "1.9.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1490,6 +1490,46 @@ class GyingIndexer(_PluginBase):
                     })
                     if existing_cookie:
                         session.headers["Cookie"] = existing_cookie
+                    current_root = self._normalize_base_url(root) or root
+                    login_url = urljoin(current_root, "/user/login")
+                    payload = {
+                        "username": username,
+                        "password": password,
+                        "cookietime": "10506240",
+                        "siteid": "1",
+                        "dosubmit": "1",
+                        "code": "",
+                    }
+                    ajax_headers = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/json, text/javascript, */*; q=0.01",
+                        "Origin": f"{urlparse(current_root).scheme}://{urlparse(current_root).netloc}",
+                        "Referer": login_url,
+                    }
+
+                    if existing_cookie:
+                        resp = session.post(
+                            login_url,
+                            data=payload,
+                            headers=ajax_headers,
+                            timeout=max(5, int(timeout or 20)),
+                        )
+                        if resp.ok:
+                            ok = False
+                            try:
+                                obj = resp.json()
+                                ok = int(obj.get("code") or 0) == 200
+                            except Exception:
+                                text = str(resp.text or "")
+                                ok = ("登录成功" in text) or ("\"code\":200" in text) or ("{'code':200}" in text)
+                            if ok:
+                                cookie_text = self._merge_cookie_str(
+                                    existing_cookie,
+                                    self._cookie_jar_to_header(session.cookies),
+                                )
+                                if cookie_text:
+                                    return cookie_text
+
                     resp = session.get(root, timeout=max(5, int(timeout or 20)))
                     current_root = self._normalize_base_url(resp.url or root) or root
 
@@ -1508,14 +1548,6 @@ class GyingIndexer(_PluginBase):
                             continue
 
                     login_url = urljoin(current_root, "/user/login")
-                    payload = {
-                        "username": username,
-                        "password": password,
-                        "cookietime": "10506240",
-                        "siteid": "1",
-                        "dosubmit": "1",
-                        "code": "",
-                    }
                     ajax_headers = {
                         "X-Requested-With": "XMLHttpRequest",
                         "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -1539,7 +1571,7 @@ class GyingIndexer(_PluginBase):
                         ok = ("登录成功" in text) or ("\"code\":200" in text) or ("{'code':200}" in text)
                     if not ok:
                         continue
-                    cookie_text = self._cookie_jar_to_header(session.cookies)
+                    cookie_text = self._merge_cookie_str(existing_cookie, self._cookie_jar_to_header(session.cookies))
                     if cookie_text:
                         return cookie_text
             except Exception as err:
