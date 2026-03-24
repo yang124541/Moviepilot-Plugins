@@ -27,7 +27,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.2.9"
+    plugin_version = "1.2.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -485,11 +485,13 @@ class LdysgIndexer(_PluginBase):
             try:
                 session = self._get_thread_local_session()
                 headers = {
-                    "User-Agent": ua or settings.USER_AGENT,
+                    "User-Agent": _CHROME_UA,
                     "Referer": base_url,
+                    "Origin": base_url.rstrip("/"),
                     "X-Requested-With": "XMLHttpRequest",
-                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                     "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
                     "X-Forwarded-For": client_ip,
                     "X-Real-IP": client_ip,
                 }
@@ -565,14 +567,37 @@ class LdysgIndexer(_PluginBase):
         headers = {
             "User-Agent": _CHROME_UA,
             "Referer": referer,
+            "Origin": base_url.rstrip("/"),
             "X-Requested-With": "XMLHttpRequest",
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "zh-CN,zh;q=0.9",
             "X-Forwarded-For": client_ip,
             "X-Real-IP": client_ip,
         }
         if cookie:
             headers["Cookie"] = cookie
+
+        # 先访问详情页，让同一会话尽量贴近浏览器真实流程，再发起 get_vbt。
+        try:
+            detail_headers = {
+                "User-Agent": _CHROME_UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Referer": base_url,
+                "X-Forwarded-For": client_ip,
+                "X-Real-IP": client_ip,
+            }
+            if cookie:
+                detail_headers["Cookie"] = cookie
+            session.get(
+                referer,
+                headers=detail_headers,
+                proxies=proxies,
+                timeout=max(5, timeout),
+            )
+        except Exception as e:
+            logger.debug(f"老电影资源(ldysg)详情页预热异常：vid={vid}，{e}")
 
         def _build_timing(status: str, retries: int = 0) -> Dict[str, Any]:
             total_cost = perf_counter() - vbt_started
@@ -804,6 +829,8 @@ class LdysgIndexer(_PluginBase):
         try:
             session = LdysgIndexer._get_thread_local_session()
             headers = {
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9",
                 "Referer": referer or "https://www.ldysg.com/",
                 "User-Agent": _CHROME_UA,
             }
