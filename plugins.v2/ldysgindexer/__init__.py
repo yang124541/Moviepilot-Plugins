@@ -2,8 +2,10 @@ import json
 import random
 import re
 import threading
+from hashlib import sha1
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -28,7 +30,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.3.3"
+    plugin_version = "1.3.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -422,6 +424,34 @@ class LdysgIndexer(_PluginBase):
             name = str(vbt.get("name") or title).strip()
             size_text = str(vbt.get("size") or "").strip()
             size_bytes = self._parse_size_bytes(size_text)
+            unique_page_url = self._build_unique_result_page_url(
+                detail_url=detail_url,
+                magnet_url=url,
+                result_name=name,
+                size_text=size_text,
+            )
+            seeders = self._extract_int_field(
+                vbt,
+                ["seeders", "seeder", "seeds", "seed", "up", "upnum", "hot"],
+            )
+            elapsed_text = self._extract_text_field(
+                vbt,
+                [
+                    "time",
+                    "date_elapsed",
+                    "date",
+                    "pubdate",
+                    "publish_time",
+                    "publishTime",
+                    "addtime",
+                    "add_time",
+                    "created_at",
+                    "createdAt",
+                    "ctime",
+                    "uptime",
+                ],
+            )
+            pubdate = self._parse_pubdate_text(elapsed_text)
 
             title_for_match = self._build_match_title(
                 title=name,
@@ -444,12 +474,13 @@ class LdysgIndexer(_PluginBase):
                 title=title_for_match or name,
                 description=description,
                 enclosure=url,
-                page_url=detail_url,
+                page_url=unique_page_url,
                 size=size_bytes,
-                seeders=0,
+                seeders=seeders,
                 peers=0,
                 grabs=0,
-                pubdate=None,
+                pubdate=pubdate,
+                date_elapsed=elapsed_text,
                 downloadvolumefactor=0,
                 uploadvolumefactor=1,
             ))
@@ -929,6 +960,122 @@ class LdysgIndexer(_PluginBase):
         unit = m.group(2).upper()
         mul = {"TB": 1 << 40, "GB": 1 << 30, "MB": 1 << 20, "KB": 1 << 10, "B": 1}
         return int(val * mul.get(unit, 0))
+
+    @staticmethod
+    def _build_unique_result_page_url(
+            detail_url: str,
+            magnet_url: str,
+            result_name: str = "",
+            size_text: str = "") -> str:
+        """
+        MoviePilot 卡片视图使用 torrent_info.page_url 作为 Vue key。
+        ldysg 同一视频下会返回多条磁力，若共用同一个详情页 URL，会导致前端复用错误，
+        进而出现筛选串站点、排序不生效的问题。
+        这里追加仅前端可见的 fragment，既保持详情页可打开，又保证每条资源 key 唯一。
+        """
+        seed_text = "|".join([
+            str(detail_url or "").strip(),
+            str(magnet_url or "").strip(),
+            str(result_name or "").strip(),
+            str(size_text or "").strip(),
+        ])
+        suffix = sha1(seed_text.encode("utf-8")).hexdigest()[:12]
+        return f"{detail_url}#ldysg-{suffix}"
+
+    @staticmethod
+    def _extract_text_field(data: Dict[str, Any], keys: List[str]) -> str:
+        for key in keys:
+            value = data.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
+    def _extract_int_field(data: Dict[str, Any], keys: List[str]) -> int:
+        for key in keys:
+            value = data.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return int(value)
+            text = str(value).strip()
+            if not text:
+                continue
+            match = re.search(r"-?\d+", text)
+            if match:
+                try:
+                    return int(match.group(0))
+                except Exception:
+                    continue
+        return 0
+
+    @staticmethod
+    def _parse_pubdate_text(text: str) -> Optional[datetime]:
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+
+        now = datetime.now()
+        normalized = raw.replace("T", " ").replace("Z", "")
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+
+        absolute_formats = [
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%Y.%m.%d %H:%M:%S",
+            "%Y.%m.%d %H:%M",
+            "%Y.%m.%d",
+        ]
+        for fmt in absolute_formats:
+            try:
+                return datetime.strptime(normalized, fmt)
+            except Exception:
+                pass
+
+        month_day_formats = [
+            "%m-%d %H:%M:%S",
+            "%m-%d %H:%M",
+            "%m/%d %H:%M:%S",
+            "%m/%d %H:%M",
+            "%m-%d",
+            "%m/%d",
+        ]
+        for fmt in month_day_formats:
+            try:
+                parsed = datetime.strptime(normalized, fmt)
+                return parsed.replace(year=now.year)
+            except Exception:
+                pass
+
+        relative_rules = [
+            (r"(\d+)\s*秒前", "seconds"),
+            (r"(\d+)\s*分钟前", "minutes"),
+            (r"(\d+)\s*小时前", "hours"),
+            (r"(\d+)\s*天前", "days"),
+        ]
+        for pattern, unit in relative_rules:
+            match = re.search(pattern, normalized)
+            if not match:
+                continue
+            amount = int(match.group(1))
+            return now - timedelta(**{unit: amount})
+
+        if "刚刚" in normalized:
+            return now
+        if "昨天" in normalized:
+            return now - timedelta(days=1)
+        if "前天" in normalized:
+            return now - timedelta(days=2)
+        return None
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
