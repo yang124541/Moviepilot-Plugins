@@ -2,7 +2,8 @@ import json
 import random
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -27,7 +28,7 @@ class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png"
-    plugin_version = "1.3.1"
+    plugin_version = "1.3.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -136,27 +137,6 @@ class LdysgIndexer(_PluginBase):
                                             "rows": 2,
                                             "label": "额外域名（每行一个）",
                                             "placeholder": "www.ldysg.com",
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 8},
-                                "content": [
-                                    {
-                                        "component": "VAlert",
-                                        "props": {
-                                            "type": "info",
-                                            "variant": "tonal",
-                                            "text": "ldysg.com 提供老旧电影高清无水印下载。"
-                                                    "搜索结果仅包含磁力链接，MoviePilot 将自动使用磁力链接下载。"
-                                                    "若资源需要验证码则自动跳过。",
                                         },
                                     }
                                 ],
@@ -333,49 +313,60 @@ class LdysgIndexer(_PluginBase):
 
         ordered_results: Dict[int, List[TorrentInfo]] = {}
         ordered_timing_items: Dict[int, Dict[str, Any]] = {}
+        task_queue = deque(
+            (index, item)
+            for index, item in enumerate(video_items)
+        )
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ldysg") as executor:
-            future_map = {
-                executor.submit(
-                    self._fetch_single_video_result,
-                    site,
-                    client,
-                    base_url,
-                    item,
-                    ua,
-                    proxies,
-                    timeout,
-                    cookie,
-                ): index
-                for index, item in enumerate(video_items)
-            }
-            for future in as_completed(future_map):
-                index = future_map[future]
-                try:
-                    item_results, timing_item = future.result()
-                    ordered_results[index] = item_results or []
-                    if timing_item:
-                        ordered_timing_items[index] = timing_item
-                except Exception as err:
-                    title = self._display_title((video_items[index] or {}).get("title"))
-                    logger.debug(
-                        f"老电影资源(ldysg)并发抓取资源页异常："
-                        f"片名='{title}'，错误={err}"
+            running_tasks: Dict[Any, Tuple[int, Dict[str, Any]]] = {}
+            while task_queue or running_tasks:
+                while task_queue and len(running_tasks) < worker_count:
+                    index, item = task_queue.popleft()
+                    future = executor.submit(
+                        self._fetch_single_video_result,
+                        site,
+                        client,
+                        base_url,
+                        item,
+                        ua,
+                        proxies,
+                        timeout,
+                        cookie,
                     )
-                    ordered_results[index] = []
-                    ordered_timing_items[index] = {
-                        "片名": title,
-                        "首次get_vbt耗时": self._format_duration(0),
-                        "验证码耗时": self._format_duration(0),
-                        "验证码图片下载耗时": self._format_duration(0),
-                        "OCR识别耗时": self._format_duration(0),
-                        "验证码提交耗时": self._format_duration(0),
-                        "成功返回种子列表耗时": self._format_duration(0),
-                        "重试重新取验证码耗时": self._format_duration(0),
-                        "种子总耗时": self._format_duration(0),
-                        "验证码重试次数": 0,
-                        "资源数": 0,
-                        "状态": "抓取异常",
-                    }
+                    running_tasks[future] = (index, item)
+
+                if not running_tasks:
+                    break
+
+                done, _ = wait(tuple(running_tasks.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    index, item = running_tasks.pop(future)
+                    try:
+                        item_results, timing_item = future.result()
+                        ordered_results[index] = item_results or []
+                        if timing_item:
+                            ordered_timing_items[index] = timing_item
+                    except Exception as err:
+                        title = self._display_title((item or {}).get("title"))
+                        logger.debug(
+                            f"老电影资源(ldysg)并发抓取资源页异常："
+                            f"片名='{title}'，错误={err}"
+                        )
+                        ordered_results[index] = []
+                        ordered_timing_items[index] = {
+                            "片名": title,
+                            "首次get_vbt耗时": self._format_duration(0),
+                            "验证码耗时": self._format_duration(0),
+                            "验证码图片下载耗时": self._format_duration(0),
+                            "OCR识别耗时": self._format_duration(0),
+                            "验证码提交耗时": self._format_duration(0),
+                            "成功返回种子列表耗时": self._format_duration(0),
+                            "重试重新取验证码耗时": self._format_duration(0),
+                            "种子总耗时": self._format_duration(0),
+                            "验证码重试次数": 0,
+                            "资源数": 0,
+                            "状态": "抓取异常",
+                        }
 
         results: List[TorrentInfo] = []
         timing_items: List[Dict[str, Any]] = []
