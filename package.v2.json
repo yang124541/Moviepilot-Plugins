@@ -1,4 +1,16 @@
 {
+  "Dyg55Indexer": {
+    "name": "电影港（dyg55）",
+    "description": "为 MoviePilot 增加 dyg55.com 电影港 BT 种子搜索支持，支持可配置域名与并发抓取。",
+    "labels": "站点,索引",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.ico",
+    "author": "yang124541",
+    "level": 2,
+    "history": {
+      "v1.0.0": "初始版本：自动注册 dyg55 索引器并接管搜索，支持额外域名配置、详情并发抓取、动态解析下载地址并将 torrent 转换为 magnet 返回。"
+    }
+  },
   "LoumeIndexer": {
     "name": "BT之家",
     "description": "为 MoviePilot 增加 1lou.me BT论坛种子搜索支持。",
