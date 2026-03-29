@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "1.9.8"
+    plugin_version = "1.9.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -421,8 +421,12 @@ class GyingIndexer(_PluginBase):
                 f"观影(GYing)搜索页采集耗时：关键词='{keyword}'，条目数={len(search_entries)}，"
                 f"耗时={collect_elapsed_ms:.1f}ms"
             )
+            search_video_count = len(search_entries)
             if not search_entries:
-                logger.warn(f"观影(GYing)搜索结果为空：关键词='{keyword}'，分页后无可用条目")
+                cost = (datetime.now() - start_at).seconds
+                logger.info(
+                    f"观影(GYing)搜索完成：关键词='{keyword}'，找到视频=0，返回磁力=0，耗时={cost}s"
+                )
                 return []
 
             results: List[TorrentInfo] = []
@@ -584,8 +588,8 @@ class GyingIndexer(_PluginBase):
             )
             cost = (datetime.now() - start_at).seconds
             logger.info(
-                f"观影(GYing)搜索完成：关键词='{keyword}'，返回种子数={len(results)}，耗时={cost}s，"
-                f"请求次数={request_state.get('http')}，缓存命中={request_state.get('cache_hit')}"
+                f"观影(GYing)搜索完成：关键词='{keyword}'，找到视频={search_video_count}，"
+                f"返回磁力={len(results)}，耗时={cost}s"
             )
             return results
         except Exception as err:
@@ -1914,10 +1918,6 @@ class GyingIndexer(_PluginBase):
                 pinned_primary=self._extract_host(candidate) in pinned_hosts,
             )
             if resolved:
-                if resolved != candidate:
-                    logger.info(f"观影(GYing)主域名切换：{candidate} -> {resolved}")
-                elif candidate != candidates[0]:
-                    logger.info(f"观影(GYing)主域名回退成功：已切换到 {resolved}")
                 return resolved
 
         return "https://www.xn--kivn76b41nnhi.com/"
@@ -1936,7 +1936,6 @@ class GyingIndexer(_PluginBase):
                                 fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:
         entry_map: Dict[str, Dict[str, Any]] = {}
         keyword_plan = self._expand_search_keywords(client=client, base_url=base_url, keyword=keyword)
-        logger.info(f"观影(GYing)关键词计划：原词='{keyword}'，计划={keyword_plan}")
         getter = fetcher or client.get
 
         for query_keyword in keyword_plan:
@@ -1973,8 +1972,6 @@ class GyingIndexer(_PluginBase):
                 search_data=fuzzy_data if isinstance(fuzzy_data, dict) else {},
                 forced_quality=None
             )
-            if fuzzy_entries:
-                logger.info(f"观影(GYing)精准无结果，已回退模糊匹配：关键词='{query_keyword}'")
             for item in fuzzy_entries:
                 key = str(item.get("id") or "").strip()
                 if key and key not in entry_map:
@@ -1982,8 +1979,6 @@ class GyingIndexer(_PluginBase):
                     row_dir = str(row.get("dir") or "").strip().lower()
                     row["__skip_keyword_match"] = row_dir in ("tv", "ac", "mv")
                     entry_map[key] = row
-
-        logger.info(f"观影(GYing)分页采集完成：关键词='{keyword}'，搜索视频项={len(entry_map)}")
         return list(entry_map.values())
 
     def _expand_search_keywords(self, client: RequestUtils, base_url: str, keyword: str) -> List[str]:
@@ -2062,7 +2057,7 @@ class GyingIndexer(_PluginBase):
 
         ordered_extra_hosts = self._ordered_extra_hosts()
         for host in ordered_extra_hosts:
-            base_url = self._normalize_base_url(host)
+            base_url = self._preferred_site_base_url(host)
             if base_url and base_url not in seen:
                 seen.add(base_url)
                 candidates.append(base_url)
@@ -2075,7 +2070,8 @@ class GyingIndexer(_PluginBase):
             site.get("domain") if isinstance(site, dict) else "",
             "https://www.xn--kivn76b41nnhi.com/",
         ):
-            base_url = self._normalize_base_url(raw)
+            host = self._extract_host(raw)
+            base_url = self._preferred_site_base_url(host) if host else self._normalize_base_url(raw)
             if base_url and base_url not in seen:
                 seen.add(base_url)
                 candidates.append(base_url)
@@ -2102,11 +2098,11 @@ class GyingIndexer(_PluginBase):
 
     @staticmethod
     def _build_indexer_schema(primary_host: str, all_hosts: List[str]) -> Dict[str, Any]:
-        ext_domains = [f"https://{host}/" for host in all_hosts if host != primary_host]
+        ext_domains = [GyingIndexer._preferred_site_base_url(host) for host in all_hosts if host != primary_host]
         return {
             "id": "gying",
             "name": "GYing",
-            "domain": f"https://{primary_host}/",
+            "domain": GyingIndexer._preferred_site_base_url(primary_host),
             "ext_domains": ext_domains,
             "encoding": "UTF-8",
             "public": True,
@@ -2149,6 +2145,15 @@ class GyingIndexer(_PluginBase):
                 }
             }
         }
+
+    @staticmethod
+    def _preferred_site_base_url(host: Any) -> str:
+        pure_host = GyingIndexer._extract_host(host)
+        if not pure_host:
+            return ""
+        if pure_host == "xn--kivn76b41nnhi.com":
+            return f"https://www.{pure_host}/"
+        return f"https://{pure_host}/"
 
     @staticmethod
     def _normalize_base_url(raw: Any) -> str:
@@ -2277,8 +2282,6 @@ class GyingIndexer(_PluginBase):
             )
             if switched:
                 self._runtime_site_base_urls[runtime_key] = switched
-                if switched != target:
-                    logger.info(f"观影(GYing)检测到旧域名已失效，已切换到最新地址：{switched}")
                 return switched
             return ""
 
@@ -2297,8 +2300,6 @@ class GyingIndexer(_PluginBase):
         )
         if switched:
             self._runtime_site_base_urls[runtime_key] = switched
-            if switched != target:
-                logger.info(f"观影(GYing)检测到旧域名已失效，已切换到最新地址：{switched}")
             return switched
         return ""
 
