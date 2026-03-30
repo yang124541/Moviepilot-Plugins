@@ -22,7 +22,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"

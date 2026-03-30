@@ -36,11 +36,12 @@
     "name": "BT影视",
     "description": "为 MoviePilot 增加 btbtla.com 磁力搜索支持。",
     "labels": "站点,索引",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.2": "插件图标重做为白底方块，站点 favicon 居中占 70%，并提升版本触发客户端刷新。",
       "v1.0.1": "插件图标改为白底居中的站点 favicon，详情页资源标签排除 Other 与夸克网盘，并统一搜索日志为“开始搜索/搜索完成（找到视频、返回磁力、耗时）”摘要格式。",
       "v1.0.0": "初始版本：自动注册 BT影视索引器并接管搜索，支持额外域名覆盖、详情页/tdown 页并发抓取，以及从 tdown 页面提取磁力、大小与发布时间。"
     }
