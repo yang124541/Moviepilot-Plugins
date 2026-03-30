@@ -41,11 +41,12 @@
     "name": "BT影视",
     "description": "为 MoviePilot 增加 btbtla.com 磁力搜索支持。",
     "labels": "站点,索引",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.0.8": "新增 BT影视主程序媒体信息 debug 日志，搜索前输出本次是否拿到 tmdb_id、imdb_id 和第一主演，便于排查识别链路。",
       "v1.0.7": "调整 BT影视详情页识别流程：优先读取 MoviePilot 的 TMDB 缓存获取 tmdb_id，再拉取详情页提取 tmdb/imdb/第一主演，站点侧继续并发抓取 detail 页并用主演进行比对。",
       "v1.0.6": "优化 BT影视的 TMDB 资料识别：不再直接拿缓存 ID 请求详情，优先按标题匹配有效条目后再取主演等信息，减少 tmdbapi.py 的 404 噪音日志。",
       "v1.0.5": "新增 BT影视详情页预筛选：搜索时优先尝试复用 MoviePilot 运行时 TMDB 缓存/详情，结合标题、年份、主演对 detail 页打分，只抓最可能命中的 1-2 个详情页对应 tdown，避免全量展开海量磁力页。",

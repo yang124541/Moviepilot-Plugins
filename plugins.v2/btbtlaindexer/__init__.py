@@ -22,7 +22,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -191,6 +191,14 @@ class BtbtlaIndexer(_PluginBase):
         media_profile = self._resolve_moviepilot_media_profile(
             keyword=keyword,
             mtype=mtype,
+        )
+        first_actor = str(((media_profile.get("actors") or [""])[0]) or "").strip()
+        logger.debug(
+            f"BT影视(btbtla)主程序媒体信息：关键词='{keyword}'，"
+            f"tmdb_id={'有' if str(media_profile.get('tmdb_id') or '').strip() else '无'}，"
+            f"imdb_id={'有' if str(media_profile.get('imdb_id') or '').strip() else '无'}，"
+            f"主演={'有' if first_actor else '无'}，"
+            f"第一主演='{first_actor}'"
         )
 
         logger.info(f"BT影视(btbtla)开始搜索：关键词='{keyword}'")
