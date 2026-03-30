@@ -32,6 +32,18 @@
       "v1.0.0": "初始版本：自动注册 1lou 索引器并接管搜索，支持账号登录、关键词搜索、分页抓取与种子附件解析。"
     }
   },
+  "BtbtlaIndexer": {
+    "name": "BT影视",
+    "description": "为 MoviePilot 增加 btbtla.com 磁力搜索支持。",
+    "labels": "站点,索引",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png",
+    "author": "yang124541",
+    "level": 2,
+    "history": {
+      "v1.0.0": "初始版本：自动注册 BT影视索引器并接管搜索，支持额外域名覆盖、详情页/tdown 页并发抓取，以及从 tdown 页面提取磁力、大小与发布时间。"
+    }
+  },
   "LdysgIndexer": {
     "name": "老电影资源（ldysg）",
     "description": "为 MoviePilot 增加 ldysg.com 老旧电影磁力搜索支持，自动 OCR 识别验证码。",

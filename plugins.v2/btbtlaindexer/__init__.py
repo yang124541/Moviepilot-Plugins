@@ -1,0 +1,1109 @@
+import re
+import random
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import datetime, timedelta
+from html import unescape
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote, urljoin, urlparse
+
+import requests as _requests
+from fastapi.concurrency import run_in_threadpool
+
+from app.core.config import settings
+from app.core.context import TorrentInfo
+from app.helper.sites import SitesHelper
+from app.log import logger
+from app.plugins import _PluginBase
+from app.schemas.types import MediaType
+
+
+class BtbtlaIndexer(_PluginBase):
+    plugin_name = "BT影视"
+    plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
+    plugin_version = "1.0.0"
+    plugin_author = "yang124541"
+    author_url = "https://github.com/yang124541/moviepilot-plugin"
+    plugin_config_prefix = "btbtlaindexer_"
+    plugin_order = 33
+    auth_level = 2
+
+    _enabled = False
+    _extra_hosts = ""
+    _detail_concurrency = 5
+
+    _default_host = "btbtla.com"
+    _default_base_url = "https://www.btbtla.com/"
+    _max_search_pages = 5
+    _excluded_tab_labels = {"other", "夸克网盘"}
+
+    def init_plugin(self, config: dict = None):
+        if config:
+            self._enabled = bool(config.get("enabled"))
+            self._extra_hosts = (config.get("extra_hosts") or "").strip()
+            self._detail_concurrency = self._clamp_detail_concurrency(
+                config.get("detail_concurrency")
+            )
+
+        if self._enabled:
+            self._register_builtin_indexer()
+
+    def get_state(self) -> bool:
+        return self._enabled
+
+    @staticmethod
+    def get_command() -> List[Dict[str, Any]]:
+        return []
+
+    def get_api(self) -> List[Dict[str, Any]]:
+        return []
+
+    def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        return [
+            {
+                "component": "VForm",
+                "content": [
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enabled",
+                                            "label": "启用插件",
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "detail_concurrency",
+                                            "type": "number",
+                                            "label": "资源页并发数",
+                                            "placeholder": "5",
+                                            "hint": "并发抓取影片详情页与 tdown 磁力页，允许范围 1-20",
+                                            "persistentHint": True,
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [
+                                    {
+                                        "component": "VTextarea",
+                                        "props": {
+                                            "model": "extra_hosts",
+                                            "rows": 2,
+                                            "label": "额外域名（每行一个）",
+                                            "placeholder": "www.btbtla.com",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [
+                                    {
+                                        "component": "VAlert",
+                                        "props": {
+                                            "type": "info",
+                                            "variant": "tonal",
+                                            "text": "BT影视当前搜索链路为 /search/{关键词} -> /detail/{id}.html -> /tdown/{id}.html。"
+                                                    "站点 URL 建议配置为 https://www.btbtla.com/",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                ],
+            }
+        ], {
+            "enabled": False,
+            "extra_hosts": "",
+            "detail_concurrency": 5,
+        }
+
+    def get_page(self) -> List[dict]:
+        pass
+
+    def get_module(self) -> Dict[str, Any]:
+        return {
+            "search_torrents": self.search_torrents,
+            "async_search_torrents": self.async_search_torrents,
+        }
+
+    def stop_service(self):
+        pass
+
+    async def async_search_torrents(self, site: dict,
+                                    keyword: str = None,
+                                    mtype: MediaType = None,
+                                    page: Optional[int] = 0) -> Optional[List[TorrentInfo]]:
+        return await run_in_threadpool(self.search_torrents, site, keyword, mtype, page)
+
+    def search_torrents(self, site: dict,
+                        keyword: str = None,
+                        mtype: MediaType = None,
+                        page: Optional[int] = 0) -> Optional[List[TorrentInfo]]:
+        if not self._enabled:
+            return None
+        if not site or not keyword:
+            return []
+        if not self._match_target_site(site):
+            return None
+
+        start_at = datetime.now()
+        base_url = self._resolve_base_url(site)
+        timeout = int(site.get("timeout") or 20)
+        ua = site.get("ua") or settings.USER_AGENT
+        proxies = settings.PROXY if site.get("proxy") else None
+
+        logger.info(f"BT影视(btbtla)开始搜索：关键词='{keyword}'")
+
+        session = _requests.Session()
+        cookie_from_site = str(site.get("cookie") or "").strip()
+        if cookie_from_site:
+            session.headers.update({"Cookie": cookie_from_site})
+        session.headers.update({
+            "User-Agent": ua,
+            "Referer": base_url,
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        })
+
+        try:
+            search_items = self._search_videos(
+                session=session,
+                base_url=base_url,
+                keyword=keyword,
+                timeout=timeout,
+                proxies=proxies,
+                client_ip=self._rand_ip(),
+            )
+            search_video_count = len(search_items)
+            if not search_items:
+                cost = (datetime.now() - start_at).seconds
+                logger.info(
+                    f"BT影视(btbtla)搜索完成：关键词='{keyword}'，"
+                    f"找到视频=0，返回磁力=0，耗时={cost}s"
+                )
+                return []
+
+            download_items = self._fetch_detail_entries_concurrently(
+                base_url=base_url,
+                detail_items=search_items,
+                session_headers=dict(session.headers),
+                session_cookies=session.cookies.get_dict(),
+                timeout=timeout,
+                proxies=proxies,
+            )
+            if not download_items:
+                cost = (datetime.now() - start_at).seconds
+                logger.info(
+                    f"BT影视(btbtla)搜索完成：关键词='{keyword}'，"
+                    f"找到视频={search_video_count}，返回磁力=0，耗时={cost}s"
+                )
+                return []
+
+            results = self._fetch_download_pages_concurrently(
+                site=site,
+                base_url=base_url,
+                download_items=download_items,
+                session_headers=dict(session.headers),
+                session_cookies=session.cookies.get_dict(),
+                timeout=timeout,
+                proxies=proxies,
+            )
+            cost = (datetime.now() - start_at).seconds
+            logger.info(
+                f"BT影视(btbtla)搜索完成：关键词='{keyword}'，"
+                f"找到视频={search_video_count}，返回磁力={len(results)}，耗时={cost}s"
+            )
+            return results
+        except Exception as err:
+            logger.error(f"BT影视(btbtla)搜索异常：关键词='{keyword}'，错误={err}")
+            return []
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def _fetch_detail_entries_concurrently(
+            self,
+            base_url: str,
+            detail_items: List[Dict[str, Any]],
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+        worker_count = min(
+            len(detail_items),
+            self._clamp_detail_concurrency(self._detail_concurrency),
+        )
+        if worker_count <= 1:
+            results: List[Dict[str, Any]] = []
+            for item in detail_items:
+                results.extend(
+                    self._fetch_single_detail_entries(
+                        base_url=base_url,
+                        detail_item=item,
+                        session_headers=session_headers,
+                        session_cookies=session_cookies,
+                        timeout=timeout,
+                        proxies=proxies,
+                    )
+                )
+            return results
+
+        logger.debug(
+            f"BT影视(btbtla)开始并发抓取影片详情："
+            f"影片数={len(detail_items)}，并发数={worker_count}"
+        )
+
+        ordered_entries: Dict[int, List[Dict[str, Any]]] = {}
+        task_queue = deque((index, item) for index, item in enumerate(detail_items))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="btbtla-detail") as executor:
+            running_tasks: Dict[Any, Tuple[int, Dict[str, Any]]] = {}
+            while task_queue or running_tasks:
+                while task_queue and len(running_tasks) < worker_count:
+                    index, item = task_queue.popleft()
+                    future = executor.submit(
+                        self._fetch_single_detail_entries,
+                        base_url,
+                        item,
+                        session_headers,
+                        session_cookies,
+                        timeout,
+                        proxies,
+                    )
+                    running_tasks[future] = (index, item)
+
+                if not running_tasks:
+                    break
+
+                done, _ = wait(tuple(running_tasks.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    index, item = running_tasks.pop(future)
+                    try:
+                        ordered_entries[index] = future.result() or []
+                    except Exception as err:
+                        title = str((item or {}).get("title") or "").strip()
+                        logger.debug(
+                            f"BT影视(btbtla)并发抓取详情异常："
+                            f"标题='{title}'，错误={err}"
+                        )
+                        ordered_entries[index] = []
+
+        results: List[Dict[str, Any]] = []
+        for index in range(len(detail_items)):
+            results.extend(ordered_entries.get(index) or [])
+        return results
+
+    def _fetch_single_detail_entries(
+            self,
+            base_url: str,
+            detail_item: Dict[str, Any],
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+        session = self._build_worker_session(
+            session_headers=session_headers,
+            session_cookies=session_cookies,
+            client_ip=self._rand_ip(),
+        )
+        try:
+            return self._fetch_detail_download_entries(
+                session=session,
+                base_url=base_url,
+                detail_item=detail_item,
+                timeout=timeout,
+                proxies=proxies,
+            )
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def _fetch_detail_download_entries(
+            self,
+            session: _requests.Session,
+            base_url: str,
+            detail_item: Dict[str, Any],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+        detail_rel = str(detail_item.get("detail_url") or "").strip()
+        if not detail_rel:
+            return []
+        detail_url = urljoin(base_url, detail_rel)
+
+        try:
+            resp = session.get(
+                detail_url,
+                timeout=timeout,
+                proxies=proxies,
+                allow_redirects=True,
+            )
+        except Exception as err:
+            logger.debug(f"BT影视(btbtla)获取详情失败：url={detail_url}，错误={err}")
+            return []
+        if not resp.ok:
+            return []
+
+        html = resp.text
+        video_title = self._extract_first_match(
+            html,
+            r'<h1 class="page-title">\s*(.*?)\s*</h1>',
+        ) or str(detail_item.get("title") or "").strip()
+        plot = self._extract_first_match(
+            html,
+            r'<span class="video-info-itemtitle">剧情：</span>\s*'
+            r'<div class="video-info-item video-info-content vod_content">\s*<span>(.*?)</span>',
+        ) or str(detail_item.get("description") or "").strip()
+        year = self._extract_first_match(
+            html,
+            r'<div class="video-info-aux[^"]*"[^>]*>.*?<a class="tag-link" href="/">\s*((?:19|20)\d{2})\s*</a>',
+        ) or str(detail_item.get("year") or "").strip()
+
+        download_rows = self._parse_download_rows(html)
+        if not download_rows:
+            return []
+
+        cat = str(detail_item.get("cat") or "").strip()
+        area = str(detail_item.get("area") or "").strip()
+        results: List[Dict[str, Any]] = []
+        for row in download_rows:
+            tdown_rel = str(row.get("tdown_url") or "").strip()
+            if not tdown_rel:
+                continue
+            results.append({
+                "detail_url": detail_url,
+                "tdown_url": tdown_rel,
+                "title": video_title,
+                "plot": plot,
+                "year": year,
+                "cat": cat,
+                "area": area,
+                "filename": str(row.get("filename") or "").strip(),
+                "size_text": str(row.get("size_text") or "").strip(),
+                "download_count": row.get("download_count") or 0,
+            })
+        return results
+
+    def _fetch_download_pages_concurrently(
+            self,
+            site: dict,
+            base_url: str,
+            download_items: List[Dict[str, Any]],
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> List[TorrentInfo]:
+        worker_count = min(
+            len(download_items),
+            self._clamp_detail_concurrency(self._detail_concurrency),
+        )
+        if worker_count <= 1:
+            results: List[TorrentInfo] = []
+            for item in download_items:
+                torrent = self._fetch_single_download_result(
+                    site=site,
+                    base_url=base_url,
+                    download_item=item,
+                    session_headers=session_headers,
+                    session_cookies=session_cookies,
+                    timeout=timeout,
+                    proxies=proxies,
+                )
+                if torrent:
+                    results.append(torrent)
+            return results
+
+        logger.debug(
+            f"BT影视(btbtla)开始并发抓取磁力页："
+            f"资源数={len(download_items)}，并发数={worker_count}"
+        )
+
+        ordered_results: Dict[int, Optional[TorrentInfo]] = {}
+        task_queue = deque((index, item) for index, item in enumerate(download_items))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="btbtla-tdown") as executor:
+            running_tasks: Dict[Any, Tuple[int, Dict[str, Any]]] = {}
+            while task_queue or running_tasks:
+                while task_queue and len(running_tasks) < worker_count:
+                    index, item = task_queue.popleft()
+                    future = executor.submit(
+                        self._fetch_single_download_result,
+                        site,
+                        base_url,
+                        item,
+                        session_headers,
+                        session_cookies,
+                        timeout,
+                        proxies,
+                    )
+                    running_tasks[future] = (index, item)
+
+                if not running_tasks:
+                    break
+
+                done, _ = wait(tuple(running_tasks.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    index, item = running_tasks.pop(future)
+                    try:
+                        ordered_results[index] = future.result()
+                    except Exception as err:
+                        title = str((item or {}).get("filename") or (item or {}).get("title") or "").strip()
+                        logger.debug(
+                            f"BT影视(btbtla)并发抓取磁力页异常："
+                            f"标题='{title}'，错误={err}"
+                        )
+                        ordered_results[index] = None
+
+        results: List[TorrentInfo] = []
+        for index in range(len(download_items)):
+            item = ordered_results.get(index)
+            if item:
+                results.append(item)
+        return results
+
+    def _fetch_single_download_result(
+            self,
+            site: dict,
+            base_url: str,
+            download_item: Dict[str, Any],
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> Optional[TorrentInfo]:
+        session = self._build_worker_session(
+            session_headers=session_headers,
+            session_cookies=session_cookies,
+            client_ip=self._rand_ip(),
+        )
+        try:
+            return self._fetch_download_page(
+                session=session,
+                site=site,
+                base_url=base_url,
+                download_item=download_item,
+                timeout=timeout,
+                proxies=proxies,
+            )
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def _fetch_download_page(
+            self,
+            session: _requests.Session,
+            site: dict,
+            base_url: str,
+            download_item: Dict[str, Any],
+            timeout: int,
+            proxies: Optional[Dict[str, str]]) -> Optional[TorrentInfo]:
+        tdown_rel = str(download_item.get("tdown_url") or "").strip()
+        if not tdown_rel:
+            return None
+        tdown_url = urljoin(base_url, tdown_rel)
+
+        try:
+            resp = session.get(
+                tdown_url,
+                timeout=timeout,
+                proxies=proxies,
+                allow_redirects=True,
+            )
+        except Exception as err:
+            logger.debug(f"BT影视(btbtla)获取磁力页失败：url={tdown_url}，错误={err}")
+            return None
+        if not resp.ok:
+            return None
+
+        html = resp.text
+        magnet = unescape(
+            self._extract_first_match(
+                html,
+                r'href="(magnet:\?[^"]+)"',
+            )
+        ).strip()
+        info_hash = self._extract_first_match(
+            html,
+            r'<span class="video-info-itemtitle">Hash:</span>\s*'
+            r'<div class="video-info-item"><span class="slash">/</span>\s*([0-9a-fA-F]{40})\s*</div>',
+        ).strip().lower()
+        if not magnet and info_hash:
+            magnet = f"magnet:?xt=urn:btih:{info_hash}"
+        if not magnet:
+            return None
+
+        video_title = self._extract_first_match(
+            html,
+            r'<h1 class="page-title">\s*(.*?)\s*</h1>',
+        ) or str(download_item.get("title") or "").strip()
+        filename = self._extract_first_match(
+            html,
+            r'<span class="video-info-itemtitle">种子片名:</span>\s*'
+            r'<div class="video-info-item"><span class="slash">/</span>\s*(.*?)\s*</div>',
+        ) or str(download_item.get("filename") or "").strip()
+        size_text = self._extract_first_match(
+            html,
+            r'<span class="video-info-itemtitle">影片大小:</span>\s*'
+            r'<div class="video-info-item">\s*(.*?)\s*</div>',
+        ) or str(download_item.get("size_text") or "").strip()
+        pubdate_text = self._extract_first_match(
+            html,
+            r'<span class="video-info-itemtitle">种子时间:</span>\s*'
+            r'<div class="video-info-item">\s*(.*?)\s*</div>',
+        )
+
+        title = self._build_match_title(
+            title=filename or video_title,
+            parent_title=video_title,
+            year=str(download_item.get("year") or "").strip(),
+        )
+        description_parts = [
+            filename or video_title,
+            str(download_item.get("cat") or "").strip(),
+            str(download_item.get("area") or "").strip(),
+        ]
+        description = " | ".join([part for part in description_parts if part])
+        plot = str(download_item.get("plot") or "").strip()
+        if plot and plot not in description:
+            description = f"{description} | {plot}" if description else plot
+
+        return TorrentInfo(
+            site=site.get("id"),
+            site_name=site.get("name"),
+            site_cookie=site.get("cookie"),
+            site_ua=site.get("ua"),
+            site_proxy=site.get("proxy"),
+            site_order=site.get("pri"),
+            site_downloader=site.get("downloader"),
+            title=title or filename or video_title,
+            description=description,
+            enclosure=magnet,
+            page_url=tdown_url,
+            size=self._parse_size_bytes(size_text, filename),
+            seeders=0,
+            peers=0,
+            grabs=self._to_int(download_item.get("download_count")),
+            pubdate=self._parse_pubdate_text(pubdate_text),
+            date_elapsed=pubdate_text,
+            downloadvolumefactor=0,
+            uploadvolumefactor=1,
+        )
+
+    def _search_videos(self, session: _requests.Session, base_url: str,
+                       keyword: str, timeout: int,
+                       proxies: Optional[Dict[str, str]],
+                       client_ip: str = "") -> List[Dict[str, Any]]:
+        all_items: List[Dict[str, Any]] = []
+        seen_detail_urls = set()
+        encoded_keyword = quote(str(keyword or "").strip(), safe="")
+
+        for page_no in range(1, self._max_search_pages + 1):
+            if page_no == 1:
+                search_url = urljoin(base_url, f"search/{encoded_keyword}")
+            else:
+                search_url = urljoin(base_url, f"search/{encoded_keyword}/page/{page_no}")
+
+            headers = dict(session.headers)
+            if client_ip:
+                headers["X-Forwarded-For"] = client_ip
+                headers["X-Real-IP"] = client_ip
+
+            try:
+                resp = session.get(
+                    search_url,
+                    timeout=timeout,
+                    proxies=proxies,
+                    allow_redirects=True,
+                    headers=headers,
+                )
+            except Exception as err:
+                logger.debug(f"BT影视(btbtla)搜索页请求异常：page={page_no}，错误={err}")
+                break
+            if not resp.ok:
+                logger.debug(f"BT影视(btbtla)搜索页请求失败：page={page_no}，status={resp.status_code}")
+                break
+
+            page_items = self._parse_search_results(resp.text)
+            if not page_items:
+                break
+
+            added = 0
+            for item in page_items:
+                detail_url = str(item.get("detail_url") or "").strip()
+                if not detail_url or detail_url in seen_detail_urls:
+                    continue
+                seen_detail_urls.add(detail_url)
+                all_items.append(item)
+                added += 1
+
+            if added == 0:
+                break
+
+        return all_items
+
+    @staticmethod
+    def _parse_search_results(html: str) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        seen = set()
+        pattern = re.compile(
+            r'<div class="module-item">\s*'
+            r'<div class="module-item-cover">.*?'
+            r'<a href="(?P<detail>/detail/\d+\.html)" title="(?P<title>[^"]+)">.*?'
+            r'<div class="module-item-caption">\s*(?P<caption>.*?)</div>.*?'
+            r'<div class="module-item-content">.*?'
+            r'<div class="module-item-style video-text">(?P<desc>.*?)</div>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(html):
+            detail_url = str(match.group("detail") or "").strip()
+            if not detail_url or detail_url in seen:
+                continue
+            seen.add(detail_url)
+
+            caption = str(match.group("caption") or "")
+            spans = re.findall(r'<span[^>]*>(.*?)</span>', caption, flags=re.IGNORECASE | re.DOTALL)
+            cleaned_spans = [BtbtlaIndexer._clean_html_text(span) for span in spans if BtbtlaIndexer._clean_html_text(span)]
+            year = cleaned_spans[0] if len(cleaned_spans) > 0 else ""
+            cat = cleaned_spans[1] if len(cleaned_spans) > 1 else ""
+            area = cleaned_spans[2] if len(cleaned_spans) > 2 else ""
+
+            items.append({
+                "detail_url": detail_url,
+                "title": BtbtlaIndexer._clean_html_text(match.group("title")),
+                "description": BtbtlaIndexer._clean_html_text(match.group("desc")),
+                "year": year,
+                "cat": cat,
+                "area": area,
+            })
+        return items
+
+    @staticmethod
+    def _parse_download_rows(html: str) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        seen = set()
+        tab_labels = [
+            BtbtlaIndexer._clean_html_text(match.group(1))
+            for match in re.finditer(
+                r'<div class="module-tab-item downtab-item[^"]*">\s*'
+                r'<span[^>]*>(.*?)</span><small>\d+</small>',
+                html,
+                re.IGNORECASE | re.DOTALL,
+            )
+        ]
+        block_pattern = re.compile(
+            r'<div class="module-list module-player-list sort-list module-downlist[^"]*">'
+            r'(?P<block>.*?)(?=(?:<div class="module-list module-player-list sort-list module-downlist[^"]*">)'
+            r'|(?:<script type="text/javascript">))',
+            re.IGNORECASE | re.DOTALL,
+        )
+        blocks = [match.group("block") or "" for match in block_pattern.finditer(html)]
+        row_pattern = re.compile(
+            r'<a class="module-row-text[^"]*" href="(?P<tdown>/tdown/\d+\.html)" title="(?P<title_attr>[^"]*)">'
+            r'(?P<body>.*?)</a>\s*<div class="module-row-shortcuts">(?P<shortcuts>.*?)</div>',
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        if tab_labels and blocks:
+            parse_units = list(zip(tab_labels, blocks))
+        else:
+            parse_units = [("", html)]
+
+        for tab_label, block_html in parse_units:
+            if BtbtlaIndexer._is_excluded_download_tab(tab_label):
+                continue
+            for match in row_pattern.finditer(block_html):
+                tdown_url = str(match.group("tdown") or "").strip()
+                if not tdown_url or tdown_url in seen:
+                    continue
+                seen.add(tdown_url)
+
+                body = str(match.group("body") or "")
+                h4_match = re.search(r'<h4>(.*?)</h4>', body, flags=re.IGNORECASE | re.DOTALL)
+                h4_html = str(h4_match.group(1) or "") if h4_match else ""
+                size_match = re.search(r'<span>\s*\[(.*?)\]\s*</span>', h4_html, flags=re.IGNORECASE | re.DOTALL)
+                size_text = BtbtlaIndexer._clean_html_text(size_match.group(1)) if size_match else ""
+                filename_html = re.sub(r'<span>\s*\[.*?\]\s*</span>', ' ', h4_html, flags=re.IGNORECASE | re.DOTALL)
+                filename = BtbtlaIndexer._clean_html_text(filename_html)
+                if not filename:
+                    title_attr = BtbtlaIndexer._clean_html_text(match.group("title_attr"))
+                    filename = BtbtlaIndexer._strip_video_prefix_from_title_attr(title_attr)
+                if not filename:
+                    continue
+
+                download_count = 0
+                shortcuts = str(match.group("shortcuts") or "")
+                count_match = re.search(r'<span>\s*(\d+)\s*</span>', shortcuts, re.IGNORECASE | re.DOTALL)
+                if count_match:
+                    try:
+                        download_count = int(count_match.group(1))
+                    except Exception:
+                        download_count = 0
+
+                items.append({
+                    "tdown_url": tdown_url,
+                    "filename": filename,
+                    "size_text": BtbtlaIndexer._clean_html_text(size_text),
+                    "download_count": download_count,
+                    "tab_label": tab_label,
+                })
+        return items
+
+    @staticmethod
+    def _is_excluded_download_tab(label: Any) -> bool:
+        text = str(label or "").strip().lower()
+        if not text:
+            return False
+        if text in BtbtlaIndexer._excluded_tab_labels:
+            return True
+        return "夸克" in text
+
+    @staticmethod
+    def _build_worker_session(
+            session_headers: Dict[str, str],
+            session_cookies: Dict[str, str],
+            client_ip: str = "") -> _requests.Session:
+        session = _requests.Session()
+        if session_headers:
+            session.headers.update(dict(session_headers))
+        if client_ip:
+            session.headers["X-Forwarded-For"] = client_ip
+            session.headers["X-Real-IP"] = client_ip
+        if session_cookies:
+            session.cookies.update(dict(session_cookies))
+        return session
+
+    @staticmethod
+    def _clean_html_text(raw: Any) -> str:
+        text = str(raw or "")
+        if not text:
+            return ""
+        text = re.sub(r'<br\s*/?>', ' ', text, flags=re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = unescape(text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    @staticmethod
+    def _strip_video_prefix_from_title_attr(text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        cleaned = re.sub(r'^《[^》]+》', '', raw).strip()
+        cleaned = re.sub(r'\s+\d+(?:\.\d+)?\s*(?:TB|GB|MB|KB)\.torrent$', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\.torrent$', '', cleaned, flags=re.IGNORECASE)
+        return cleaned.strip()
+
+    @staticmethod
+    def _extract_first_match(text: Any, pattern: str) -> str:
+        raw = str(text or "")
+        if not raw:
+            return ""
+        match = re.search(pattern, raw, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+        return BtbtlaIndexer._clean_html_text(match.group(1))
+
+    @staticmethod
+    def _build_match_title(title: str, parent_title: str = "", year: str = "") -> str:
+        value = str(title or "").strip()
+        parent = str(parent_title or "").strip()
+        normalized_value = value.lower()
+        normalized_parent = parent.lower()
+        if parent and normalized_parent not in normalized_value:
+            value = f"{parent} {value}".strip()
+        if year and re.match(r"^(19|20)\d{2}$", year) and not re.search(r"(19|20)\d{2}", value):
+            value = f"{value} {year}".strip()
+        return value
+
+    @staticmethod
+    def _parse_pubdate_text(text: str) -> Optional[datetime]:
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+
+        normalized = raw.replace("T", " ").replace("Z", "")
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        absolute_formats = [
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+        ]
+        for fmt in absolute_formats:
+            try:
+                return datetime.strptime(normalized, fmt)
+            except Exception:
+                pass
+
+        now = datetime.now()
+        relative_rules = [
+            (r"(\d+)\s*秒前", "seconds"),
+            (r"(\d+)\s*分钟前", "minutes"),
+            (r"(\d+)\s*小时前", "hours"),
+            (r"(\d+)\s*天前", "days"),
+        ]
+        for pattern, unit in relative_rules:
+            match = re.search(pattern, normalized)
+            if not match:
+                continue
+            amount = int(match.group(1))
+            return now - timedelta(**{unit: amount})
+
+        if "刚刚" in normalized:
+            return now
+        if "昨天" in normalized:
+            return now - timedelta(days=1)
+        return None
+
+    @staticmethod
+    def _parse_size_bytes(*size_texts: str) -> int:
+        for raw in size_texts:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            match = re.search(
+                r'(\d+(?:\.\d+)?)\s*(TB|GB|MB|KB|T|G|M|K)\b',
+                text,
+                re.IGNORECASE,
+            )
+            if not match:
+                continue
+            value = float(match.group(1))
+            unit = match.group(2).upper()
+            factor = {
+                "TB": 1 << 40,
+                "T": 1 << 40,
+                "GB": 1 << 30,
+                "G": 1 << 30,
+                "MB": 1 << 20,
+                "M": 1 << 20,
+                "KB": 1 << 10,
+                "K": 1 << 10,
+            }.get(unit, 0)
+            if factor > 0:
+                return int(value * factor)
+        return 0
+
+    @staticmethod
+    def _to_int(value: Any) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, int):
+            return value
+        text = str(value).strip().replace(",", "")
+        if not text:
+            return 0
+        match = re.search(r"-?\d+", text)
+        if not match:
+            return 0
+        try:
+            return int(match.group(0))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _rand_ip() -> str:
+        return f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+
+    @staticmethod
+    def _clamp_detail_concurrency(value: Any) -> int:
+        try:
+            concurrency = int(value or 5)
+        except Exception:
+            concurrency = 5
+        return max(1, min(concurrency, 20))
+
+    def _match_target_site(self, site: dict) -> bool:
+        site_id = str(site.get("id") or "").strip().lower()
+        if site_id in ("btbtla", "btla", "btbtla.com"):
+            return True
+
+        all_hosts = self._all_hosts()
+        for candidate in [site.get("domain"), site.get("url")]:
+            host = self._extract_host(candidate)
+            if host and self._is_host_match(host, all_hosts):
+                return True
+        return False
+
+    def _resolve_base_url(self, site: dict) -> str:
+        candidates = self._build_base_url_candidates(site=site)
+        if candidates:
+            return candidates[0]
+        return self._default_base_url
+
+    def _all_hosts(self) -> set:
+        hosts = {self._default_host, "www.btbtla.com"}
+        for host in self._ordered_extra_hosts():
+            hosts.add(host)
+        return hosts
+
+    def _registered_hosts(self) -> List[str]:
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        if ordered_extra_hosts:
+            return ordered_extra_hosts
+        return sorted(self._all_hosts())
+
+    def _ordered_extra_hosts(self) -> List[str]:
+        results: List[str] = []
+        seen = set()
+        for line in (self._extra_hosts or "").splitlines():
+            host = self._extract_host(line)
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            results.append(host)
+        return results
+
+    def _build_base_url_candidates(self, site: dict) -> List[str]:
+        candidates: List[str] = []
+        seen = set()
+
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        for host in ordered_extra_hosts:
+            base_url = self._normalize_base_url(host)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+
+        if ordered_extra_hosts:
+            return candidates
+
+        for raw in (
+            site.get("url") if isinstance(site, dict) else "",
+            site.get("domain") if isinstance(site, dict) else "",
+            self._default_base_url,
+        ):
+            base_url = self._normalize_base_url(raw)
+            if base_url and base_url not in seen:
+                seen.add(base_url)
+                candidates.append(base_url)
+        return candidates
+
+    def _register_builtin_indexer(self) -> None:
+        hosts = self._registered_hosts()
+        if not hosts:
+            return
+        indexer = self._build_indexer_schema(hosts)
+        for host in hosts:
+            try:
+                SitesHelper().add_indexer(domain=host, indexer=indexer)
+            except Exception as err:
+                logger.debug(f"BT影视(btbtla)索引器注册失败：域名={host}，错误={err}")
+        logger.info(f"BT影视(btbtla)索引器注册完成：域名列表={', '.join(hosts)}")
+
+    @staticmethod
+    def _build_indexer_schema(all_hosts: List[str]) -> Dict[str, Any]:
+        primary = "www.btbtla.com" if "www.btbtla.com" in all_hosts else all_hosts[0]
+        ext_domains = [f"https://{host}/" for host in all_hosts if host != primary]
+        return {
+            "id": "btbtla",
+            "name": "BT影视",
+            "domain": f"https://{primary}/",
+            "ext_domains": ext_domains,
+            "encoding": "UTF-8",
+            "public": True,
+            "proxy": True,
+            "result_num": 100,
+            "timeout": 30,
+            "search": {
+                "paths": [
+                    {
+                        "path": "search/test",
+                        "method": "get"
+                    }
+                ]
+            },
+            "torrents": {
+                "list": {
+                    "selector": "div.__never_match__"
+                },
+                "fields": {
+                    "id": {"selector": "a"},
+                    "title": {"selector": "a"},
+                    "details": {"selector": "a", "attribute": "href"},
+                    "download": {"selector": "a", "attribute": "href"},
+                    "downloadvolumefactor": {"case": {"*": 0}},
+                    "uploadvolumefactor": {"case": {"*": 1}},
+                }
+            }
+        }
+
+    @staticmethod
+    def _extract_host(raw: Any) -> str:
+        if raw is None:
+            return ""
+        text = str(raw).strip().lower()
+        if not text:
+            return ""
+        if "://" not in text:
+            text = f"https://{text}"
+        try:
+            host = (urlparse(text).hostname or "").lower()
+        except Exception:
+            return ""
+        return host
+
+    @staticmethod
+    def _normalize_base_url(raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if "://" not in text:
+            text = f"https://{text}"
+        try:
+            parsed = urlparse(text)
+        except Exception:
+            return ""
+        if not parsed.netloc:
+            return ""
+        scheme = parsed.scheme or "https"
+        return f"{scheme}://{parsed.netloc}/"
+
+    @staticmethod
+    def _is_host_match(host: str, allowed_hosts: set) -> bool:
+        pure = host.lower().lstrip(".")
+        pure_no_www = pure[4:] if pure.startswith("www.") else pure
+        for allowed in allowed_hosts:
+            candidate = allowed.lower().lstrip(".")
+            candidate_no_www = candidate[4:] if candidate.startswith("www.") else candidate
+            if pure == candidate or pure_no_www == candidate_no_www:
+                return True
+        return False
