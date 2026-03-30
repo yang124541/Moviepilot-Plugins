@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.3.8"
-    plugin_version = "1.3.8"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.3.9"
+    plugin_version = "1.3.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -121,8 +121,10 @@ class LdysgIndexer(_PluginBase):
                                             "model": "detail_concurrency",
                                             "type": "number",
                                             "label": "资源页并发数",
+                                            "min": 1,
+                                            "max": 100,
                                             "placeholder": "5",
-                                            "hint": "只并发抓取搜索结果详情页，允许范围 1-20",
+                                            "hint": "只并发抓取搜索结果详情页，允许范围 1-100",
                                             "persistentHint": True,
                                         },
                                     }
@@ -307,11 +309,6 @@ class LdysgIndexer(_PluginBase):
                 if timing_item:
                     timing_items.append(timing_item)
             return results, timing_items
-
-        logger.info(
-            f"老电影资源(ldysg)开始并发抓取资源页："
-            f"视频数={len(video_items)}，并发数={worker_count}"
-        )
 
         ordered_results: Dict[int, List[TorrentInfo]] = {}
         ordered_timing_items: Dict[int, Dict[str, Any]] = {}
@@ -932,7 +929,7 @@ class LdysgIndexer(_PluginBase):
             concurrency = int(value or 5)
         except Exception:
             concurrency = 5
-        return max(1, min(concurrency, 20))
+        return max(1, min(concurrency, 100))
 
     @staticmethod
     def _build_match_title(title: str, parent_title: str = "", year: str = "") -> str:

@@ -22,8 +22,8 @@ from app.schemas.types import MediaType
 class Dyg55Indexer(_PluginBase):
     plugin_name = "电影港（dyg55）"
     plugin_desc = "为 dyg55.com 提供电影港 BT 种子搜索支持。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png"
-    plugin_version = "1.0.1"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png?v=1.0.4"
+    plugin_version = "1.0.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "dyg55indexer_"
@@ -94,8 +94,10 @@ class Dyg55Indexer(_PluginBase):
                                             "model": "detail_concurrency",
                                             "type": "number",
                                             "label": "详情并发数",
+                                            "min": 1,
+                                            "max": 100,
                                             "placeholder": "5",
-                                            "hint": "并发抓取详情页、下载地址和种子内容，允许范围 1-20",
+                                            "hint": "并发抓取详情页、下载地址和种子内容，允许范围 1-100",
                                             "persistentHint": True,
                                         },
                                     }
@@ -253,11 +255,6 @@ class Dyg55Indexer(_PluginBase):
                     )
                 )
             return results
-
-        logger.info(
-            f"电影港(dyg55)开始并发抓取详情："
-            f"条目数={len(items)}，并发数={worker_count}"
-        )
 
         ordered_results: Dict[int, List[TorrentInfo]] = {}
         task_queue = deque((index, item) for index, item in enumerate(items))
@@ -810,7 +807,7 @@ class Dyg55Indexer(_PluginBase):
             concurrency = int(value or 5)
         except Exception:
             concurrency = 5
-        return max(1, min(concurrency, 20))
+        return max(1, min(concurrency, 100))
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()

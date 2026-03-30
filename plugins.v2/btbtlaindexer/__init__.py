@@ -22,7 +22,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -95,8 +95,10 @@ class BtbtlaIndexer(_PluginBase):
                                             "model": "detail_concurrency",
                                             "type": "number",
                                             "label": "资源页并发数",
+                                            "min": 1,
+                                            "max": 100,
                                             "placeholder": "5",
-                                            "hint": "并发抓取影片详情页与 tdown 磁力页，允许范围 1-20",
+                                            "hint": "并发抓取影片详情页与 tdown 磁力页，允许范围 1-100",
                                             "persistentHint": True,
                                         },
                                     }
@@ -949,7 +951,7 @@ class BtbtlaIndexer(_PluginBase):
             concurrency = int(value or 5)
         except Exception:
             concurrency = 5
-        return max(1, min(concurrency, 20))
+        return max(1, min(concurrency, 100))
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
