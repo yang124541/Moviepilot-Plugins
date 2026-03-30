@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import re
 import random
@@ -38,6 +39,8 @@ class BtbtlaIndexer(_PluginBase):
     _default_base_url = "https://www.btbtla.com/"
     _max_search_pages = 5
     _excluded_tab_labels = {"other", "夸克网盘"}
+    _repeat_search_cache_ttl = 600
+    _recent_search_cache: Dict[str, Tuple[datetime, List[TorrentInfo]]] = {}
 
     def init_plugin(self, config: dict = None):
         if config:
@@ -189,6 +192,19 @@ class BtbtlaIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
+        cache_key = self._build_repeat_search_cache_key(
+            site=site,
+            keyword=keyword,
+            mtype=mtype,
+            page=page,
+        )
+        cached_results = self._get_recent_search_cache(cache_key)
+        if cached_results:
+            logger.debug(
+                f"BT影视(btbtla)命中短时复搜缓存：关键词='{keyword}'，"
+                f"结果数={len(cached_results)}"
+            )
+            return cached_results
         media_profile = self._resolve_moviepilot_media_profile(
             keyword=keyword,
             mtype=mtype,
@@ -271,6 +287,7 @@ class BtbtlaIndexer(_PluginBase):
                 f"BT影视(btbtla)搜索完成：关键词='{keyword}'，"
                 f"找到视频={search_video_count}，返回磁力={len(results)}，耗时={cost}s"
             )
+            self._set_recent_search_cache(cache_key, results)
             return results
         except Exception as err:
             logger.error(f"BT影视(btbtla)搜索异常：关键词='{keyword}'，错误={err}")
@@ -1433,6 +1450,58 @@ class BtbtlaIndexer(_PluginBase):
         except Exception:
             concurrency = 5
         return max(1, min(concurrency, 100))
+
+    def _build_repeat_search_cache_key(
+            self,
+            site: dict,
+            keyword: str,
+            mtype: MediaType = None,
+            page: Optional[int] = 0) -> str:
+        site_name = str(site.get("name") or "").strip().lower()
+        site_url = self._normalize_base_url(site.get("url") or site.get("domain") or "")
+        media_type = str(mtype or "").strip().lower()
+        return "|".join([
+            site_name,
+            site_url,
+            str(keyword or "").strip().lower(),
+            media_type,
+            str(page or 0),
+        ])
+
+    def _get_recent_search_cache(self, cache_key: str) -> List[TorrentInfo]:
+        if not cache_key:
+            return []
+        cached = self._recent_search_cache.get(cache_key)
+        if not cached:
+            return []
+        cached_at, cached_results = cached
+        if not cached_results:
+            self._recent_search_cache.pop(cache_key, None)
+            return []
+        if (datetime.now() - cached_at).total_seconds() > self._repeat_search_cache_ttl:
+            self._recent_search_cache.pop(cache_key, None)
+            return []
+        try:
+            return copy.deepcopy(cached_results)
+        except Exception:
+            return list(cached_results)
+
+    def _set_recent_search_cache(self, cache_key: str, results: List[TorrentInfo]) -> None:
+        if not cache_key or not results:
+            return
+        self._recent_search_cache[cache_key] = (
+            datetime.now(),
+            copy.deepcopy(results),
+        )
+        now = datetime.now()
+        expired_keys = [
+            key
+            for key, value in self._recent_search_cache.items()
+            if not value
+            or (now - value[0]).total_seconds() > self._repeat_search_cache_ttl
+        ]
+        for key in expired_keys:
+            self._recent_search_cache.pop(key, None)
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
