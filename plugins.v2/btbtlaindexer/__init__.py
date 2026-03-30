@@ -22,7 +22,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -195,6 +195,8 @@ class BtbtlaIndexer(_PluginBase):
         first_actor = str(((media_profile.get("actors") or [""])[0]) or "").strip()
         logger.debug(
             f"BT影视(btbtla)主程序媒体信息：关键词='{keyword}'，"
+            f"来源='{str(media_profile.get('source') or 'none').strip()}'，"
+            f"类型='{str(media_profile.get('resolved_mtype') or '').strip() or 'unknown'}'，"
             f"tmdb_id={'有' if str(media_profile.get('tmdb_id') or '').strip() else '无'}，"
             f"imdb_id={'有' if str(media_profile.get('imdb_id') or '').strip() else '无'}，"
             f"主演={'有' if first_actor else '无'}，"
@@ -464,6 +466,8 @@ class BtbtlaIndexer(_PluginBase):
             "imdb_id": "",
             "names": [],
             "actors": [],
+            "source": "none",
+            "resolved_mtype": "",
         }
         keyword_text = str(keyword or "").strip()
         if not keyword_text:
@@ -491,6 +495,7 @@ class BtbtlaIndexer(_PluginBase):
                 profile["tmdb_id"] = str(cached.get("id") or "").strip()
                 profile["title"] = str(cached.get("title") or profile["title"]).strip()
                 profile["year"] = str(cached.get("year") or profile["year"]).strip()
+                profile["source"] = "cache"
                 if profile["title"]:
                     profile["names"] = self._unique_nonempty([profile["title"]])
         except Exception as err:
@@ -514,20 +519,45 @@ class BtbtlaIndexer(_PluginBase):
 
         try:
             normalized_mtype = self._normalize_profile_mtype(meta.type or mtype)
-            tmdb_id = self._to_int(profile["tmdb_id"])
-            if tmdb_id > 0 and hasattr(api, "get_info"):
-                tmdb_info = api.get_info(mtype=normalized_mtype, tmdbid=tmdb_id) or {}
-            if not tmdb_info and hasattr(api, "match"):
-                tmdb_info = api.match(
+            matched_tmdb_info: Dict[str, Any] = {}
+            if hasattr(api, "match"):
+                logger.debug(
+                    f"BT影视(btbtla)主程序媒体识别：先执行TMDB match，"
+                    f"关键词='{str(meta.name or keyword_text).strip()}'，"
+                    f"类型='{normalized_mtype or 'unknown'}'，"
+                    f"年份='{str(getattr(meta, 'year', '') or profile['year']).strip() or ''}'"
+                )
+                matched_tmdb_info = api.match(
                     name=str(meta.name or keyword_text).strip(),
                     mtype=normalized_mtype,
                     year=str(getattr(meta, "year", "") or profile["year"]).strip() or None,
                 ) or {}
-                matched_tmdbid = self._to_int(tmdb_info.get("id"))
+                matched_tmdbid = self._to_int(matched_tmdb_info.get("id"))
+                matched_mtype = self._normalize_profile_mtype(
+                    matched_tmdb_info.get("media_type")
+                    or matched_tmdb_info.get("type")
+                    or normalized_mtype
+                )
+                profile["resolved_mtype"] = str(matched_mtype or normalized_mtype or "").strip()
+                if matched_tmdbid > 0:
+                    logger.debug(
+                        f"BT影视(btbtla)主程序媒体识别：TMDB match命中，"
+                        f"id={matched_tmdbid}，"
+                        f"类型='{profile['resolved_mtype'] or 'unknown'}'，"
+                        f"标题='{str(matched_tmdb_info.get('title') or matched_tmdb_info.get('name') or '').strip()}'"
+                    )
                 if matched_tmdbid > 0 and hasattr(api, "get_info"):
-                    detailed = api.get_info(mtype=normalized_mtype, tmdbid=matched_tmdbid) or {}
+                    detailed = api.get_info(
+                        mtype=matched_mtype or normalized_mtype,
+                        tmdbid=matched_tmdbid,
+                    ) or {}
                     if detailed:
                         tmdb_info = detailed
+                        profile["source"] = "match+detail"
+                if not tmdb_info and matched_tmdb_info:
+                    tmdb_info = matched_tmdb_info
+                    if matched_tmdbid > 0:
+                        profile["source"] = "match"
             if tmdb_info:
                 external_ids = tmdb_info.get("external_ids") or {}
                 profile["tmdb_id"] = str(tmdb_info.get("id") or profile["tmdb_id"]).strip()
@@ -1000,10 +1030,6 @@ class BtbtlaIndexer(_PluginBase):
             str(download_item.get("area") or "").strip(),
         ]
         description = " | ".join([part for part in description_parts if part])
-        plot = str(download_item.get("plot") or "").strip()
-        if plot and plot not in description:
-            description = f"{description} | {plot}" if description else plot
-
         return TorrentInfo(
             site=site.get("id"),
             site_name=site.get("name"),
