@@ -23,7 +23,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -1061,7 +1061,7 @@ class BtbtlaIndexer(_PluginBase):
             seeders=0,
             peers=0,
             grabs=self._to_int(download_item.get("download_count")),
-            pubdate=self._parse_pubdate_text(pubdate_text),
+            pubdate=None,
             date_elapsed=pubdate_text,
             downloadvolumefactor=0,
             uploadvolumefactor=1,
