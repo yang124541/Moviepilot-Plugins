@@ -42,11 +42,12 @@
     "name": "BT影视",
     "description": "为 MoviePilot 增加 btbtla.com 磁力搜索支持。",
     "labels": "站点,索引",
-    "version": "1.0.11",
+    "version": "1.1.1",
     "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.1.1": "版本号调整到 1.1.1，保持 BT影视当前识别、日志与结果页修复逻辑不变。",
       "v1.0.11": "修复 BT影视搜索结果切页返回后丢失：为每条结果生成稳定且唯一的 page_url fragment，避免 MoviePilot 卡片视图 key 复用异常。",
       "v1.0.10": "调整 BT影视结果卡片显示：不再把详情页剧情简介追加到 description 后方，避免卡片正文过长影响浏览。",
       "v1.0.9": "调整 BT影视 TMDB 识别顺序为先 match 后 get_info，并补充来源/类型等 debug 日志，便于排查是否命中详情与主演信息。",
