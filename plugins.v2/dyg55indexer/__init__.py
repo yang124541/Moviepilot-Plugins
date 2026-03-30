@@ -23,8 +23,8 @@ from app.schemas.types import MediaType
 class Dyg55Indexer(_PluginBase):
     plugin_name = "电影港（dyg55）"
     plugin_desc = "为 dyg55.com 提供电影港 BT 种子搜索支持。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png?v=1.0.4"
-    plugin_version = "1.0.7"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png?v=1.0.8"
+    plugin_version = "1.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "dyg55indexer_"
@@ -179,7 +179,17 @@ class Dyg55Indexer(_PluginBase):
             )
             return cached_results
 
-        logger.info(f"电影港(dyg55)开始搜索：关键词='{keyword}'")
+        media_profile = self._resolve_moviepilot_media_profile(keyword=keyword, mtype=mtype)
+        self._log_moviepilot_media_profile(keyword=keyword, media_profile=media_profile)
+        imdb_keyword = self._normalize_imdb_id(media_profile.get("imdb_id"))
+        keyword_text = str(keyword or "").strip()
+        used_search_mode = "imdb" if imdb_keyword else "keyword"
+        used_search_keyword = imdb_keyword or keyword_text
+
+        logger.info(
+            f"电影港(dyg55)开始搜索：关键词='{keyword}'，"
+            f"搜索方式='{'IMDb' if imdb_keyword else '关键词'}'"
+        )
 
         try:
             session = _requests.Session()
@@ -192,17 +202,41 @@ class Dyg55Indexer(_PluginBase):
             if cookie_from_site:
                 session.headers["Cookie"] = cookie_from_site
 
-            search_items = self._search_items(
-                session=session,
-                base_url=base_url,
-                keyword=keyword,
-                timeout=timeout,
-                proxies=proxies,
-            )
+            search_items: List[Dict[str, Any]] = []
+            if imdb_keyword:
+                search_items = self._search_items(
+                    session=session,
+                    base_url=base_url,
+                    keyword=imdb_keyword,
+                    timeout=timeout,
+                    proxies=proxies,
+                )
+                logger.debug(
+                    f"电影港(dyg55)IMDb搜索结果：imdb_id='{imdb_keyword}'，"
+                    f"命中视频={len(search_items)}"
+                )
+            if (not search_items) and keyword_text and (
+                not imdb_keyword or keyword_text.lower() != imdb_keyword.lower()
+            ):
+                if imdb_keyword:
+                    logger.debug(
+                        f"电影港(dyg55)IMDb未命中，回退关键词搜索：关键词='{keyword_text}'"
+                    )
+                used_search_mode = "keyword"
+                used_search_keyword = keyword_text
+                search_items = self._search_items(
+                    session=session,
+                    base_url=base_url,
+                    keyword=keyword_text,
+                    timeout=timeout,
+                    proxies=proxies,
+                )
             if not search_items:
                 cost = (datetime.now() - start_at).seconds
                 logger.info(
                     f"电影港(dyg55)搜索完成：关键词='{keyword}'，"
+                    f"搜索方式='{used_search_mode}'，"
+                    f"搜索词='{used_search_keyword}'，"
                     f"找到视频=0，返回磁力=0，耗时={cost}s"
                 )
                 return []
@@ -219,6 +253,8 @@ class Dyg55Indexer(_PluginBase):
             cost = (datetime.now() - start_at).seconds
             logger.info(
                 f"电影港(dyg55)搜索完成：关键词='{keyword}'，"
+                f"搜索方式='{used_search_mode}'，"
+                f"搜索词='{used_search_keyword}'，"
                 f"找到视频={len(search_items)}，返回磁力={len(results)}，耗时={cost}s"
             )
             self._set_recent_search_cache(cache_key, results)
@@ -226,6 +262,171 @@ class Dyg55Indexer(_PluginBase):
         except Exception as err:
             logger.error(f"电影港(dyg55)搜索异常：关键词='{keyword}'，错误={err}")
             return []
+
+    def _resolve_moviepilot_media_profile(
+            self,
+            keyword: str,
+            mtype: MediaType = None) -> Dict[str, Any]:
+        profile: Dict[str, Any] = {
+            "title": str(keyword or "").strip(),
+            "year": self._extract_year_token(keyword),
+            "tmdb_id": "",
+            "imdb_id": "",
+            "names": [],
+            "actors": [],
+            "source": "none",
+            "resolved_mtype": "",
+        }
+        keyword_text = str(keyword or "").strip()
+        if not keyword_text:
+            return profile
+
+        try:
+            from app.core.metainfo import MetaInfo
+        except Exception as err:
+            logger.debug(f"电影港(dyg55)加载主程序 MetaInfo 失败：{err}")
+            return profile
+
+        meta = MetaInfo(title=keyword_text)
+        if not getattr(meta, "name", None):
+            return profile
+        if not getattr(meta, "year", None) and profile["year"]:
+            meta.year = profile["year"]
+        if mtype and not getattr(meta, "type", None):
+            meta.type = mtype
+
+        tmdb_info: Dict[str, Any] = {}
+        try:
+            from app.modules.themoviedb.tmdb_cache import TmdbCache
+            cached = TmdbCache().get(meta) or {}
+            if cached:
+                profile["tmdb_id"] = str(cached.get("id") or "").strip()
+                profile["title"] = str(cached.get("title") or profile["title"]).strip()
+                profile["year"] = str(cached.get("year") or profile["year"]).strip()
+                profile["resolved_mtype"] = str(
+                    self._normalize_profile_mtype(
+                        cached.get("media_type")
+                        or cached.get("type")
+                        or meta.type
+                        or mtype
+                    ) or ""
+                ).strip()
+                profile["source"] = "cache"
+                if profile["title"]:
+                    profile["names"] = self._unique_nonempty([profile["title"]])
+        except Exception as err:
+            logger.debug(f"电影港(dyg55)读取 TMDB 缓存失败：{err}")
+
+        try:
+            from app.modules.themoviedb.tmdbapi import TmdbApi
+        except Exception as err:
+            logger.debug(f"电影港(dyg55)加载 TmdbApi 失败：{err}")
+            return profile
+
+        api = None
+        try:
+            api = TmdbApi(language=settings.TMDB_LOCALE)
+        except Exception:
+            try:
+                api = TmdbApi()
+            except Exception as err:
+                logger.debug(f"电影港(dyg55)初始化 TmdbApi 失败：{err}")
+                return profile
+
+        try:
+            normalized_mtype = self._normalize_profile_mtype(meta.type or mtype)
+            cache_tmdbid = self._to_int(profile["tmdb_id"])
+            detail_mtype = self._normalize_profile_mtype(
+                profile["resolved_mtype"] or normalized_mtype
+            )
+            if cache_tmdbid > 0 and hasattr(api, "get_info"):
+                cached_detail = api.get_info(
+                    mtype=detail_mtype or normalized_mtype,
+                    tmdbid=cache_tmdbid,
+                ) or {}
+                if cached_detail:
+                    tmdb_info = cached_detail
+                    profile["source"] = "cache+detail"
+            if not tmdb_info and hasattr(api, "match"):
+                logger.debug(
+                    f"电影港(dyg55)主程序媒体识别：先执行TMDB match，"
+                    f"关键词='{str(meta.name or keyword_text).strip()}'，"
+                    f"类型='{str(normalized_mtype or '').strip() or 'unknown'}'，"
+                    f"年份='{str(getattr(meta, 'year', '') or profile['year']).strip() or ''}'"
+                )
+                matched_tmdb_info = api.match(
+                    name=str(meta.name or keyword_text).strip(),
+                    mtype=normalized_mtype,
+                    year=str(getattr(meta, "year", "") or profile["year"]).strip() or None,
+                ) or {}
+                matched_tmdbid = self._to_int(matched_tmdb_info.get("id"))
+                matched_mtype = self._normalize_profile_mtype(
+                    matched_tmdb_info.get("media_type")
+                    or matched_tmdb_info.get("type")
+                    or normalized_mtype
+                )
+                profile["resolved_mtype"] = str(
+                    matched_mtype or normalized_mtype or ""
+                ).strip()
+                if matched_tmdbid > 0 and hasattr(api, "get_info"):
+                    detailed = api.get_info(
+                        mtype=matched_mtype or normalized_mtype,
+                        tmdbid=matched_tmdbid,
+                    ) or {}
+                    if detailed:
+                        tmdb_info = detailed
+                        profile["source"] = "match+detail"
+                if not tmdb_info and matched_tmdb_info:
+                    tmdb_info = matched_tmdb_info
+                    if matched_tmdbid > 0:
+                        profile["source"] = "match"
+            if tmdb_info:
+                external_ids = tmdb_info.get("external_ids") or {}
+                profile["tmdb_id"] = str(tmdb_info.get("id") or profile["tmdb_id"]).strip()
+                profile["imdb_id"] = self._normalize_imdb_id(external_ids.get("imdb_id"))
+                profile["title"] = str(
+                    tmdb_info.get("title")
+                    or tmdb_info.get("name")
+                    or profile["title"]
+                ).strip()
+                profile["year"] = str(
+                    self._extract_year_token(
+                        tmdb_info.get("release_date")
+                        or tmdb_info.get("first_air_date")
+                        or profile["year"]
+                    ) or profile["year"]
+                ).strip()
+                profile["names"] = self._unique_nonempty(
+                    [profile["title"]]
+                    + list(tmdb_info.get("names") or [])
+                    + [
+                        tmdb_info.get("original_title"),
+                        tmdb_info.get("original_name"),
+                    ]
+                )
+                profile["actors"] = self._extract_tmdb_actor_names(tmdb_info)
+        except Exception as err:
+            logger.debug(f"电影港(dyg55)识别主程序媒体信息失败：{err}")
+        finally:
+            try:
+                if api and hasattr(api, "close"):
+                    api.close()
+            except Exception:
+                pass
+
+        return profile
+
+    def _log_moviepilot_media_profile(self, keyword: str, media_profile: Dict[str, Any]) -> None:
+        first_actor = str(((media_profile.get("actors") or [""])[0]) or "").strip()
+        logger.debug(
+            f"电影港(dyg55)主程序媒体信息：关键词='{str(keyword or '').strip()}'，"
+            f"来源='{str(media_profile.get('source') or 'none').strip()}'，"
+            f"类型='{str(media_profile.get('resolved_mtype') or '').strip() or 'unknown'}'，"
+            f"tmdb_id={'有' if str(media_profile.get('tmdb_id') or '').strip() else '无'}，"
+            f"imdb_id={'有' if str(media_profile.get('imdb_id') or '').strip() else '无'}，"
+            f"主演={'有' if first_actor else '无'}，"
+            f"第一主演='{first_actor}'"
+        )
 
     def _search_items(self, session: _requests.Session, base_url: str,
                       keyword: str, timeout: int,
@@ -932,6 +1133,60 @@ class Dyg55Indexer(_PluginBase):
         ]
         for key in expired_keys:
             self._recent_search_cache.pop(key, None)
+
+    @staticmethod
+    def _extract_tmdb_actor_names(tmdb_info: Dict[str, Any]) -> List[str]:
+        results: List[str] = []
+        credits = tmdb_info.get("credits") or {}
+        cast_items = credits.get("cast") or tmdb_info.get("actors") or []
+        for item in cast_items[:12]:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("original_name") or "").strip()
+            else:
+                name = str(item or "").strip()
+            if name:
+                results.append(name)
+        return Dyg55Indexer._unique_nonempty(results)
+
+    @staticmethod
+    def _normalize_profile_mtype(mtype: MediaType = None):
+        if not mtype:
+            return None
+        raw = str(mtype).strip().lower()
+        if raw.endswith(".tv") or raw == "tv" or "电视剧" in raw:
+            return MediaType.TV
+        if raw.endswith(".movie") or raw == "movie" or "电影" in raw:
+            return MediaType.MOVIE
+        return mtype
+
+    @staticmethod
+    def _extract_year_token(value: Any) -> str:
+        match = re.search(r"(19|20)\d{2}", str(value or ""))
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _normalize_imdb_id(value: Any) -> str:
+        match = re.search(r"(tt\d{5,})", str(value or "").strip(), re.IGNORECASE)
+        return match.group(1).lower() if match else ""
+
+    @staticmethod
+    def _unique_nonempty(items: List[Any]) -> List[str]:
+        results: List[str] = []
+        seen = set()
+        for item in items or []:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            results.append(text)
+        return results
+
+    @staticmethod
+    def _to_int(value: Any) -> int:
+        try:
+            return int(str(value or "").strip())
+        except Exception:
+            return 0
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()

@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.3.9"
-    plugin_version = "1.3.9"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.3.10"
+    plugin_version = "1.3.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -194,7 +194,17 @@ class LdysgIndexer(_PluginBase):
         # 构建 cookie（使用站点配置 cookie）
         cookie = str(site.get("cookie") or "").strip()
 
-        logger.info(f"老电影资源(ldysg)开始搜索：关键词='{keyword}'")
+        media_profile = self._resolve_moviepilot_media_profile(keyword=keyword, mtype=mtype)
+        self._log_moviepilot_media_profile(keyword=keyword, media_profile=media_profile)
+        imdb_keyword = self._normalize_imdb_id(media_profile.get("imdb_id"))
+        keyword_text = str(keyword or "").strip()
+        used_search_mode = "imdb" if imdb_keyword else "keyword"
+        used_search_keyword = imdb_keyword or keyword_text
+
+        logger.info(
+            f"老电影资源(ldysg)开始搜索：关键词='{keyword}'，"
+            f"搜索方式='{'IMDb' if imdb_keyword else '关键词'}'"
+        )
 
         try:
             client = RequestUtils(
@@ -207,16 +217,41 @@ class LdysgIndexer(_PluginBase):
 
             # 搜索视频列表
             video_list_started = perf_counter()
-            video_items = self._search_videos(
-                client=client,
-                base_url=base_url,
-                keyword=keyword,
-                ua=ua,
-                proxies=proxies,
-                timeout=timeout,
-                cookie=cookie,
-                client_ip=client_ip,
-            )
+            video_items: List[Dict[str, Any]] = []
+            if imdb_keyword:
+                video_items = self._search_videos(
+                    client=client,
+                    base_url=base_url,
+                    keyword=imdb_keyword,
+                    ua=ua,
+                    proxies=proxies,
+                    timeout=timeout,
+                    cookie=cookie,
+                    client_ip=client_ip,
+                )
+                logger.debug(
+                    f"老电影资源(ldysg)IMDb搜索结果：imdb_id='{imdb_keyword}'，"
+                    f"命中视频={len(video_items)}"
+                )
+            if (not video_items) and keyword_text and (
+                not imdb_keyword or keyword_text.lower() != imdb_keyword.lower()
+            ):
+                if imdb_keyword:
+                    logger.debug(
+                        f"老电影资源(ldysg)IMDb未命中，回退关键词搜索：关键词='{keyword_text}'"
+                    )
+                used_search_mode = "keyword"
+                used_search_keyword = keyword_text
+                video_items = self._search_videos(
+                    client=client,
+                    base_url=base_url,
+                    keyword=keyword_text,
+                    ua=ua,
+                    proxies=proxies,
+                    timeout=timeout,
+                    cookie=cookie,
+                    client_ip=client_ip,
+                )
             video_list_cost = perf_counter() - video_list_started
             if not video_items:
                 total_cost = perf_counter() - search_started
@@ -233,6 +268,8 @@ class LdysgIndexer(_PluginBase):
                 }
                 logger.info(
                     f"老电影资源(ldysg)搜索完成：关键词='{keyword}'，"
+                    f"搜索方式='{used_search_mode}'，"
+                    f"搜索词='{used_search_keyword}'，"
                     f"找到视频=0，返回磁力=0，耗时={elapsed_seconds}s"
                 )
                 logger.debug(
@@ -266,6 +303,8 @@ class LdysgIndexer(_PluginBase):
             }
             logger.info(
                 f"老电影资源(ldysg)搜索完成：关键词='{keyword}'，"
+                f"搜索方式='{used_search_mode}'，"
+                f"搜索词='{used_search_keyword}'，"
                 f"找到视频={len(video_items)}，返回磁力={len(results)}，耗时={elapsed_seconds}s"
             )
             logger.debug(
@@ -276,6 +315,171 @@ class LdysgIndexer(_PluginBase):
         except Exception as err:
             logger.error(f"老电影资源(ldysg)搜索异常：关键词='{keyword}'，错误={err}")
             return []
+
+    def _resolve_moviepilot_media_profile(
+            self,
+            keyword: str,
+            mtype: MediaType = None) -> Dict[str, Any]:
+        profile: Dict[str, Any] = {
+            "title": str(keyword or "").strip(),
+            "year": self._extract_year_token(keyword),
+            "tmdb_id": "",
+            "imdb_id": "",
+            "names": [],
+            "actors": [],
+            "source": "none",
+            "resolved_mtype": "",
+        }
+        keyword_text = str(keyword or "").strip()
+        if not keyword_text:
+            return profile
+
+        try:
+            from app.core.metainfo import MetaInfo
+        except Exception as err:
+            logger.debug(f"老电影资源(ldysg)加载主程序 MetaInfo 失败：{err}")
+            return profile
+
+        meta = MetaInfo(title=keyword_text)
+        if not getattr(meta, "name", None):
+            return profile
+        if not getattr(meta, "year", None) and profile["year"]:
+            meta.year = profile["year"]
+        if mtype and not getattr(meta, "type", None):
+            meta.type = mtype
+
+        tmdb_info: Dict[str, Any] = {}
+        try:
+            from app.modules.themoviedb.tmdb_cache import TmdbCache
+            cached = TmdbCache().get(meta) or {}
+            if cached:
+                profile["tmdb_id"] = str(cached.get("id") or "").strip()
+                profile["title"] = str(cached.get("title") or profile["title"]).strip()
+                profile["year"] = str(cached.get("year") or profile["year"]).strip()
+                profile["resolved_mtype"] = str(
+                    self._normalize_profile_mtype(
+                        cached.get("media_type")
+                        or cached.get("type")
+                        or meta.type
+                        or mtype
+                    ) or ""
+                ).strip()
+                profile["source"] = "cache"
+                if profile["title"]:
+                    profile["names"] = self._unique_nonempty([profile["title"]])
+        except Exception as err:
+            logger.debug(f"老电影资源(ldysg)读取 TMDB 缓存失败：{err}")
+
+        try:
+            from app.modules.themoviedb.tmdbapi import TmdbApi
+        except Exception as err:
+            logger.debug(f"老电影资源(ldysg)加载 TmdbApi 失败：{err}")
+            return profile
+
+        api = None
+        try:
+            api = TmdbApi(language=settings.TMDB_LOCALE)
+        except Exception:
+            try:
+                api = TmdbApi()
+            except Exception as err:
+                logger.debug(f"老电影资源(ldysg)初始化 TmdbApi 失败：{err}")
+                return profile
+
+        try:
+            normalized_mtype = self._normalize_profile_mtype(meta.type or mtype)
+            cache_tmdbid = self._to_int(profile["tmdb_id"])
+            detail_mtype = self._normalize_profile_mtype(
+                profile["resolved_mtype"] or normalized_mtype
+            )
+            if cache_tmdbid > 0 and hasattr(api, "get_info"):
+                cached_detail = api.get_info(
+                    mtype=detail_mtype or normalized_mtype,
+                    tmdbid=cache_tmdbid,
+                ) or {}
+                if cached_detail:
+                    tmdb_info = cached_detail
+                    profile["source"] = "cache+detail"
+            if not tmdb_info and hasattr(api, "match"):
+                logger.debug(
+                    f"老电影资源(ldysg)主程序媒体识别：先执行TMDB match，"
+                    f"关键词='{str(meta.name or keyword_text).strip()}'，"
+                    f"类型='{str(normalized_mtype or '').strip() or 'unknown'}'，"
+                    f"年份='{str(getattr(meta, 'year', '') or profile['year']).strip() or ''}'"
+                )
+                matched_tmdb_info = api.match(
+                    name=str(meta.name or keyword_text).strip(),
+                    mtype=normalized_mtype,
+                    year=str(getattr(meta, "year", "") or profile["year"]).strip() or None,
+                ) or {}
+                matched_tmdbid = self._to_int(matched_tmdb_info.get("id"))
+                matched_mtype = self._normalize_profile_mtype(
+                    matched_tmdb_info.get("media_type")
+                    or matched_tmdb_info.get("type")
+                    or normalized_mtype
+                )
+                profile["resolved_mtype"] = str(
+                    matched_mtype or normalized_mtype or ""
+                ).strip()
+                if matched_tmdbid > 0 and hasattr(api, "get_info"):
+                    detailed = api.get_info(
+                        mtype=matched_mtype or normalized_mtype,
+                        tmdbid=matched_tmdbid,
+                    ) or {}
+                    if detailed:
+                        tmdb_info = detailed
+                        profile["source"] = "match+detail"
+                if not tmdb_info and matched_tmdb_info:
+                    tmdb_info = matched_tmdb_info
+                    if matched_tmdbid > 0:
+                        profile["source"] = "match"
+            if tmdb_info:
+                external_ids = tmdb_info.get("external_ids") or {}
+                profile["tmdb_id"] = str(tmdb_info.get("id") or profile["tmdb_id"]).strip()
+                profile["imdb_id"] = self._normalize_imdb_id(external_ids.get("imdb_id"))
+                profile["title"] = str(
+                    tmdb_info.get("title")
+                    or tmdb_info.get("name")
+                    or profile["title"]
+                ).strip()
+                profile["year"] = str(
+                    self._extract_year_token(
+                        tmdb_info.get("release_date")
+                        or tmdb_info.get("first_air_date")
+                        or profile["year"]
+                    ) or profile["year"]
+                ).strip()
+                profile["names"] = self._unique_nonempty(
+                    [profile["title"]]
+                    + list(tmdb_info.get("names") or [])
+                    + [
+                        tmdb_info.get("original_title"),
+                        tmdb_info.get("original_name"),
+                    ]
+                )
+                profile["actors"] = self._extract_tmdb_actor_names(tmdb_info)
+        except Exception as err:
+            logger.debug(f"老电影资源(ldysg)识别主程序媒体信息失败：{err}")
+        finally:
+            try:
+                if api and hasattr(api, "close"):
+                    api.close()
+            except Exception:
+                pass
+
+        return profile
+
+    def _log_moviepilot_media_profile(self, keyword: str, media_profile: Dict[str, Any]) -> None:
+        first_actor = str(((media_profile.get("actors") or [""])[0]) or "").strip()
+        logger.debug(
+            f"老电影资源(ldysg)主程序媒体信息：关键词='{str(keyword or '').strip()}'，"
+            f"来源='{str(media_profile.get('source') or 'none').strip()}'，"
+            f"类型='{str(media_profile.get('resolved_mtype') or '').strip() or 'unknown'}'，"
+            f"tmdb_id={'有' if str(media_profile.get('tmdb_id') or '').strip() else '无'}，"
+            f"imdb_id={'有' if str(media_profile.get('imdb_id') or '').strip() else '无'}，"
+            f"主演={'有' if first_actor else '无'}，"
+            f"第一主演='{first_actor}'"
+        )
 
     def _fetch_video_details_concurrently(
             self,
@@ -1236,3 +1440,57 @@ class LdysgIndexer(_PluginBase):
             if pure == a or pure_no_www == a_no_www:
                 return True
         return False
+
+    @staticmethod
+    def _extract_tmdb_actor_names(tmdb_info: Dict[str, Any]) -> List[str]:
+        results: List[str] = []
+        credits = tmdb_info.get("credits") or {}
+        cast_items = credits.get("cast") or tmdb_info.get("actors") or []
+        for item in cast_items[:12]:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("original_name") or "").strip()
+            else:
+                name = str(item or "").strip()
+            if name:
+                results.append(name)
+        return LdysgIndexer._unique_nonempty(results)
+
+    @staticmethod
+    def _normalize_profile_mtype(mtype: MediaType = None):
+        if not mtype:
+            return None
+        raw = str(mtype).strip().lower()
+        if raw.endswith(".tv") or raw == "tv" or "电视剧" in raw:
+            return MediaType.TV
+        if raw.endswith(".movie") or raw == "movie" or "电影" in raw:
+            return MediaType.MOVIE
+        return mtype
+
+    @staticmethod
+    def _extract_year_token(value: Any) -> str:
+        match = re.search(r"(19|20)\d{2}", str(value or ""))
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _normalize_imdb_id(value: Any) -> str:
+        match = re.search(r"(tt\d{5,})", str(value or "").strip(), re.IGNORECASE)
+        return match.group(1).lower() if match else ""
+
+    @staticmethod
+    def _unique_nonempty(items: List[Any]) -> List[str]:
+        results: List[str] = []
+        seen = set()
+        for item in items or []:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            results.append(text)
+        return results
+
+    @staticmethod
+    def _to_int(value: Any) -> int:
+        try:
+            return int(str(value or "").strip())
+        except Exception:
+            return 0
