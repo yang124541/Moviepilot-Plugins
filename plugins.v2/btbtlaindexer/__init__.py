@@ -23,7 +23,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.1.1"
+    plugin_version = "1.1.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -1031,6 +1031,15 @@ class BtbtlaIndexer(_PluginBase):
             str(download_item.get("area") or "").strip(),
         ]
         description = " | ".join([part for part in description_parts if part])
+        description = self._append_invisible_unique_marker(
+            description=description,
+            seed="|".join([
+                str(tdown_url or "").strip(),
+                str(magnet or "").strip(),
+                str(title or filename or video_title or "").strip(),
+                str(size_text or "").strip(),
+            ])
+        )
         unique_page_url = self._build_unique_result_page_url(
             page_url=tdown_url,
             enclosure=magnet,
@@ -1307,6 +1316,23 @@ class BtbtlaIndexer(_PluginBase):
         ])
         suffix = hashlib.sha1(seed_text.encode("utf-8")).hexdigest()[:12]
         return f"{base}#btbtla-{suffix}"
+
+    @staticmethod
+    def _append_invisible_unique_marker(description: str, seed: str) -> str:
+        """
+        MoviePilot 搜索链路会按 site_name + title + description 去重。
+        这里追加不可见零宽标识，让每条 BT影视结果在不影响界面显示的前提下保持唯一。
+        """
+        base = str(description or "").strip()
+        token = str(seed or "").strip()
+        if not token:
+            return base
+        digest = hashlib.sha1(token.encode("utf-8")).hexdigest()[:10]
+        bits = bin(int(digest, 16))[2:].zfill(len(digest) * 4)
+        marker = "\u2063" + "".join("\u200b" if bit == "0" else "\u200c" for bit in bits)
+        if marker in base:
+            return base
+        return f"{base}{marker}"
 
     @staticmethod
     def _parse_pubdate_text(text: str) -> Optional[datetime]:
