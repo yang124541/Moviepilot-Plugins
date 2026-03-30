@@ -22,7 +22,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -506,9 +506,6 @@ class BtbtlaIndexer(_PluginBase):
 
         try:
             normalized_mtype = self._normalize_profile_mtype(meta.type or mtype)
-            tmdb_id = self._to_int(profile["tmdb_id"])
-            if tmdb_id > 0 and hasattr(api, "get_info"):
-                tmdb_info = api.get_info(mtype=normalized_mtype, tmdbid=tmdb_id) or {}
             if not tmdb_info and hasattr(api, "match"):
                 tmdb_info = api.match(
                     name=str(meta.name or keyword_text).strip(),
