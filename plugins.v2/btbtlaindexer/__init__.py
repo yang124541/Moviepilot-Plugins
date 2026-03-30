@@ -22,7 +22,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -188,6 +188,10 @@ class BtbtlaIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
+        media_profile = self._resolve_moviepilot_media_profile(
+            keyword=keyword,
+            mtype=mtype,
+        )
 
         logger.info(f"BT影视(btbtla)开始搜索：关键词='{keyword}'")
 
@@ -219,7 +223,7 @@ class BtbtlaIndexer(_PluginBase):
                 )
                 return []
 
-            download_items = self._fetch_detail_entries_concurrently(
+            detail_pages = self._fetch_detail_entries_concurrently(
                 base_url=base_url,
                 detail_items=search_items,
                 session_headers=dict(session.headers),
@@ -227,6 +231,13 @@ class BtbtlaIndexer(_PluginBase):
                 timeout=timeout,
                 proxies=proxies,
             )
+            selected_detail_pages = self._select_best_detail_pages(
+                detail_pages=detail_pages,
+                keyword=keyword,
+                mtype=mtype,
+                media_profile=media_profile,
+            )
+            download_items = self._flatten_detail_download_items(selected_detail_pages)
             if not download_items:
                 cost = (datetime.now() - start_at).seconds
                 logger.info(
@@ -274,16 +285,16 @@ class BtbtlaIndexer(_PluginBase):
         if worker_count <= 1:
             results: List[Dict[str, Any]] = []
             for item in detail_items:
-                results.extend(
-                    self._fetch_single_detail_entries(
-                        base_url=base_url,
-                        detail_item=item,
-                        session_headers=session_headers,
-                        session_cookies=session_cookies,
-                        timeout=timeout,
-                        proxies=proxies,
-                    )
+                detail_page = self._fetch_single_detail_entries(
+                    base_url=base_url,
+                    detail_item=item,
+                    session_headers=session_headers,
+                    session_cookies=session_cookies,
+                    timeout=timeout,
+                    proxies=proxies,
                 )
+                if detail_page:
+                    results.append(detail_page)
             return results
 
         logger.debug(
@@ -291,7 +302,7 @@ class BtbtlaIndexer(_PluginBase):
             f"影片数={len(detail_items)}，并发数={worker_count}"
         )
 
-        ordered_entries: Dict[int, List[Dict[str, Any]]] = {}
+        ordered_entries: Dict[int, Dict[str, Any]] = {}
         task_queue = deque((index, item) for index, item in enumerate(detail_items))
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="btbtla-detail") as executor:
             running_tasks: Dict[Any, Tuple[int, Dict[str, Any]]] = {}
@@ -316,18 +327,20 @@ class BtbtlaIndexer(_PluginBase):
                 for future in done:
                     index, item = running_tasks.pop(future)
                     try:
-                        ordered_entries[index] = future.result() or []
+                        ordered_entries[index] = future.result() or {}
                     except Exception as err:
                         title = str((item or {}).get("title") or "").strip()
                         logger.debug(
                             f"BT影视(btbtla)并发抓取详情异常："
                             f"标题='{title}'，错误={err}"
                         )
-                        ordered_entries[index] = []
+                        ordered_entries[index] = {}
 
         results: List[Dict[str, Any]] = []
         for index in range(len(detail_items)):
-            results.extend(ordered_entries.get(index) or [])
+            detail_page = ordered_entries.get(index)
+            if detail_page:
+                results.append(detail_page)
         return results
 
     def _fetch_single_detail_entries(
@@ -337,7 +350,7 @@ class BtbtlaIndexer(_PluginBase):
             session_headers: Dict[str, str],
             session_cookies: Dict[str, str],
             timeout: int,
-            proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+            proxies: Optional[Dict[str, str]]) -> Dict[str, Any]:
         session = self._build_worker_session(
             session_headers=session_headers,
             session_cookies=session_cookies,
@@ -363,10 +376,10 @@ class BtbtlaIndexer(_PluginBase):
             base_url: str,
             detail_item: Dict[str, Any],
             timeout: int,
-            proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+            proxies: Optional[Dict[str, str]]) -> Dict[str, Any]:
         detail_rel = str(detail_item.get("detail_url") or "").strip()
         if not detail_rel:
-            return []
+            return {}
         detail_url = urljoin(base_url, detail_rel)
 
         try:
@@ -378,9 +391,9 @@ class BtbtlaIndexer(_PluginBase):
             )
         except Exception as err:
             logger.debug(f"BT影视(btbtla)获取详情失败：url={detail_url}，错误={err}")
-            return []
+            return {}
         if not resp.ok:
-            return []
+            return {}
 
         html = resp.text
         video_title = self._extract_first_match(
@@ -396,11 +409,10 @@ class BtbtlaIndexer(_PluginBase):
             html,
             r'<div class="video-info-aux[^"]*"[^>]*>.*?<a class="tag-link" href="/">\s*((?:19|20)\d{2})\s*</a>',
         ) or str(detail_item.get("year") or "").strip()
+        aliases = self._extract_detail_aliases(html)
+        actors = self._extract_detail_actors(html)
 
         download_rows = self._parse_download_rows(html)
-        if not download_rows:
-            return []
-
         cat = str(detail_item.get("cat") or "").strip()
         area = str(detail_item.get("area") or "").strip()
         results: List[Dict[str, Any]] = []
@@ -420,7 +432,386 @@ class BtbtlaIndexer(_PluginBase):
                 "size_text": str(row.get("size_text") or "").strip(),
                 "download_count": row.get("download_count") or 0,
             })
+        return {
+            "detail_url": detail_url,
+            "title": video_title,
+            "search_title": str(detail_item.get("title") or "").strip(),
+            "plot": plot,
+            "year": year,
+            "cat": cat,
+            "area": area,
+            "aliases": aliases,
+            "actors": actors,
+            "download_items": results,
+        }
+
+    def _resolve_moviepilot_media_profile(
+            self,
+            keyword: str,
+            mtype: MediaType = None) -> Dict[str, Any]:
+        profile: Dict[str, Any] = {
+            "title": str(keyword or "").strip(),
+            "year": self._extract_year_token(keyword),
+            "tmdb_id": "",
+            "imdb_id": "",
+            "names": [],
+            "actors": [],
+        }
+        keyword_text = str(keyword or "").strip()
+        if not keyword_text:
+            return profile
+
+        try:
+            from app.core.metainfo import MetaInfo
+        except Exception as err:
+            logger.debug(f"BT影视(btbtla)加载主程序 MetaInfo 失败：{err}")
+            return profile
+
+        meta = MetaInfo(title=keyword_text)
+        if not getattr(meta, "name", None):
+            return profile
+        if not getattr(meta, "year", None) and profile["year"]:
+            meta.year = profile["year"]
+        if mtype and not getattr(meta, "type", None):
+            meta.type = mtype
+
+        tmdb_info: Dict[str, Any] = {}
+        try:
+            from app.modules.themoviedb.tmdb_cache import TmdbCache
+            cached = TmdbCache().get(meta) or {}
+            if cached:
+                profile["tmdb_id"] = str(cached.get("id") or "").strip()
+                profile["title"] = str(cached.get("title") or profile["title"]).strip()
+                profile["year"] = str(cached.get("year") or profile["year"]).strip()
+                if profile["title"]:
+                    profile["names"] = self._unique_nonempty([profile["title"]])
+        except Exception as err:
+            logger.debug(f"BT影视(btbtla)读取 TMDB 缓存失败：{err}")
+
+        try:
+            from app.modules.themoviedb.tmdbapi import TmdbApi
+        except Exception as err:
+            logger.debug(f"BT影视(btbtla)加载 TmdbApi 失败：{err}")
+            return profile
+
+        api = None
+        try:
+            api = TmdbApi(language=settings.TMDB_LOCALE)
+        except Exception:
+            try:
+                api = TmdbApi()
+            except Exception as err:
+                logger.debug(f"BT影视(btbtla)初始化 TmdbApi 失败：{err}")
+                return profile
+
+        try:
+            normalized_mtype = self._normalize_profile_mtype(meta.type or mtype)
+            tmdb_id = self._to_int(profile["tmdb_id"])
+            if tmdb_id > 0 and hasattr(api, "get_info"):
+                tmdb_info = api.get_info(mtype=normalized_mtype, tmdbid=tmdb_id) or {}
+            if not tmdb_info and hasattr(api, "match"):
+                tmdb_info = api.match(
+                    name=str(meta.name or keyword_text).strip(),
+                    mtype=normalized_mtype,
+                    year=str(getattr(meta, "year", "") or profile["year"]).strip() or None,
+                ) or {}
+                matched_tmdbid = self._to_int(tmdb_info.get("id"))
+                if matched_tmdbid > 0 and hasattr(api, "get_info"):
+                    detailed = api.get_info(mtype=normalized_mtype, tmdbid=matched_tmdbid) or {}
+                    if detailed:
+                        tmdb_info = detailed
+            if tmdb_info:
+                external_ids = tmdb_info.get("external_ids") or {}
+                profile["tmdb_id"] = str(tmdb_info.get("id") or profile["tmdb_id"]).strip()
+                profile["imdb_id"] = str(external_ids.get("imdb_id") or "").strip()
+                profile["title"] = str(
+                    tmdb_info.get("title")
+                    or tmdb_info.get("name")
+                    or profile["title"]
+                ).strip()
+                profile["year"] = str(
+                    self._extract_year_token(
+                        tmdb_info.get("release_date")
+                        or tmdb_info.get("first_air_date")
+                        or profile["year"]
+                    ) or profile["year"]
+                ).strip()
+                profile["names"] = self._unique_nonempty(
+                    [profile["title"]]
+                    + list(tmdb_info.get("names") or [])
+                    + [
+                        tmdb_info.get("original_title"),
+                        tmdb_info.get("original_name"),
+                    ]
+                )
+                profile["actors"] = self._extract_tmdb_actor_names(tmdb_info)
+        except Exception as err:
+            logger.debug(f"BT影视(btbtla)识别主程序媒体信息失败：{err}")
+        finally:
+            try:
+                if api and hasattr(api, "close"):
+                    api.close()
+            except Exception:
+                pass
+
+        return profile
+
+    def _select_best_detail_pages(
+            self,
+            detail_pages: List[Dict[str, Any]],
+            keyword: str,
+            mtype: MediaType = None,
+            media_profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        if not detail_pages:
+            return []
+        if len(detail_pages) <= 1:
+            return detail_pages
+
+        scored_pages: List[Tuple[int, int, Dict[str, Any]]] = []
+        for index, detail_page in enumerate(detail_pages):
+            scored_pages.append((
+                self._score_detail_page(
+                    detail_page=detail_page,
+                    keyword=keyword,
+                    mtype=mtype,
+                    media_profile=media_profile or {},
+                ),
+                index,
+                detail_page,
+            ))
+        scored_pages.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        if not scored_pages:
+            return []
+
+        top_score = scored_pages[0][0]
+        threshold = top_score
+        if top_score >= 1000:
+            threshold = top_score - 10
+        elif top_score >= 800:
+            threshold = top_score - 30
+        elif top_score >= 500:
+            threshold = top_score - 50
+
+        selected = [item[2] for item in scored_pages if item[0] >= threshold and item[0] > 0]
+        if not selected:
+            selected = [scored_pages[0][2]]
+        selected = selected[:2] if len(selected) > 2 else selected
+
+        logger.debug(
+            f"BT影视(btbtla)详情页预筛选：候选数={len(detail_pages)}，"
+            f"选中数={len(selected)}，最高分={top_score}"
+        )
+        return selected
+
+    @staticmethod
+    def _flatten_detail_download_items(detail_pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        for detail_page in detail_pages or []:
+            items.extend(detail_page.get("download_items") or [])
+        return items
+
+    def _score_detail_page(
+            self,
+            detail_page: Dict[str, Any],
+            keyword: str,
+            mtype: MediaType = None,
+            media_profile: Optional[Dict[str, Any]] = None) -> int:
+        profile = media_profile or {}
+        profile_names = self._unique_nonempty(
+            list(profile.get("names") or [])
+            + [profile.get("title"), keyword]
+        )
+        profile_name_norms = [
+            self._normalize_match_text(name)
+            for name in profile_names
+            if self._normalize_match_text(name)
+        ]
+        page_names = self._detail_page_name_candidates(detail_page)
+        page_name_norms = [
+            self._normalize_match_text(name)
+            for name in page_names
+            if self._normalize_match_text(name)
+        ]
+
+        score = 0
+        if not detail_page.get("download_items"):
+            score -= 120
+
+        for page_name_norm in page_name_norms:
+            for profile_name_norm in profile_name_norms:
+                if not profile_name_norm:
+                    continue
+                if page_name_norm == profile_name_norm:
+                    score = max(score, 1000)
+                elif page_name_norm.startswith(profile_name_norm) or profile_name_norm.startswith(page_name_norm):
+                    score = max(score, 840)
+                elif profile_name_norm in page_name_norm or page_name_norm in profile_name_norm:
+                    score = max(score, 680)
+
+        detail_year = self._extract_year_token(detail_page.get("year"))
+        profile_year = self._extract_year_token(profile.get("year") or keyword)
+        if detail_year and profile_year:
+            if detail_year == profile_year:
+                score += 120
+            else:
+                score -= 180
+
+        actor_score = self._score_actor_match(
+            detail_actors=detail_page.get("actors") or [],
+            profile_actors=profile.get("actors") or [],
+        )
+        score += actor_score
+
+        if self._looks_like_non_target_entry(detail_page=detail_page, keyword=keyword, mtype=mtype):
+            score -= 220
+        return score
+
+    def _score_actor_match(self, detail_actors: List[str], profile_actors: List[str]) -> int:
+        if not detail_actors or not profile_actors:
+            return 0
+        first_actor = str(profile_actors[0] or "").strip()
+        first_actor_norm = self._normalize_match_text(first_actor)
+        if not first_actor_norm:
+            return 0
+        detail_norms = {
+            self._normalize_match_text(name)
+            for name in detail_actors
+            if self._normalize_match_text(name)
+        }
+        if first_actor_norm not in detail_norms:
+            return 0
+        return 220
+
+    def _looks_like_non_target_entry(
+            self,
+            detail_page: Dict[str, Any],
+            keyword: str,
+            mtype: MediaType = None) -> bool:
+        names = " ".join(self._detail_page_name_candidates(detail_page))
+        raw = str(names or "").lower()
+        if not raw:
+            return False
+        keyword_norm = self._normalize_match_text(keyword)
+        names_norm = self._normalize_match_text(names)
+        if keyword_norm and keyword_norm == names_norm:
+            return False
+
+        if any(token in raw for token in ("前传", "外传", "番外", "特别篇", "剧场版", "纪录片")):
+            return True
+        if self._is_movie_media_type(mtype):
+            return self._looks_like_tv_season_text(raw)
+        return False
+
+    def _detail_page_name_candidates(self, detail_page: Dict[str, Any]) -> List[str]:
+        return self._unique_nonempty(
+            [
+                detail_page.get("title"),
+                detail_page.get("search_title"),
+            ] + list(detail_page.get("aliases") or [])
+        )
+
+    @staticmethod
+    def _extract_detail_aliases(html: str) -> List[str]:
+        for label in ("别名：", "别名", "又名：", "又名", "译名：", "译名"):
+            value = BtbtlaIndexer._extract_video_info_value(html=html, label=label)
+            if value:
+                return BtbtlaIndexer._split_info_items(value)
+        return []
+
+    @staticmethod
+    def _extract_detail_actors(html: str) -> List[str]:
+        for label in ("主演：", "主演", "演员：", "演员"):
+            value = BtbtlaIndexer._extract_video_info_value(html=html, label=label)
+            if value:
+                return BtbtlaIndexer._split_info_items(value)
+        return []
+
+    @staticmethod
+    def _extract_video_info_value(html: str, label: str) -> str:
+        pattern = (
+            r'<span class="video-info-itemtitle">\s*%s\s*</span>\s*'
+            r'<div class="video-info-item(?:\s+video-info-content)?[^"]*">\s*(.*?)\s*</div>'
+        ) % re.escape(str(label or "").strip())
+        return BtbtlaIndexer._extract_first_match(html, pattern)
+
+    @staticmethod
+    def _split_info_items(text: str) -> List[str]:
+        raw = BtbtlaIndexer._clean_html_text(text)
+        if not raw:
+            return []
+        parts = re.split(r"[|/／,，、;；]+", raw)
+        return BtbtlaIndexer._unique_nonempty(parts)
+
+    @staticmethod
+    def _extract_tmdb_actor_names(tmdb_info: Dict[str, Any]) -> List[str]:
+        results: List[str] = []
+        credits = tmdb_info.get("credits") or {}
+        cast_items = credits.get("cast") or tmdb_info.get("actors") or []
+        for item in cast_items[:12]:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("original_name") or "").strip()
+            else:
+                name = str(item or "").strip()
+            if name:
+                results.append(name)
+        return BtbtlaIndexer._unique_nonempty(results)
+
+    @staticmethod
+    def _normalize_profile_mtype(mtype: MediaType = None):
+        if not mtype:
+            return None
+        raw = str(mtype).strip().lower()
+        if raw.endswith(".tv") or raw == "tv" or "电视剧" in raw:
+            return MediaType.TV
+        if raw.endswith(".movie") or raw == "movie" or "电影" in raw:
+            return MediaType.MOVIE
+        return mtype
+
+    @staticmethod
+    def _normalize_match_text(text: Any) -> str:
+        raw = str(text or "").strip().lower()
+        if not raw:
+            return ""
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", raw)
+
+    @staticmethod
+    def _extract_year_token(value: Any) -> str:
+        match = re.search(r"(19|20)\d{2}", str(value or ""))
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _unique_nonempty(items: List[Any]) -> List[str]:
+        results: List[str] = []
+        seen = set()
+        for item in items or []:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            results.append(text)
         return results
+
+    @staticmethod
+    def _looks_like_tv_season_text(text: str) -> bool:
+        raw = str(text or "").lower()
+        if not raw:
+            return False
+        return bool(
+            re.search(r"第[一二三四五六七八九十百\d]+季", raw)
+            or re.search(r"\bs\d{1,2}\b", raw)
+            or re.search(r"\bseason\s*\d{1,2}\b", raw)
+            or re.search(r"\bpart\s*\d{1,2}\b", raw)
+            or ("第二季" in raw)
+            or ("第三季" in raw)
+            or ("第四季" in raw)
+        )
+
+    @staticmethod
+    def _is_movie_media_type(mtype: MediaType = None) -> bool:
+        if not mtype:
+            return False
+        raw = str(mtype).strip().lower()
+        return raw.endswith(".movie") or raw == "movie" or "电影" in raw
 
     def _fetch_download_pages_concurrently(
             self,
