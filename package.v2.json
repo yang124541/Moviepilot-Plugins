@@ -4,7 +4,7 @@
     "description": "为 MoviePilot 增加 dyg55.com 电影港 BT 种子搜索支持，支持可配置域名与并发抓取。",
     "labels": "站点,索引",
     "version": "1.0.0",
-    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.ico",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png",
     "author": "yang124541",
     "level": 2,
     "history": {

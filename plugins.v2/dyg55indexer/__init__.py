@@ -22,7 +22,7 @@ from app.schemas.types import MediaType
 class Dyg55Indexer(_PluginBase):
     plugin_name = "电影港（dyg55）"
     plugin_desc = "为 dyg55.com 提供电影港 BT 种子搜索支持。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.ico"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png"
     plugin_version = "1.0.0"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
@@ -182,7 +182,11 @@ class Dyg55Indexer(_PluginBase):
                 proxies=proxies,
             )
             if not search_items:
-                logger.info(f"电影港(dyg55)搜索无结果：关键词='{keyword}'")
+                cost = (datetime.now() - start_at).seconds
+                logger.info(
+                    f"电影港(dyg55)搜索完成：关键词='{keyword}'，"
+                    f"找到视频=0，返回磁力=0，耗时={cost}s"
+                )
                 return []
 
             results = self._fetch_details_concurrently(
@@ -197,7 +201,7 @@ class Dyg55Indexer(_PluginBase):
             cost = (datetime.now() - start_at).seconds
             logger.info(
                 f"电影港(dyg55)搜索完成：关键词='{keyword}'，"
-                f"找到条目={len(search_items)}，返回种子={len(results)}，耗时={cost}s"
+                f"找到视频={len(search_items)}，返回磁力={len(results)}，耗时={cost}s"
             )
             return results
         except Exception as err:
