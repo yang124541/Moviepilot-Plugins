@@ -23,7 +23,7 @@ class Dyg55Indexer(_PluginBase):
     plugin_name = "电影港（dyg55）"
     plugin_desc = "为 dyg55.com 提供电影港 BT 种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png?v=1.0.4"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "dyg55indexer_"
@@ -364,6 +364,12 @@ class Dyg55Indexer(_PluginBase):
                 str(detail_meta.get("upload_date") or item.get("date_text") or "")
             )
             description = self._build_description(item=item, detail_meta=detail_meta)
+            unique_page_url = self._build_unique_result_page_url(
+                detail_url=detail_url,
+                enclosure=enclosure,
+                result_title=title,
+                size_bytes=size_bytes,
+            )
 
             return [TorrentInfo(
                 site=site.get("id"),
@@ -376,7 +382,7 @@ class Dyg55Indexer(_PluginBase):
                 title=title,
                 description=description,
                 enclosure=enclosure,
-                page_url=detail_url,
+                page_url=unique_page_url,
                 size=size_bytes,
                 seeders=0,
                 peers=0,
@@ -761,6 +767,29 @@ class Dyg55Indexer(_PluginBase):
                     if isinstance(file_length, int) and file_length > 0:
                         total += file_length
         return total
+
+    @staticmethod
+    def _build_unique_result_page_url(
+            detail_url: str,
+            enclosure: str,
+            result_title: str = "",
+            size_bytes: int = 0) -> str:
+        """
+        MoviePilot 卡片视图使用 torrent_info.page_url 作为 Vue key。
+        电影港同一详情页可能返回多条资源，若共用同一个详情页 URL，切页返回时容易触发前端 key 复用异常。
+        这里追加仅前端可见的 fragment，保证每条结果 key 稳定且唯一。
+        """
+        base = str(detail_url or "").strip()
+        if not base:
+            return ""
+        seed_text = "|".join([
+            base,
+            str(enclosure or "").strip(),
+            str(result_title or "").strip(),
+            str(size_bytes or 0),
+        ])
+        suffix = hashlib.sha1(seed_text.encode("utf-8")).hexdigest()[:12]
+        return f"{base}#dyg55-{suffix}"
 
     @staticmethod
     def _bdecode_with_info_range(data: bytes) -> Tuple[Any, int, int]:

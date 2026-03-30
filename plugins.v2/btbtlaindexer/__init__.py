@@ -1,3 +1,4 @@
+import hashlib
 import re
 import random
 from collections import deque
@@ -22,7 +23,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.0.10"
+    plugin_version = "1.0.11"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -1030,6 +1031,12 @@ class BtbtlaIndexer(_PluginBase):
             str(download_item.get("area") or "").strip(),
         ]
         description = " | ".join([part for part in description_parts if part])
+        unique_page_url = self._build_unique_result_page_url(
+            page_url=tdown_url,
+            enclosure=magnet,
+            result_title=title or filename or video_title,
+            size_text=size_text,
+        )
         return TorrentInfo(
             site=site.get("id"),
             site_name=site.get("name"),
@@ -1041,7 +1048,7 @@ class BtbtlaIndexer(_PluginBase):
             title=title or filename or video_title,
             description=description,
             enclosure=magnet,
-            page_url=tdown_url,
+            page_url=unique_page_url,
             size=self._parse_size_bytes(size_text, filename),
             seeders=0,
             peers=0,
@@ -1277,6 +1284,29 @@ class BtbtlaIndexer(_PluginBase):
         if year and re.match(r"^(19|20)\d{2}$", year) and not re.search(r"(19|20)\d{2}", value):
             value = f"{value} {year}".strip()
         return value
+
+    @staticmethod
+    def _build_unique_result_page_url(
+            page_url: str,
+            enclosure: str,
+            result_title: str = "",
+            size_text: str = "") -> str:
+        """
+        MoviePilot 卡片视图使用 torrent_info.page_url 作为 Vue key。
+        BT影视结果切页返回时若复用相同或不稳定的 page_url，前端容易出现结果复用异常。
+        这里追加仅前端可见的 fragment，保持原链接可打开的同时，让每条结果 key 稳定且唯一。
+        """
+        base = str(page_url or "").strip()
+        if not base:
+            return ""
+        seed_text = "|".join([
+            base,
+            str(enclosure or "").strip(),
+            str(result_title or "").strip(),
+            str(size_text or "").strip(),
+        ])
+        suffix = hashlib.sha1(seed_text.encode("utf-8")).hexdigest()[:12]
+        return f"{base}#btbtla-{suffix}"
 
     @staticmethod
     def _parse_pubdate_text(text: str) -> Optional[datetime]:
