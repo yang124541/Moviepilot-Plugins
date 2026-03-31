@@ -35,7 +35,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.6"
+    plugin_version = "2.3.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -78,6 +78,14 @@ class XunleiHijackDownloader(_PluginBase):
     _task_list_cache_ttl_ui_seconds = 1.0
     _ui_last_active_ts = 0.0
     _ui_keepalive_seconds = 20.0
+    _visible_runtime_log_tokens = (
+        "种子任务开始",
+        "种子任务暂停",
+        "种子任务删除",
+        "种子任务开始/重试",
+        "自动搬移开始",
+        "自动搬移结束",
+    )
     _movie_default_resolution_tag = "1080p"
     _movie_move_protect_suffix = ".mpmoving"
     _movie_video_suffixes: Set[str] = {
@@ -119,13 +127,37 @@ class XunleiHijackDownloader(_PluginBase):
         if self._enabled and (self._move_enabled or self._source_download_dir):
             self._start_move_scheduler()
         self._save_config()
-        logger.info(
+        self._log_info(
             f"迅雷接管[v{self.plugin_version}]初始化完成："
             f"启用={self._enabled}，地址={self._base_url}，电影重命名=ON，自动搬运={self._move_enabled}"
         )
 
     def get_state(self) -> bool:
         return self._enabled
+
+    def _should_emit_runtime_log(self, message: str) -> bool:
+        text = str(message or "").strip()
+        if not text:
+            return False
+        return any(token in text for token in self._visible_runtime_log_tokens)
+
+    def _log_info(self, message: str) -> None:
+        text = str(message or "").strip()
+        if not text:
+            return
+        if self._should_emit_runtime_log(text):
+            logger.info(text)
+        else:
+            logger.debug(text)
+
+    def _log_warn(self, message: str) -> None:
+        text = str(message or "").strip()
+        if not text:
+            return
+        if self._should_emit_runtime_log(text):
+            logger.warning(text)
+        else:
+            logger.debug(text)
 
     def _touch_ui_active(self) -> None:
         self._ui_last_active_ts = time.time()
@@ -488,7 +520,7 @@ class XunleiHijackDownloader(_PluginBase):
                 })
             return {"success": True, "items": items}
         except Exception as err:
-            logger.warn(f"迅雷任务指标接口失败：{err}")
+            self._log_warn(f"迅雷任务指标接口失败：{err}")
             return {"success": False, "items": []}
 
     def _api_task_action(self, task_id: str, action: str, delete_file: bool = True, space: str = "", task_type: str = "") -> schemas.Response:
@@ -499,7 +531,7 @@ class XunleiHijackDownloader(_PluginBase):
                 return schemas.Response(success=False, message="任务ID不能为空。")
             self._last_request_error = ""
             self._touch_ui_active()
-            logger.info(
+            self._log_info(
                 f"收到任务控制请求[v{self.plugin_version}]：action={action}，task_id={task_key}，"
                 f"space={space or 'EMPTY'}，type={task_type or 'EMPTY'}"
             )
@@ -521,6 +553,11 @@ class XunleiHijackDownloader(_PluginBase):
             if ok and action == "delete":
                 self._remember_moved_key(task_key)
             if ok:
+                action_log_name = {"start": "开始/重试", "pause": "暂停", "delete": "删除"}.get(action, action)
+                self._log_info(
+                    f"种子任务{action_log_name}：task_id={task_key}，"
+                    f"space={space or 'EMPTY'}，type={task_type or 'EMPTY'}"
+                )
                 self._task_list_cache = {}
                 return schemas.Response(success=True, message=f"{action_name}任务成功。")
 
@@ -1062,13 +1099,13 @@ class XunleiHijackDownloader(_PluginBase):
         magnet = self._normalize_magnet(content)
         if not magnet:
             if self._fallback_to_builtin:
-                logger.warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：不支持当前下载内容类型，未解析出磁力链接。")
+                self._log_warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：不支持当前下载内容类型，未解析出磁力链接。")
                 return None
             return "xunlei", None, None, "迅雷接管失败：仅支持磁力链接。"
         task_id, err = self._add_task(magnet)
         if not task_id:
             if self._fallback_to_builtin:
-                logger.warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：{err or '迅雷添加任务失败'}")
+                self._log_warn(f"迅雷接管[v{self.plugin_version}]回退内建下载器：{err or '迅雷添加任务失败'}")
                 return None
             return "xunlei", None, None, err or "迅雷添加任务失败。"
         return "xunlei", task_id, "NoSubfolder", "添加下载成功"
@@ -1252,7 +1289,7 @@ class XunleiHijackDownloader(_PluginBase):
         try:
             self.save_data("moved_task_keys", list(self._moved_task_order))
         except Exception as err:
-            logger.warn(f"保存已搬运任务键失败：{err}")
+            self._log_warn(f"保存已搬运任务键失败：{err}")
 
     def _load_completed_seen_cache(self) -> None:
         self._completed_seen_at = {}
@@ -1315,7 +1352,7 @@ class XunleiHijackDownloader(_PluginBase):
                 })
             self.save_data("completed_seen_cache", items)
         except Exception as err:
-            logger.warn(f"保存已完成缓存失败：{err}")
+            self._log_warn(f"保存已完成缓存失败：{err}")
 
     def _remember_completed_seen(self, move_key: str, now_ts: float, task_name: str = "") -> float:
         token = str(move_key or "").strip()
@@ -1454,7 +1491,7 @@ class XunleiHijackDownloader(_PluginBase):
             replace_existing=True
         )
         self._scheduler.start()
-        logger.info(
+        self._log_info(
             f"迅雷重命名/搬运调度已启动：间隔={self._move_interval_minutes}分钟，"
             f"源目录={self._source_download_dir}，目标目录={self._target_watch_dir}，自动搬运={self._move_enabled}"
         )
@@ -1537,7 +1574,7 @@ class XunleiHijackDownloader(_PluginBase):
         if resp is None:
             if not self._last_request_error:
                 self._last_request_error = "unknown-request-error"
-            logger.warn(
+            self._log_warn(
                 f"迅雷请求失败[v{self.plugin_version}]：{method.upper()} {url} -> {self._last_request_error}"
             )
         elif not resp.ok:
@@ -1563,7 +1600,7 @@ class XunleiHijackDownloader(_PluginBase):
             if token:
                 return str(token).strip()
         except Exception as err:
-            logger.warn(f"获取 pan_auth 失败：{err}")
+            self._log_warn(f"获取 pan_auth 失败：{err}")
         return None
 
     def _fetch_device_id(self, force_refresh: bool = False, exclude_device: str = "") -> Optional[str]:
@@ -1603,7 +1640,7 @@ class XunleiHijackDownloader(_PluginBase):
                     token = str(params.get("target") or task.get("target") or "").strip()
                     self._append_device_candidate(candidates, token)
         except Exception as err:
-            logger.warn(f"获取 device_id 失败[v{self.plugin_version}]：{err}")
+            self._log_warn(f"获取 device_id 失败[v{self.plugin_version}]：{err}")
 
         for endpoint in (
             "/webman/3rdparty/pan-xunlei-com/index.cgi/drive/v1/devices",
@@ -1704,17 +1741,17 @@ class XunleiHijackDownloader(_PluginBase):
             def _resolve_fail(resp: Optional[requests.Response], data: Any, device_id: str) -> Tuple[Optional[str], bool]:
                 merged = self._merge_error_texts(data)
                 if "task_create_count_limit" in merged or "任务创建次数达到上限" in merged:
-                    logger.warn(
+                    self._log_warn(
                         f"添加任务触发次数限制[v{self.plugin_version}]：device={device_id}，{self._last_request_error}"
                     )
                     return "迅雷任务创建失败：任务创建次数达到上限，请稍后重试。", False
                 if "space_name_invalid" in merged:
-                    logger.warn(
+                    self._log_warn(
                         f"添加任务空间无效[v{self.plugin_version}]：device={device_id}，{self._last_request_error}"
                     )
                     return "迅雷任务创建失败：device_id 对应空间无效，请重新抓取参数。", False
                 if "device_space_not_active" in merged:
-                    logger.warn(
+                    self._log_warn(
                         f"添加任务空间未激活[v{self.plugin_version}]：device={device_id}，{self._last_request_error}"
                     )
                     return None, True
@@ -1745,7 +1782,7 @@ class XunleiHijackDownloader(_PluginBase):
 
             self._device_id = refresh_device
             self._save_config()
-            logger.info(
+            self._log_info(
                 f"提交任务刷新 device_id[v{self.plugin_version}]：{first_device or 'EMPTY'} -> {refresh_device}"
             )
             resp2, data2 = _submit_once(refresh_device)
@@ -1791,29 +1828,29 @@ class XunleiHijackDownloader(_PluginBase):
             result["total_size"] = total_size
             result["total_count"] = len(files)
         except Exception as err:
-            logger.warn(f"解析磁力文件列表失败：{err}")
+            self._log_warn(f"解析磁力文件列表失败：{err}")
         return result
 
     def _move_completed_downloads(self):
         if not self._enabled:
             return
         if not self._source_download_dir:
-            logger.warn(
+            self._log_warn(
                 f"跳过重命名/搬运：源目录未配置，"
                 f"源={self._source_download_dir or 'EMPTY'}"
             )
             return
         move_allowed = bool(self._move_enabled and str(self._target_watch_dir or "").strip())
         if self._move_enabled and not move_allowed:
-            logger.warn("自动搬运已启用但目标目录为空：本轮仅执行电影重命名，不执行搬运。")
+            self._log_warn("自动搬运已启用但目标目录为空：本轮仅执行电影重命名，不执行搬运。")
         if not self._move_lock.acquire(blocking=False):
-            logger.info("跳过重命名/搬运：上一轮任务仍在执行。")
+            self._log_info("跳过重命名/搬运：上一轮任务仍在执行。")
             return
         try:
             source_root = Path(self._source_download_dir)
             target_root = Path(self._target_watch_dir) if move_allowed else None
             if not source_root.exists() or not source_root.is_dir():
-                logger.warn(
+                self._log_warn(
                     f"跳过重命名/搬运：源目录无效，"
                     f"源={source_root}，exists={source_root.exists()}，is_dir={source_root.is_dir()}"
                 )
@@ -1850,7 +1887,11 @@ class XunleiHijackDownloader(_PluginBase):
                 nonlocal cache_dirty
                 src = self._resolve_source_path(source_root, task_name)
                 if not src or not src.exists():
-                    src = self._resolve_movie_renamed_source_path(source_root=source_root, task_id=task_id)
+                    src = self._resolve_movie_renamed_source_path(
+                        source_root=source_root,
+                        task_id=task_id,
+                        task_name=task_name,
+                    )
                 if not src or not src.exists():
                     src = self._resolve_source_path_fallback(source_root, task_name)
                 if not src or not src.exists():
@@ -1899,6 +1940,7 @@ class XunleiHijackDownloader(_PluginBase):
                             f"{task_tag} 跳过：目标目录解析失败，task_id={task_id}"
                         )
                         return
+                    self._log_info(f"自动搬移开始：{src} -> {dst}")
                     shutil.move(str(src), str(dst))
                     dst = self._restore_movie_path_after_move(dst=dst, task_id=task_id, task_name=task_name)
                     self._remember_moved_key(move_key)
@@ -1908,25 +1950,25 @@ class XunleiHijackDownloader(_PluginBase):
                         self._remember_moved_key(task_id)
                     stats["moved"] += 1
                     if from_cache:
-                        logger.info(f"自动搬运成功(缓存)：{src} -> {dst}")
+                        self._log_info(f"自动搬移结束(缓存)：{src} -> {dst}")
                     else:
-                        logger.info(f"自动搬运成功：{src} -> {dst}")
+                        self._log_info(f"自动搬移结束：{src} -> {dst}")
                 except Exception as move_err:
                     if move_allowed:
                         stats["move_failed"] += 1
-                        logger.warn(
+                        self._log_warn(
                             f"单任务搬运失败：key={move_key}，"
                             f"name={task_name}，err={move_err}"
                         )
                     else:
                         stats["rename_failed"] += 1
-                        logger.warn(
+                        self._log_warn(
                             f"单任务重命名失败：key={move_key}，"
                             f"name={task_name}，err={move_err}"
                         )
 
             if not tasks:
-                logger.info(
+                self._log_info(
                     f"自动重命名/搬运扫描：当前无任务，源={source_root}，"
                     f"目标={target_root or 'DISABLED'}，自动搬运={move_allowed}，缓存已完成数={cached_total}"
                 )
@@ -2023,7 +2065,7 @@ class XunleiHijackDownloader(_PluginBase):
                     )
             if cache_dirty:
                 self._save_completed_seen_cache()
-            logger.info(
+            self._log_info(
                 f"自动重命名/搬运扫描汇总：源={source_root}，目标={target_root or 'DISABLED'}，自动搬运={move_allowed}，"
                 f"总任务={len(tasks)}，缓存已完成={cached_total}，重命名成功={stats['renamed']}，成功搬运={stats['moved']}，"
                 f"未完成跳过={stats['skip_not_completed']}，"
@@ -2036,7 +2078,7 @@ class XunleiHijackDownloader(_PluginBase):
                 f"重命名失败={stats['rename_failed']}，搬运失败={stats['move_failed']}"
             )
             if samples:
-                logger.info("自动重命名/搬运扫描样本： " + " | ".join(samples))
+                self._log_info("自动重命名/搬运扫描样本： " + " | ".join(samples))
         except Exception as err:
             logger.error(f"自动重命名/搬运任务执行失败：{err}")
         finally:
@@ -2094,7 +2136,7 @@ class XunleiHijackDownloader(_PluginBase):
             if device_id:
                 spaces.append(device_id)
             else:
-                logger.info(
+                self._log_info(
                     f"跳过任务请求[v{self.plugin_version}]：未获取到 device_id，不再使用 EMPTY 空间探测。"
                 )
                 self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": []}
@@ -2185,12 +2227,12 @@ class XunleiHijackDownloader(_PluginBase):
                             new_space = str(self._device_id or "").strip()
                             if new_space and new_space not in spaces:
                                 spaces.append(new_space)
-                        logger.info(
+                        self._log_info(
                             f"检测到空间未激活，停止该空间后续请求："
                             f"space={space or 'EMPTY'}，probe={probe_name}，{last_err}"
                         )
                         continue
-                    logger.warn(
+                    self._log_warn(
                         f"拉取任务失败[v{self.plugin_version}]："
                         f"space={space or 'EMPTY'}，probe={probe_name}，{last_err}"
                     )
@@ -2224,23 +2266,23 @@ class XunleiHijackDownloader(_PluginBase):
             if merged_tasks:
                 merged_list = list(merged_tasks.values())
                 self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": merged_list}
-                logger.info(
+                self._log_info(
                     f"任务合并结果[v{self.plugin_version}]："
                     f"总数={len(merged_tasks)}，命中探针={'; '.join(probe_stats[:8])}"
                 )
                 return merged_list
             if last_err:
-                logger.info(
+                self._log_info(
                     f"任务列表为空（已遍历全部空间）[v{self.plugin_version}]："
                     f"device_id={device_id or 'EMPTY'}，最后错误={last_err}"
                 )
             else:
-                logger.info(
+                self._log_info(
                     f"任务列表为空[v{self.plugin_version}]：device_id={device_id or 'EMPTY'}"
                 )
             self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": []}
         except Exception as err:
-            logger.warn(f"拉取任务列表异常[v{self.plugin_version}]：{err}")
+            self._log_warn(f"拉取任务列表异常[v{self.plugin_version}]：{err}")
             self._task_list_cache[cache_key] = {"ts": now_ts, "tasks": []}
         return []
 
@@ -3456,13 +3498,18 @@ class XunleiHijackDownloader(_PluginBase):
         candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
         return candidates[0][2]
 
-    def _resolve_movie_renamed_source_path(self, source_root: Path, task_id: str) -> Optional[Path]:
+    def _resolve_movie_renamed_source_path(
+        self,
+        source_root: Path,
+        task_id: str,
+        task_name: str = "",
+    ) -> Optional[Path]:
         if not source_root.exists() or not source_root.is_dir():
             return None
         token = str(task_id or "").strip()
-        if not token or token == "-":
+        if not token and not str(task_name or "").strip():
             return None
-        meta = self._resolve_movie_rename_meta(task_id=token)
+        meta = self._resolve_movie_rename_meta(task_id=token, task_name=task_name)
         if not bool(meta.get("is_movie")):
             return None
         movie_name = self._build_movie_scrape_name(
@@ -3573,12 +3620,12 @@ class XunleiHijackDownloader(_PluginBase):
         old_device = str(self._device_id or "").strip()
         new_device = self._fetch_device_id(force_refresh=True, exclude_device=old_device)
         if new_device:
-            logger.warn(
+            self._log_warn(
                 f"检测到 device_space 未激活[v{self.plugin_version}]，"
                 f"已刷新 device_id：{old_device or 'EMPTY'} -> {new_device}"
             )
             return True
-        logger.warn(
+        self._log_warn(
             f"检测到 device_space 未激活[v{self.plugin_version}]，"
             f"但刷新 device_id 失败。"
         )
@@ -3695,19 +3742,19 @@ class XunleiHijackDownloader(_PluginBase):
             if history_dir:
                 base_dir = history_dir
             elif target_root:
-                logger.warn(
+                self._log_warn(
                     f"按 MoviePilot 规则无法解析目标目录，回退插件目标目录："
                     f"task_id={task_id or '-'}，task_name={task_name or '-'}，target={target_root}"
                 )
                 base_dir = target_root
             else:
-                logger.warn(
+                self._log_warn(
                     f"跳过搬运：按 MoviePilot 规则无法解析目标目录，"
                     f"task_id={task_id or '-'}，task_name={task_name or '-'}"
                 )
                 return None
         except Exception as err:
-            logger.warn(f"构建搬运目标路径失败：task={task_name}，err={err}")
+            self._log_warn(f"构建搬运目标路径失败：task={task_name}，err={err}")
             return None
         base_dir.mkdir(parents=True, exist_ok=True)
         return self._dedupe_target(base_dir / src.name)
@@ -3733,7 +3780,7 @@ class XunleiHijackDownloader(_PluginBase):
         try:
             history = self._match_download_history_by_task_name(history_oper=history_oper, task_name=task_label)
             if history:
-                logger.info(
+                self._log_info(
                     f"按任务名回查下载历史成功：task_id={token or '-'}，task_name={task_label}，"
                     f"history_hash={self._history_text_attr(history, ('download_hash',)) or '-'}"
                 )
@@ -3877,7 +3924,7 @@ class XunleiHijackDownloader(_PluginBase):
         protect_for_move: bool = False,
     ) -> Path:
         token = str(task_id or "").strip()
-        if not token or token == "-" or not src or not src.exists():
+        if not src or not src.exists():
             return src
         meta = self._resolve_movie_rename_meta(task_id=token, task_name=task_name)
         if not bool(meta.get("is_movie")):
@@ -3888,14 +3935,14 @@ class XunleiHijackDownloader(_PluginBase):
         )
         resolution = str(meta.get("resolution") or "").strip()
         if not movie_name:
-            logger.warn(f"movie rename skipped: missing title, task_id={token}, task_name={task_name or '-'}")
+            self._log_warn(f"movie rename skipped: missing title, task_id={token}, task_name={task_name or '-'}")
             return src
         try:
             if src.is_file():
                 return self._rename_movie_file(
                     src=src,
                     movie_name=movie_name,
-                    task_id=token,
+                    task_id=token or "-",
                     resolution=resolution,
                     protect_for_move=protect_for_move,
                 )
@@ -3903,12 +3950,12 @@ class XunleiHijackDownloader(_PluginBase):
                 return self._rename_movie_dir(
                     src_dir=src,
                     movie_name=movie_name,
-                    task_id=token,
+                    task_id=token or "-",
                     resolution=resolution,
                     protect_for_move=protect_for_move,
                 )
         except Exception as err:
-            logger.warn(f"movie rename failed: task_id={token}, task_name={task_name or '-'}, err={err}")
+            self._log_warn(f"movie rename failed: task_id={token or '-'}, task_name={task_name or '-'}, err={err}")
         return src
 
     def _rename_movie_file(
@@ -4079,10 +4126,10 @@ class XunleiHijackDownloader(_PluginBase):
             target = self._dedupe_target(target)
         try:
             src.rename(target)
-            logger.info(f"movie rename: {rename_kind}, task_id={task_id}, {src.name} -> {target.name}")
+            self._log_info(f"movie rename: {rename_kind}, task_id={task_id}, {src.name} -> {target.name}")
             return target
         except Exception as err:
-            logger.warn(
+            self._log_warn(
                 f"movie rename failed: {rename_kind}, task_id={task_id}, src={src.name}, "
                 f"target={target.name}, err={err}"
             )
@@ -4141,13 +4188,13 @@ class XunleiHijackDownloader(_PluginBase):
                 if renamed != item:
                     restored += 1
             if restored > 0:
-                logger.info(
+                self._log_info(
                     f"movie rename restored after move: task_id={task_id}, task_name={task_name or '-'}, "
                     f"path={dst.name}, restored_files={restored}"
                 )
             return dst
         except Exception as err:
-            logger.warn(
+            self._log_warn(
                 f"movie rename restore failed after move: task_id={task_id}, "
                 f"task_name={task_name or '-'}, path={dst.name}, err={err}"
             )
