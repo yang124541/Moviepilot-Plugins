@@ -4,6 +4,7 @@ import shutil
 import threading
 import time
 import hashlib
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,7 +35,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.4"
+    plugin_version = "2.3.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -491,42 +492,54 @@ class XunleiHijackDownloader(_PluginBase):
             return {"success": False, "items": []}
 
     def _api_task_action(self, task_id: str, action: str, delete_file: bool = True, space: str = "", task_type: str = "") -> schemas.Response:
-        task_key = str(task_id or "").strip()
-        if not task_key:
-            return schemas.Response(success=False, message="任务ID不能为空。")
-        self._touch_ui_active()
-        logger.info(
-            f"收到任务控制请求[v{self.plugin_version}]：action={action}，task_id={task_key}，"
-            f"space={space or 'EMPTY'}，type={task_type or 'EMPTY'}"
-        )
-        if action != "delete" and f"id:{task_key}" in self._moved_task_keys:
-            return schemas.Response(success=False, message="任务已迁移，无法继续操作。")
-        action_candidates: List[str] = [action]
-
-        ok = False
-        for act in action_candidates:
-            ok = self._operate_tasks(
-                ids={task_key},
-                action=act,
-                delete_file=bool(delete_file),
-                preferred_space=space,
-                preferred_type=task_type,
-            )
-            if ok:
-                break
-        if ok and action == "delete":
-            self._remember_moved_key(task_key)
-        if ok:
-            self._task_list_cache = {}
         action_name = {"start": "开始", "pause": "暂停", "delete": "删除"}.get(action, action)
-        if ok:
-            return schemas.Response(success=True, message=f"{action_name}任务成功。")
-        detail = str(self._last_request_error or "").strip()
-        if detail:
+        task_key = str(task_id or "").strip()
+        try:
+            if not task_key:
+                return schemas.Response(success=False, message="任务ID不能为空。")
+            self._last_request_error = ""
+            self._touch_ui_active()
+            logger.info(
+                f"收到任务控制请求[v{self.plugin_version}]：action={action}，task_id={task_key}，"
+                f"space={space or 'EMPTY'}，type={task_type or 'EMPTY'}"
+            )
+            if action != "delete" and f"id:{task_key}" in self._moved_task_keys:
+                return schemas.Response(success=False, message="任务已迁移，无法继续操作。")
+            action_candidates: List[str] = [action]
+
+            ok = False
+            for act in action_candidates:
+                ok = self._operate_tasks(
+                    ids={task_key},
+                    action=act,
+                    delete_file=bool(delete_file),
+                    preferred_space=space,
+                    preferred_type=task_type,
+                )
+                if ok:
+                    break
+            if ok and action == "delete":
+                self._remember_moved_key(task_key)
+            if ok:
+                self._task_list_cache = {}
+                return schemas.Response(success=True, message=f"{action_name}任务成功。")
+
+            detail = str(self._last_request_error or "").strip()
+            if detail:
+                if len(detail) > 180:
+                    detail = detail[:180] + "..."
+                return schemas.Response(success=False, message=f"{action_name}任务失败：{detail}")
+            return schemas.Response(success=False, message=f"{action_name}任务失败，请检查迅雷连接与认证。")
+        except Exception as err:
+            detail = f"{type(err).__name__}: {err}"
+            self._last_request_error = detail
+            logger.error(
+                f"任务控制接口异常[v{self.plugin_version}]：action={action}，task_id={task_key or 'EMPTY'}，"
+                f"space={space or 'EMPTY'}，type={task_type or 'EMPTY'}，error={detail}\n{traceback.format_exc()}"
+            )
             if len(detail) > 180:
                 detail = detail[:180] + "..."
             return schemas.Response(success=False, message=f"{action_name}任务失败：{detail}")
-        return schemas.Response(success=False, message=f"{action_name}任务失败，请检查迅雷连接与认证。")
 
     def _build_task_row(self, task: Dict[str, Any]) -> Dict[str, Any]:
         plugin_id = self.__class__.__name__
@@ -856,14 +869,27 @@ class XunleiHijackDownloader(_PluginBase):
             "node.style.pointerEvents='none';"
             "try{"
             "const r=await fetch(api,{method:'GET',credentials:'same-origin',cache:'no-store'});"
-            "const j=await r.json().catch(()=>null);"
+            "const rawText=await r.text().catch(()=>'');"
+            "let j=null;"
+            "try{j=rawText?JSON.parse(rawText):null;}catch(_e){}"
             "const ok=(r.ok&&(!j||j.success!==false));"
-            "if(!ok){alert((j&&j.message)?j.message:failMsg);return;}"
+            "if(!ok){"
+            "const respMsg=(j&&j.message)?String(j.message):'';"
+            "let rawMsg='';"
+            "if(!respMsg&&rawText){"
+            "rawMsg=String(rawText).replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim();"
+            "if(rawMsg.length>220){rawMsg=rawMsg.slice(0,220)+'...';}"
+            "}"
+            "const statusMsg=('HTTP '+String(r.status||0)+(r.statusText?(' '+r.statusText):''));"
+            "const finalMsg=respMsg||((rawMsg&&rawMsg!==failMsg)?(failMsg+'\\n'+statusMsg+'\\n'+rawMsg):((r.status&&r.status!==200)?(failMsg+'\\n'+statusMsg):failMsg));"
+            "alert(finalMsg);"
+            "return;"
+            "}"
             "if(isDelete&&rowKey){"
             "const row=document.getElementById('xunlei-task-row-'+rowKey);"
             "if(row){try{row.remove();}catch(_e){try{if(row.parentNode){row.parentNode.removeChild(row);}}catch(__e){}}}"
             "}"
-            "}catch(e){alert('请求失败，请检查网络或权限');}"
+            "}catch(e){alert('请求失败：'+((e&&e.message)?e.message:'请检查网络或权限'));}"
             "finally{node.dataset.xunleiBusy='0';node.style.pointerEvents='auto';}"
             "},true);"
             "}"
