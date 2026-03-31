@@ -35,7 +35,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.7"
+    plugin_version = "2.3.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -85,6 +85,17 @@ class XunleiHijackDownloader(_PluginBase):
         "种子任务开始/重试",
         "自动搬移开始",
         "自动搬移结束",
+    )
+    _visible_diagnostic_log_tokens = (
+        "失败",
+        "异常",
+        "错误",
+        "未获取到",
+        "获取不到",
+        "未解析出",
+        "未激活",
+        "无法解析",
+        "回退内建下载器",
     )
     _movie_default_resolution_tag = "1080p"
     _movie_move_protect_suffix = ".mpmoving"
@@ -141,11 +152,17 @@ class XunleiHijackDownloader(_PluginBase):
             return False
         return any(token in text for token in self._visible_runtime_log_tokens)
 
+    def _should_emit_diagnostic_log(self, message: str) -> bool:
+        text = str(message or "").strip()
+        if not text:
+            return False
+        return any(token in text for token in self._visible_diagnostic_log_tokens)
+
     def _log_info(self, message: str) -> None:
         text = str(message or "").strip()
         if not text:
             return
-        if self._should_emit_runtime_log(text):
+        if self._should_emit_runtime_log(text) or self._should_emit_diagnostic_log(text):
             logger.info(text)
         else:
             logger.debug(text)
@@ -154,7 +171,7 @@ class XunleiHijackDownloader(_PluginBase):
         text = str(message or "").strip()
         if not text:
             return
-        if self._should_emit_runtime_log(text):
+        if self._should_emit_runtime_log(text) or self._should_emit_diagnostic_log(text):
             logger.warning(text)
         else:
             logger.debug(text)
