@@ -35,7 +35,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.5"
+    plugin_version = "2.3.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -3691,31 +3691,68 @@ class XunleiHijackDownloader(_PluginBase):
         - 不做插件侧分析或兜底
         """
         try:
-            history_dir = self._resolve_history_download_dir(task_id=task_id)
-            if not history_dir:
+            history_dir = self._resolve_history_download_dir(task_id=task_id, task_name=task_name)
+            if history_dir:
+                base_dir = history_dir
+            elif target_root:
+                logger.warn(
+                    f"按 MoviePilot 规则无法解析目标目录，回退插件目标目录："
+                    f"task_id={task_id or '-'}，task_name={task_name or '-'}，target={target_root}"
+                )
+                base_dir = target_root
+            else:
                 logger.warn(
                     f"跳过搬运：按 MoviePilot 规则无法解析目标目录，"
                     f"task_id={task_id or '-'}，task_name={task_name or '-'}"
                 )
                 return None
-            base_dir = history_dir
         except Exception as err:
             logger.warn(f"构建搬运目标路径失败：task={task_name}，err={err}")
             return None
         base_dir.mkdir(parents=True, exist_ok=True)
         return self._dedupe_target(base_dir / src.name)
 
-    def _resolve_history_download_dir(self, task_id: str) -> Optional[Path]:
+    def _resolve_download_history(self, task_id: str, task_name: str = "") -> Optional[Any]:
+        if not DownloadHistoryOper:
+            return None
+        token = str(task_id or "").strip()
+        task_label = Path(str(task_name or "").strip()).name
+        try:
+            history_oper = DownloadHistoryOper()
+        except Exception:
+            return None
+        if token and token != "-":
+            try:
+                history = history_oper.get_by_hash(token)
+                if history:
+                    return history
+            except Exception as err:
+                logger.debug(f"按 task_id 查询下载历史失败：task_id={token}，err={err}")
+        if not task_label:
+            return None
+        try:
+            history = self._match_download_history_by_task_name(history_oper=history_oper, task_name=task_label)
+            if history:
+                logger.info(
+                    f"按任务名回查下载历史成功：task_id={token or '-'}，task_name={task_label}，"
+                    f"history_hash={self._history_text_attr(history, ('download_hash',)) or '-'}"
+                )
+            return history
+        except Exception as err:
+            logger.debug(f"按任务名回查下载历史失败：task_id={token or '-'}，task_name={task_label}，err={err}")
+        return None
+
+    def _resolve_history_download_dir(self, task_id: str, task_name: str = "") -> Optional[Path]:
         """
         复用 MoviePilot app/chain/download.py 的下载目录拼装逻辑：
         - DirectoryHelper().get_dir(media, include_unsorted=True)
         - download_type_folder / download_category_folder
         """
         token = str(task_id or "").strip()
-        if not token or token == "-" or not DownloadHistoryOper or not DirectoryHelper:
+        if not DownloadHistoryOper or not DirectoryHelper:
             return None
         try:
-            history = DownloadHistoryOper().get_by_hash(token)
+            history = self._resolve_download_history(task_id=token, task_name=task_name)
             if not history:
                 return None
             media_type = str(getattr(history, "type", "") or "").strip()
@@ -3743,7 +3780,93 @@ class XunleiHijackDownloader(_PluginBase):
                 download_dir = download_dir / media_category
             return download_dir
         except Exception as err:
-            logger.debug(f"按下载历史解析目录失败：task_id={task_id}，err={err}")
+            logger.debug(f"按下载历史解析目录失败：task_id={task_id}，task_name={task_name or '-'}，err={err}")
+        return None
+
+    def _match_download_history_by_task_name(self, history_oper: Any, task_name: str) -> Optional[Any]:
+        task_raw = Path(str(task_name or "").strip()).name
+        if not task_raw:
+            return None
+        task_stem = Path(task_raw).stem
+        task_norms: List[str] = []
+        for candidate in (task_raw, task_stem):
+            candidate_norm = self._normalize_name(candidate)
+            if candidate_norm and candidate_norm not in task_norms:
+                task_norms.append(candidate_norm)
+        if not task_norms:
+            return None
+        year_match = re.search(r"(19|20)\d{2}", task_raw)
+        task_year = year_match.group(0) if year_match else ""
+        season_match = re.search(r"\bS(\d{1,2})\b", task_raw, re.IGNORECASE)
+        episode_match = re.search(r"\bE(\d{1,3})\b", task_raw, re.IGNORECASE)
+        task_season = season_match.group(1).zfill(2) if season_match else ""
+        task_episode = episode_match.group(1).zfill(2) if episode_match else ""
+        histories = history_oper.list_by_page(page=1, count=200) or []
+        if not histories:
+            return None
+        try:
+            histories = sorted(
+                histories,
+                key=lambda x: int(getattr(x, "id", 0) or 0),
+                reverse=True,
+            )
+        except Exception:
+            pass
+        best_score = 0
+        best_history = None
+        for history in histories:
+            title = self._extract_history_title(history=history)
+            year = self._extract_history_year(history=history)
+            torrent_name = self._history_text_attr(history=history, keys=("torrent_name",))
+            path_name = Path(self._history_text_attr(history=history, keys=("path",))).name
+            title_year_name = self._build_movie_scrape_name(title=title, year=year)
+            history_candidates = [
+                (torrent_name, 120),
+                (Path(torrent_name).stem if torrent_name else "", 118),
+                (path_name, 116),
+                (Path(path_name).stem if path_name else "", 114),
+                (title_year_name, 108),
+                (title, 102),
+            ]
+            local_score = 0
+            for candidate, base_score in history_candidates:
+                candidate_norm = self._normalize_name(candidate)
+                if not candidate_norm:
+                    continue
+                if any(candidate_norm == task_norm for task_norm in task_norms):
+                    local_score = max(local_score, base_score)
+                    continue
+                if any(
+                    len(candidate_norm) >= 12 and len(task_norm) >= 12 and (
+                        candidate_norm.startswith(task_norm) or task_norm.startswith(candidate_norm)
+                    )
+                    for task_norm in task_norms
+                ):
+                    local_score = max(local_score, base_score - 10)
+            if local_score <= 0:
+                continue
+            history_season = re.sub(r"\D+", "", str(getattr(history, "seasons", "") or "")).zfill(2) if getattr(history, "seasons", None) else ""
+            history_episode = re.sub(r"\D+", "", str(getattr(history, "episodes", "") or "")).zfill(2) if getattr(history, "episodes", None) else ""
+            if task_year and year:
+                if task_year == year:
+                    local_score += 6
+                else:
+                    local_score -= 15
+            if task_season and history_season:
+                if task_season == history_season:
+                    local_score += 4
+                else:
+                    local_score -= 20
+            if task_episode and history_episode:
+                if task_episode == history_episode:
+                    local_score += 3
+                else:
+                    local_score -= 20
+            if local_score > best_score:
+                best_score = local_score
+                best_history = history
+        if best_score >= 96:
+            return best_history
         return None
 
     def _rename_movie_path_if_needed(
@@ -3756,7 +3879,7 @@ class XunleiHijackDownloader(_PluginBase):
         token = str(task_id or "").strip()
         if not token or token == "-" or not src or not src.exists():
             return src
-        meta = self._resolve_movie_rename_meta(task_id=token)
+        meta = self._resolve_movie_rename_meta(task_id=token, task_name=task_name)
         if not bool(meta.get("is_movie")):
             return src
         movie_name = self._build_movie_scrape_name(
@@ -4030,7 +4153,7 @@ class XunleiHijackDownloader(_PluginBase):
             )
             return dst
 
-    def _resolve_movie_rename_meta(self, task_id: str) -> Dict[str, Any]:
+    def _resolve_movie_rename_meta(self, task_id: str, task_name: str = "") -> Dict[str, Any]:
         meta: Dict[str, Any] = {
             "is_movie": False,
             "title": "",
@@ -4038,10 +4161,10 @@ class XunleiHijackDownloader(_PluginBase):
             "resolution": "",
         }
         token = str(task_id or "").strip()
-        if not token or token == "-" or not DownloadHistoryOper:
+        if not DownloadHistoryOper:
             return meta
         try:
-            history = DownloadHistoryOper().get_by_hash(token)
+            history = self._resolve_download_history(task_id=token, task_name=task_name)
             if not history:
                 return meta
             media_type = str(getattr(history, "type", "") or "").strip()
@@ -4052,7 +4175,7 @@ class XunleiHijackDownloader(_PluginBase):
             meta["resolution"] = self._extract_history_resolution(history=history)
             return meta
         except Exception as err:
-            logger.debug(f"parse movie rename meta failed: task_id={task_id}, err={err}")
+            logger.debug(f"parse movie rename meta failed: task_id={task_id}，task_name={task_name or '-'}，err={err}")
         return meta
 
     @staticmethod
