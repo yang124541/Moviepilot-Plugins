@@ -35,7 +35,7 @@ class XunleiHijackDownloader(_PluginBase):
     plugin_name = "迅雷下载接管"
     plugin_desc = "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png"
-    plugin_version = "2.3.8"
+    plugin_version = "2.4.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "xunleihijackdownloader_"
@@ -3755,9 +3755,27 @@ class XunleiHijackDownloader(_PluginBase):
         - 不做插件侧分析或兜底
         """
         try:
-            history_dir = self._resolve_history_download_dir(task_id=task_id, task_name=task_name)
+            history = self._resolve_download_history(task_id=task_id, task_name=task_name)
+            history_dir = self._resolve_history_download_dir(history=history)
             if history_dir:
                 base_dir = history_dir
+            elif target_root and history:
+                fallback_dir = self._resolve_history_category_dir_from_target_root(
+                    target_root=target_root,
+                    history=history,
+                )
+                if fallback_dir:
+                    self._log_info(
+                        f"按下载历史分类路径回退搬运目录："
+                        f"task_id={task_id or '-'}，task_name={task_name or '-'}，target={fallback_dir}"
+                    )
+                    base_dir = fallback_dir
+                else:
+                    self._log_warn(
+                        f"按 MoviePilot 规则无法解析目标目录，回退插件目标目录："
+                        f"task_id={task_id or '-'}，task_name={task_name or '-'}，target={target_root}"
+                    )
+                    base_dir = target_root
             elif target_root:
                 self._log_warn(
                     f"按 MoviePilot 规则无法解析目标目录，回退插件目标目录："
@@ -3806,21 +3824,24 @@ class XunleiHijackDownloader(_PluginBase):
             logger.debug(f"按任务名回查下载历史失败：task_id={token or '-'}，task_name={task_label}，err={err}")
         return None
 
-    def _resolve_history_download_dir(self, task_id: str, task_name: str = "") -> Optional[Path]:
+    @staticmethod
+    def _history_media_type_and_category(history: Any) -> Tuple[str, str]:
+        media_type = str(getattr(history, "type", "") or "").strip() if history is not None else ""
+        media_category = str(getattr(history, "media_category", "") or "").strip() if history is not None else ""
+        return media_type, media_category
+
+    def _resolve_history_download_dir(self, history: Any) -> Optional[Path]:
         """
         复用 MoviePilot app/chain/download.py 的下载目录拼装逻辑：
         - DirectoryHelper().get_dir(media, include_unsorted=True)
         - download_type_folder / download_category_folder
         """
-        token = str(task_id or "").strip()
         if not DownloadHistoryOper or not DirectoryHelper:
             return None
         try:
-            history = self._resolve_download_history(task_id=token, task_name=task_name)
             if not history:
                 return None
-            media_type = str(getattr(history, "type", "") or "").strip()
-            media_category = str(getattr(history, "media_category", "") or "").strip()
+            media_type, media_category = self._history_media_type_and_category(history=history)
             if not media_type:
                 return None
             media = SimpleNamespace(
@@ -3844,8 +3865,19 @@ class XunleiHijackDownloader(_PluginBase):
                 download_dir = download_dir / media_category
             return download_dir
         except Exception as err:
-            logger.debug(f"按下载历史解析目录失败：task_id={task_id}，task_name={task_name or '-'}，err={err}")
+            logger.debug(f"按下载历史解析目录失败：err={err}")
         return None
+
+    def _resolve_history_category_dir_from_target_root(self, target_root: Path, history: Any) -> Optional[Path]:
+        if not history or not target_root:
+            return None
+        media_type, media_category = self._history_media_type_and_category(history=history)
+        if not media_type:
+            return None
+        base_dir = target_root / media_type
+        if media_category:
+            base_dir = base_dir / media_category
+        return base_dir
 
     def _match_download_history_by_task_name(self, history_oper: Any, task_name: str) -> Optional[Any]:
         task_raw = Path(str(task_name or "").strip()).name
