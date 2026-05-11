@@ -28,9 +28,9 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
-    plugin_desc = "为 ldysg.com 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.1"
-    plugin_version = "1.4.1"
+    plugin_desc = "为 ldysg 提供老旧电影磁力搜索支持，自动识别验证码。"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.2"
+    plugin_version = "1.4.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -46,8 +46,9 @@ class LdysgIndexer(_PluginBase):
     _shared_ocr_init_lock = threading.Lock()
     _shared_ocr_predict_lock = threading.Lock()
 
-    _default_host = "ldysg.com"
-    _default_base_url = "https://www.ldysg.com/"
+    _default_host = "ldysg.win"
+    _default_base_url = "https://www.ldysg.win/"
+    _default_api_base_url = "https://www.ldysg.top/"
 
     def init_plugin(self, config: dict = None):
         self._install_ddddocr()
@@ -140,7 +141,7 @@ class LdysgIndexer(_PluginBase):
                                             "model": "extra_hosts",
                                             "rows": 2,
                                             "label": "额外域名（每行一个）",
-                                            "placeholder": "www.ldysg.com",
+                                            "placeholder": "www.ldysg.win",
                                         },
                                     }
                                 ],
@@ -692,7 +693,7 @@ class LdysgIndexer(_PluginBase):
                        ua: str, proxies: Optional[Dict[str, str]],
                        timeout: int, cookie: str, client_ip: str) -> List[Dict[str, Any]]:
         """调用 POST /api.php?fun=get_video 搜索视频列表，分页合并所有结果"""
-        api_url = urljoin(base_url, "api.php")
+        api_url = self._resolve_api_base_url(base_url)
         all_items: List[Dict[str, Any]] = []
         seen_ids = set()
         page = 1
@@ -762,7 +763,7 @@ class LdysgIndexer(_PluginBase):
           2. 下载验证码图片，用 ddddocr OCR 识别数字
           3. 用识别结果重新发起请求，返回 200 及资源列表
         """
-        api_url = urljoin(base_url, "api.php")
+        api_url = self._resolve_api_base_url(base_url)
         referer = urljoin(base_url, f"id/{vid}")
         session = self._get_thread_local_session()
         vbt_started = perf_counter()
@@ -893,7 +894,7 @@ class LdysgIndexer(_PluginBase):
 
                 # 验证码 URL 可能是相对路径
                 if not captcha_url.startswith("http"):
-                    captcha_url = urljoin(base_url, captcha_url)
+                    captcha_url = urljoin(api_url, captcha_url)
 
                 # 跳过视频验证码（无法 OCR）
                 if captcha_url.lower().endswith(".mp4"):
@@ -1035,7 +1036,7 @@ class LdysgIndexer(_PluginBase):
 
     @staticmethod
     def _ocr_captcha(captcha_url: str, proxies: Optional[Dict[str, str]] = None,
-                     timeout: int = 10, referer: str = "https://www.ldysg.com/",
+                     timeout: int = 10, referer: str = "https://www.ldysg.win/",
                      ua: str = "", client_ip: str = "") -> Tuple[str, Dict[str, float]]:
         """
         下载验证码图片并用 ddddocr 识别。
@@ -1054,7 +1055,7 @@ class LdysgIndexer(_PluginBase):
             headers = {
                 "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9",
-                "Referer": referer or "https://www.ldysg.com/",
+                "Referer": referer or "https://www.ldysg.win/",
                 "User-Agent": _CHROME_UA,
             }
             if client_ip:
@@ -1296,8 +1297,14 @@ class LdysgIndexer(_PluginBase):
             return candidates[0]
         return self._default_base_url
 
+    def _resolve_api_base_url(self, base_url: str) -> str:
+        host = self._extract_host(base_url)
+        if host.endswith("ldysg.win"):
+            return self._default_api_base_url
+        return self._normalize_base_url(base_url) or self._default_api_base_url
+
     def _all_hosts(self) -> set:
-        hosts = {self._default_host, "www.ldysg.com"}
+        hosts = {self._default_host, "www.ldysg.win", "ldysg.com", "www.ldysg.com"}
         for host in self._ordered_extra_hosts():
             hosts.add(host)
         return hosts
@@ -1358,7 +1365,7 @@ class LdysgIndexer(_PluginBase):
 
     @staticmethod
     def _build_indexer_schema(all_hosts: List[str]) -> Dict[str, Any]:
-        primary = "www.ldysg.com" if "www.ldysg.com" in all_hosts else all_hosts[0]
+        primary = "www.ldysg.win" if "www.ldysg.win" in all_hosts else all_hosts[0]
         ext_domains = [f"https://{h}/" for h in all_hosts if h != primary]
         return {
             "id": "ldysg",

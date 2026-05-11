@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.1"
+    plugin_version = "2.0.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1292,7 +1292,16 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _is_pow_page(html_text: str) -> bool:
         text = str(html_text or "")
-        return "正在确认你是不是机器人" in text and "challenge" in text and "diff" in text
+        return (
+            (
+                "正在确认你是不是机器人" in text
+                or "浏览器安全验证" in text
+                or "正在进行浏览器计算验证" in text
+                or "安全验证" in text
+            )
+            and "challenge" in text
+            and "diff" in text
+        )
 
     @staticmethod
     def _detect_pow_challenge(html_text: str) -> Optional[Dict[str, Any]]:

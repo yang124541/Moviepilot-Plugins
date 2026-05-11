@@ -23,7 +23,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -142,7 +142,8 @@ class LoumeIndexer(_PluginBase):
                                             "type": "info",
                                             "variant": "tonal",
                                             "text": "1lou.me 是一个 BT 资源论坛，提供影视剧集种子下载。"
-                                                    "站点 URL 请在 MoviePilot 站点管理中配置为 https://www.1lou.me/",
+                                                    "站点 URL 请在 MoviePilot 站点管理中配置为 https://www.1lou.me/。"
+                                                    "若日志提示 Cloudflare 人机验证，请在站点管理中更新浏览器导出的完整 Cookie（至少包含 cf_clearance）后重试。",
                                         },
                                     }
                                 ],
@@ -210,7 +211,7 @@ class LoumeIndexer(_PluginBase):
             })
 
             # 搜索帖子列表
-            thread_items = self._search_threads(
+            thread_items, blocked_by_cf = self._search_threads(
                 session=session,
                 base_url=base_url,
                 keyword=keyword,
@@ -220,6 +221,8 @@ class LoumeIndexer(_PluginBase):
             )
 
             if not thread_items:
+                if blocked_by_cf:
+                    return []
                 logger.info(f"BT之家(1lou)搜索无结果：关键词='{keyword}'")
                 return []
 
@@ -454,11 +457,12 @@ class LoumeIndexer(_PluginBase):
     def _search_threads(self, session: _requests.Session, base_url: str,
                         keyword: str, timeout: int,
                         proxies: Optional[Dict[str, str]],
-                        client_ip: str = "") -> List[Dict[str, Any]]:
+                        client_ip: str = "") -> Tuple[List[Dict[str, Any]], bool]:
         """搜索帖子列表，分页合并结果"""
         all_items: List[Dict[str, Any]] = []
         seen_tids: set = set()
         search_urls = self._build_search_urls(base_url, keyword)
+        blocked_by_cf = False
 
         for page_num, url in enumerate(search_urls, start=1):
             try:
@@ -474,6 +478,10 @@ class LoumeIndexer(_PluginBase):
                     allow_redirects=True,
                     headers=headers,
                 )
+                if self._is_cloudflare_challenge_response(resp):
+                    self._log_cloudflare_challenge(cookie_text=headers.get("Cookie") or "")
+                    blocked_by_cf = True
+                    break
                 if not resp.ok:
                     logger.debug(f"BT之家(1lou)搜索请求失败：status={resp.status_code}，page={page_num}")
                     break
@@ -498,7 +506,45 @@ class LoumeIndexer(_PluginBase):
             if added == 0 or not self._has_next_page(html):
                 break
 
-        return all_items
+        return all_items, blocked_by_cf
+
+    @staticmethod
+    def _is_cloudflare_challenge_response(resp: Optional[_requests.Response]) -> bool:
+        if resp is None:
+            return False
+        try:
+            status_code = int(resp.status_code or 0)
+        except Exception:
+            status_code = 0
+        headers = getattr(resp, "headers", {}) or {}
+        cf_mitigated = str(headers.get("Cf-Mitigated") or headers.get("cf-mitigated") or "").strip().lower()
+        if cf_mitigated == "challenge":
+            return True
+        server = str(headers.get("Server") or headers.get("server") or "").strip().lower()
+        text = str(getattr(resp, "text", "") or "")
+        return (
+            status_code == 403
+            and "cloudflare" in server
+            and (
+                "Just a moment..." in text
+                or "challenges.cloudflare.com" in text
+                or "cf-challenge" in text
+                or "challenge-platform" in text
+            )
+        )
+
+    @staticmethod
+    def _log_cloudflare_challenge(cookie_text: str = "") -> None:
+        if cookie_text:
+            logger.warn(
+                "BT之家(1lou)请求被 Cloudflare 人机验证拦截：当前站点 Cookie 可能已失效，"
+                "请在站点管理中更新浏览器导出的完整 Cookie（至少包含 cf_clearance）后重试。"
+            )
+            return
+        logger.warn(
+            "BT之家(1lou)请求被 Cloudflare 人机验证拦截：站点目前不能被普通 requests 直接访问，"
+            "请在站点管理中填写浏览器导出的完整 Cookie（至少包含 cf_clearance）后重试。"
+        )
 
     @staticmethod
     def _parse_thread_list(html: str) -> List[Dict[str, Any]]:
