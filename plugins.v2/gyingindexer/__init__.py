@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.4"
+    plugin_version = "2.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -2361,8 +2361,12 @@ class GyingIndexer(_PluginBase):
                 continue
         return current_target
 
-    @staticmethod
-    def _site_runtime_key(site: Optional[dict], base_url: str = "") -> str:
+    def _site_runtime_key(self, site: Optional[dict], base_url: str = "") -> str:
+        ordered_extra_hosts = self._ordered_extra_hosts()
+        if ordered_extra_hosts:
+            primary_host = self._extract_host(ordered_extra_hosts[0])
+            if primary_host:
+                return f"host:{primary_host}"
         if isinstance(site, dict):
             site_id = str(site.get("id") or "").strip().lower()
             if site_id:
