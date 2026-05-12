@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.5"
-    plugin_version = "1.4.5"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.6"
+    plugin_version = "1.4.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -178,11 +178,31 @@ class LdysgIndexer(_PluginBase):
                         keyword: str = None,
                         mtype: MediaType = None,
                         page: Optional[int] = 0) -> Optional[List[TorrentInfo]]:
+        logger.info(
+            f"老电影资源(ldysg)收到搜索调用："
+            f"site_id='{str((site or {}).get('id') or '').strip()}'，"
+            f"site_name='{str((site or {}).get('name') or (site or {}).get('title') or '').strip()}'，"
+            f"site_domain='{str((site or {}).get('domain') or '').strip()}'，"
+            f"site_url='{str((site or {}).get('url') or '').strip()}'，"
+            f"keyword='{str(keyword or '').strip()}'"
+        )
         if not self._enabled:
+            logger.info("老电影资源(ldysg)跳过搜索：插件未启用")
             return None
         if not site or not keyword:
+            logger.info(
+                f"老电影资源(ldysg)跳过搜索："
+                f"site={'有' if bool(site) else '无'}，keyword={'有' if bool(keyword) else '无'}"
+            )
             return []
         if not self._match_target_site(site):
+            logger.info(
+                f"老电影资源(ldysg)跳过搜索：站点未匹配，"
+                f"site_id='{str(site.get('id') or '').strip()}'，"
+                f"site_name='{str(site.get('name') or site.get('title') or '').strip()}'，"
+                f"site_domain='{str(site.get('domain') or '').strip()}'，"
+                f"site_url='{str(site.get('url') or '').strip()}'"
+            )
             return None
 
         search_started = perf_counter()
