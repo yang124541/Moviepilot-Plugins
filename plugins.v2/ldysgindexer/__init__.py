@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.6"
-    plugin_version = "1.4.6"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.7"
+    plugin_version = "1.4.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -1346,8 +1346,30 @@ class LdysgIndexer(_PluginBase):
     def _registered_hosts(self) -> List[str]:
         ordered_extra_hosts = self._ordered_extra_hosts()
         if ordered_extra_hosts:
-            return ordered_extra_hosts
-        return sorted(self._all_hosts())
+            return self._expand_registered_hosts(ordered_extra_hosts)
+        return self._expand_registered_hosts(sorted(self._all_hosts()))
+
+    @staticmethod
+    def _expand_registered_hosts(hosts: List[str]) -> List[str]:
+        expanded: List[str] = []
+        seen = set()
+        alias_map = {
+            "ldysg.win": ["ldysg.win", "www.ldysg.win"],
+            "www.ldysg.win": ["ldysg.win", "www.ldysg.win"],
+            "ldysg.com": ["ldysg.com", "www.ldysg.com"],
+            "www.ldysg.com": ["ldysg.com", "www.ldysg.com"],
+        }
+        for host in hosts:
+            pure_host = LdysgIndexer._extract_host(host)
+            if not pure_host:
+                continue
+            aliases = alias_map.get(pure_host, [pure_host])
+            for alias in aliases:
+                if alias in seen:
+                    continue
+                seen.add(alias)
+                expanded.append(alias)
+        return expanded
 
     def _ordered_extra_hosts(self) -> List[str]:
         ret: List[str] = []
