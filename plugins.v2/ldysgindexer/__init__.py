@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.4"
-    plugin_version = "1.4.4"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.5"
+    plugin_version = "1.4.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -1281,11 +1281,25 @@ class LdysgIndexer(_PluginBase):
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
-        if site_id == "ldysg":
+        if site_id == "ldysg" or any(token in site_id for token in ("ldysg", "老电影", "ldysg.win")):
             return True
 
+        site_name = str(site.get("name") or site.get("title") or "").strip().lower()
+        if site_name and ("ldysg" in site_name or "老电影" in site_name):
+            return True
+
+        host_candidates = [
+            site.get("domain"),
+            site.get("url"),
+            site.get("host"),
+            site.get("base_url"),
+        ]
+        ext_domains = site.get("ext_domains") or []
+        if isinstance(ext_domains, list):
+            host_candidates.extend(ext_domains)
+
         all_hosts = self._all_hosts()
-        for candidate in [site.get("domain"), site.get("url")]:
+        for candidate in host_candidates:
             host = self._extract_host(candidate)
             if host and self._is_host_match(host, all_hosts):
                 return True
