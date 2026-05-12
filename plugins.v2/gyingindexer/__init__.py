@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.2"
+    plugin_version = "2.0.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -2046,8 +2046,26 @@ class GyingIndexer(_PluginBase):
     def _registered_hosts(self) -> List[str]:
         ordered_extra_hosts = self._ordered_extra_hosts()
         if ordered_extra_hosts:
-            return ordered_extra_hosts
-        return sorted(self._default_hosts)
+            return self._expand_registered_hosts(ordered_extra_hosts)
+        return self._expand_registered_hosts(sorted(self._default_hosts))
+
+    @staticmethod
+    def _expand_registered_hosts(hosts: List[str]) -> List[str]:
+        expanded: List[str] = []
+        seen: Set[str] = set()
+        for host in hosts:
+            pure_host = GyingIndexer._extract_host(host)
+            if not pure_host:
+                continue
+            aliases = [pure_host]
+            if pure_host == "xn--kivn76b41nnhi.com":
+                aliases.append(f"www.{pure_host}")
+            for alias in aliases:
+                if alias in seen:
+                    continue
+                seen.add(alias)
+                expanded.append(alias)
+        return expanded
 
     def _ordered_extra_hosts(self) -> List[str]:
         ret: List[str] = []

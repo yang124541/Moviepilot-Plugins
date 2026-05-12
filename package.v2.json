@@ -119,11 +119,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v2.0.3": "补充注册 GYing 的 www 主域别名：除 xn--kivn76b41nnhi.com 外同步注册 www.xn--kivn76b41nnhi.com，修复站点按 www 域名添加时插件未接管搜索、日志只显示“索引器注册完成”的问题。",
       "v2.0.2": "兼容 GYing 新版“浏览器安全验证”页面，修复因旧 PoW 文案失配导致的搜索无结果。",
       "v2.0.1": "详情并发范围放宽到 1-100，并继续保持动态补位并发队列。",
       "v1.9.9": "精简 GYing 普通搜索日志：仅保留开始搜索与搜索完成两条摘要信息，搜索完成统一输出“找到视频/返回磁力/耗时”；同时默认主地址统一使用 https://www.xn--kivn76b41nnhi.com/，并去掉主域名切换日志。",
