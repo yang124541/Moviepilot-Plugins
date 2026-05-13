@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.7"
-    plugin_version = "1.4.7"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.8"
+    plugin_version = "1.4.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -48,7 +48,7 @@ class LdysgIndexer(_PluginBase):
 
     _default_host = "ldysg.win"
     _default_base_url = "https://www.ldysg.win/"
-    _default_api_base_url = "https://www.ldysg.top/"
+    _default_api_base_url = "https://www.ldysg.top/api.php"
 
     def init_plugin(self, config: dict = None):
         self._install_ddddocr()
@@ -1335,7 +1335,10 @@ class LdysgIndexer(_PluginBase):
         host = self._extract_host(base_url)
         if host.endswith("ldysg.win"):
             return self._default_api_base_url
-        return self._normalize_base_url(base_url) or self._default_api_base_url
+        normalized_base_url = self._normalize_base_url(base_url)
+        if normalized_base_url:
+            return urljoin(normalized_base_url, "api.php")
+        return self._default_api_base_url
 
     def _all_hosts(self) -> set:
         hosts = {self._default_host, "www.ldysg.win", "ldysg.com", "www.ldysg.com"}
