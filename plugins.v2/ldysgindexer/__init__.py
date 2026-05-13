@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.4.9"
-    plugin_version = "1.4.9"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.5.2"
+    plugin_version = "1.5.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -1329,7 +1329,9 @@ class LdysgIndexer(_PluginBase):
     def _registered_hosts(self) -> List[str]:
         ordered_extra_hosts = self._ordered_extra_hosts()
         if ordered_extra_hosts:
-            return self._expand_registered_hosts(ordered_extra_hosts)
+            # extra_hosts 只控制实际访问优先级；索引器注册仍保留内置旧域名，
+            # 确保站点管理暂未改到新域名时，搜索入口也能被插件接管。
+            return self._expand_registered_hosts(ordered_extra_hosts + sorted(self._all_hosts()))
         return self._expand_registered_hosts(sorted(self._all_hosts()))
 
     @staticmethod

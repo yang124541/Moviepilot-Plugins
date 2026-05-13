@@ -23,7 +23,7 @@ class Dyg55Indexer(_PluginBase):
     plugin_name = "电影港（dyg55）"
     plugin_desc = "为 dyg55.com 提供电影港 BT 种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png?v=1.1.2"
-    plugin_version = "1.1.2"
+    plugin_version = "1.1.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "dyg55indexer_"
@@ -1142,7 +1142,11 @@ class Dyg55Indexer(_PluginBase):
 
     def _registered_hosts(self) -> List[str]:
         ordered_extra_hosts = self._ordered_extra_hosts()
-        return ordered_extra_hosts if ordered_extra_hosts else sorted(self._all_hosts())
+        if ordered_extra_hosts:
+            # extra_hosts 只控制实际访问优先级；索引器注册仍保留内置旧域名，
+            # 确保站点管理暂未改到新域名时，搜索入口也能被插件接管。
+            return list(dict.fromkeys(ordered_extra_hosts + sorted(self._all_hosts())))
+        return sorted(self._all_hosts())
 
     def _ordered_extra_hosts(self) -> List[str]:
         ret: List[str] = []
