@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.5"
+    plugin_version = "2.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -2051,7 +2051,9 @@ class GyingIndexer(_PluginBase):
     def _registered_hosts(self) -> List[str]:
         ordered_extra_hosts = self._ordered_extra_hosts()
         if ordered_extra_hosts:
-            return self._expand_registered_hosts(ordered_extra_hosts)
+            # extra_hosts 只控制实际访问优先级；索引器注册仍保留内置旧域名，
+            # 确保站点管理暂未改到新域名时，搜索入口也能被插件接管。
+            return self._expand_registered_hosts(ordered_extra_hosts + sorted(self._default_hosts))
         return self._expand_registered_hosts(sorted(self._default_hosts))
 
     @staticmethod

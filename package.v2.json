@@ -126,11 +126,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "2.0.5",
+    "version": "2.0.6",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v2.0.6": "修复 GYing 额外域名仅影响实际搜索、不再收窄索引器注册域名：填写 extra_hosts 后仍同时注册内置旧域名，保证站点管理暂时保持旧网址时也能被插件接管，并继续优先使用插件内新域名搜索。",
       "v2.0.5": "调整 GYing 额外域名优先级：一旦配置额外域名，运行时 base_url 与 cookie 缓存统一按额外域名主机归档，不再继续绑在站点管理里的旧域名身份上，修复站点地址仍是 gying.si 时即使额外域名填新域名也搜不到的问题。",
       "v2.0.4": "继续放宽 GYing 站点接管条件：除 domain/url 外，新增匹配 site.id/site.host/site.base_url/ext_domains 中的 gying/观影/新主域片段，修复索引器已注册但搜索阶段仍未进入插件、没有“开始搜索”日志的问题。",
       "v2.0.3": "补充注册 GYing 的 www 主域别名：除 xn--kivn76b41nnhi.com 外同步注册 www.xn--kivn76b41nnhi.com，修复站点按 www 域名添加时插件未接管搜索、日志只显示“索引器注册完成”的问题。",
