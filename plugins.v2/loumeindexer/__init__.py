@@ -23,7 +23,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -192,14 +192,14 @@ class LoumeIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
-        search_client_ip = self._rand_ip()
-
         logger.info(f"BT之家(1lou)开始搜索：关键词='{keyword}'")
 
         try:
             # 构建带 cookie 的 session
             session = _requests.Session()
             cookie_from_site = str(site.get("cookie") or "").strip()
+            use_spoof_ip = not self._has_cloudflare_clearance(cookie_from_site)
+            search_client_ip = self._rand_ip() if use_spoof_ip else ""
 
             if cookie_from_site:
                 session.headers.update({"Cookie": cookie_from_site})
@@ -397,7 +397,8 @@ class LoumeIndexer(_PluginBase):
             session_cookies: Dict[str, str],
             timeout: int,
             proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
-        client_ip = self._rand_ip()
+        header_cookie = str((session_headers or {}).get("Cookie") or "").strip()
+        client_ip = "" if self._has_cloudflare_clearance(header_cookie) else self._rand_ip()
         session = self._build_worker_session(
             session_headers=session_headers,
             session_cookies=session_cookies,
@@ -545,6 +546,10 @@ class LoumeIndexer(_PluginBase):
             "BT之家(1lou)请求被 Cloudflare 人机验证拦截：站点目前不能被普通 requests 直接访问，"
             "请在站点管理中填写浏览器导出的完整 Cookie（至少包含 cf_clearance）后重试。"
         )
+
+    @staticmethod
+    def _has_cloudflare_clearance(cookie_text: str = "") -> bool:
+        return "cf_clearance=" in str(cookie_text or "").lower()
 
     @staticmethod
     def _parse_thread_list(html: str) -> List[Dict[str, Any]]:

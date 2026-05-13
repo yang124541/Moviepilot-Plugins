@@ -27,11 +27,12 @@
     "name": "BT之家",
     "description": "为 MoviePilot 增加 1lou.me BT论坛种子搜索支持。",
     "labels": "站点,索引",
-    "version": "1.1.6",
+    "version": "1.1.7",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v1.1.7": "修复 BT之家携带 cf_clearance 时仍被 Cloudflare 拦截：站点 Cookie 中包含 cf_clearance 时不再额外伪造随机 X-Forwarded-For/X-Real-IP，避免与浏览器会话上下文失配导致持续挑战。",
       "v1.1.6": "修复 BT之家额外域名仅影响实际搜索、不再收窄索引器注册域名：填写 extra_hosts 后仍同时注册内置旧域名，保证站点管理暂时保持旧网址时也能被插件接管，并继续优先使用插件内新域名搜索。",
       "v1.1.5": "补充 BT之家当前 Cloudflare 人机验证识别：搜索请求若被挑战页拦截，会明确提示需更新浏览器导出的完整 Cookie（至少包含 cf_clearance），避免继续误判为普通无结果。",
       "v1.1.4": "资源页并发范围放宽到 1-100，并继续保持动态补位并发队列。",
