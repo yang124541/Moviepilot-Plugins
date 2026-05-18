@@ -29,8 +29,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 class LdysgIndexer(_PluginBase):
     plugin_name = "老电影（ldysg）"
     plugin_desc = "为 ldysg 提供老旧电影磁力搜索支持，自动识别验证码。"
-    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.5.2"
-    plugin_version = "1.5.2"
+    plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.5.3"
+    plugin_version = "1.5.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "ldysgindexer_"
@@ -764,7 +764,8 @@ class LdysgIndexer(_PluginBase):
           3. 用识别结果重新发起请求，返回 200 及资源列表
         """
         api_url = self._resolve_api_base_url(base_url)
-        referer = urljoin(base_url, f"id/{vid}")
+        detail_base_url = self._resolve_detail_base_url(base_url)
+        referer = urljoin(detail_base_url, f"id/{vid}")
         session = self._get_thread_local_session()
         vbt_started = perf_counter()
         captcha_started = None
@@ -791,7 +792,7 @@ class LdysgIndexer(_PluginBase):
         headers = {
             "User-Agent": _CHROME_UA,
             "Referer": referer,
-            "Origin": base_url.rstrip("/"),
+            "Origin": detail_base_url.rstrip("/"),
             "X-Requested-With": "XMLHttpRequest",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -808,7 +809,7 @@ class LdysgIndexer(_PluginBase):
                 "User-Agent": _CHROME_UA,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9",
-                "Referer": base_url,
+                "Referer": detail_base_url,
                 "X-Forwarded-For": client_ip,
                 "X-Real-IP": client_ip,
             }
@@ -894,7 +895,7 @@ class LdysgIndexer(_PluginBase):
 
                 # 验证码 URL 可能是相对路径
                 if not captcha_url.startswith("http"):
-                    captcha_url = urljoin(api_url, captcha_url)
+                    captcha_url = urljoin(detail_base_url, captcha_url)
 
                 # 跳过视频验证码（无法 OCR）
                 if captcha_url.lower().endswith(".mp4"):
@@ -1036,7 +1037,7 @@ class LdysgIndexer(_PluginBase):
 
     @staticmethod
     def _ocr_captcha(captcha_url: str, proxies: Optional[Dict[str, str]] = None,
-                     timeout: int = 10, referer: str = "https://www.ldysg.win/",
+                     timeout: int = 10, referer: str = "https://www.ldysg.top/",
                      ua: str = "", client_ip: str = "") -> Tuple[str, Dict[str, float]]:
         """
         下载验证码图片并用 ddddocr 识别。
@@ -1055,7 +1056,7 @@ class LdysgIndexer(_PluginBase):
             headers = {
                 "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9",
-                "Referer": referer or "https://www.ldysg.win/",
+                "Referer": referer or "https://www.ldysg.top/",
                 "User-Agent": _CHROME_UA,
             }
             if client_ip:
@@ -1319,6 +1320,15 @@ class LdysgIndexer(_PluginBase):
         if normalized_base_url:
             return urljoin(normalized_base_url, "api.php")
         return self._default_api_base_url
+
+    def _resolve_detail_base_url(self, base_url: str) -> str:
+        api_base_url = self._resolve_api_base_url(base_url)
+        parsed = urlparse(api_base_url)
+        scheme = parsed.scheme or "https"
+        netloc = parsed.netloc
+        if netloc:
+            return f"{scheme}://{netloc}/"
+        return self._default_base_url
 
     def _all_hosts(self) -> set:
         hosts = {self._default_host, "www.ldysg.win", "ldysg.com", "www.ldysg.com"}
