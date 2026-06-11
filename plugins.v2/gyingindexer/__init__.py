@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.6"
+    plugin_version = "2.0.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1292,6 +1292,8 @@ class GyingIndexer(_PluginBase):
     @staticmethod
     def _is_pow_page(html_text: str) -> bool:
         text = str(html_text or "")
+        if GyingIndexer._is_res_pow_page(text):
+            return True
         return (
             (
                 "正在确认你是不是机器人" in text
@@ -1301,6 +1303,20 @@ class GyingIndexer(_PluginBase):
             )
             and "challenge" in text
             and "diff" in text
+        )
+
+    @staticmethod
+    def _is_res_pow_page(html_text: str) -> bool:
+        text = str(html_text or "")
+        if not text:
+            return False
+        return (
+            ("/res/pow" in text or "powSolve-" in text or "pow.worker-" in text)
+            and (
+                "浏览器安全验证" in text
+                or "正在进行浏览器计算验证" in text
+                or "安全验证" in text
+            )
         )
 
     @staticmethod
@@ -1321,9 +1337,12 @@ class GyingIndexer(_PluginBase):
         try:
             obj = json.loads(payload)
             if all(k in obj for k in ("id", "challenge", "diff", "salt")):
+                obj["type"] = "legacy"
                 return obj
         except Exception:
             pass
+        if GyingIndexer._is_res_pow_page(text):
+            return {"type": "res_pow"}
         return None
 
     @staticmethod
@@ -1346,6 +1365,53 @@ class GyingIndexer(_PluginBase):
                 remaining.discard(h)
 
         return found
+
+    def _fetch_res_pow_challenge(self, session: requests.Session, base_url: str,
+                                 proxies: Optional[Dict[str, str]], timeout: int,
+                                 target_url: str = "") -> Optional[Dict[str, Any]]:
+        challenge_url = urljoin(target_url or base_url, "/res/pow")
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Referer": target_url or base_url,
+        }
+        try:
+            resp = session.get(
+                challenge_url,
+                headers=headers,
+                proxies=proxies,
+                timeout=max(5, int(timeout or 20)),
+            )
+            body_text = str(resp.text or "").strip()
+            logger.debug(f"观影(GYing)PoW 挑战响应：status={resp.status_code}，body={body_text[:200]}")
+            if not resp.ok:
+                return None
+            obj = resp.json()
+            if isinstance(obj, dict) and all(k in obj for k in ("N", "x", "t")):
+                obj["type"] = "res_pow"
+                return obj
+        except Exception as err:
+            logger.debug(f"观影(GYing)PoW 挑战获取异常：{err}")
+        return None
+
+    @staticmethod
+    def _solve_res_pow(modulus_hex: str, seed_hex: str, rounds: int) -> str:
+        """
+        新版 /res/pow 校验。
+        算法：从 x 开始做 t 轮 y = y^2 mod N，最终提交十六进制 y。
+        """
+        try:
+            modulus = int(str(modulus_hex or "").strip(), 16)
+            value = int(str(seed_hex or "").strip(), 16)
+            total_rounds = int(rounds or 0)
+        except Exception:
+            return ""
+
+        if modulus <= 0 or value < 0 or total_rounds <= 0:
+            return ""
+
+        for _ in range(total_rounds):
+            value = (value * value) % modulus
+        return format(value, "x")
 
     def _submit_pow_solution(self, session: requests.Session, base_url: str,
                              challenge_id: str, nonces: List[int],
@@ -1397,6 +1463,45 @@ class GyingIndexer(_PluginBase):
             logger.debug(f"观影(GYing)PoW 提交异常：{e}")
         return False
 
+    def _submit_res_pow_solution(self, session: requests.Session, base_url: str,
+                                 result_hex: str, ua: str,
+                                 proxies: Optional[Dict[str, str]],
+                                 timeout: int, target_url: str = "") -> bool:
+        submit_url = urljoin(target_url or base_url, "/res/pow")
+        referer_url = target_url or base_url
+        parsed_submit = urlparse(referer_url)
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json, text/plain, */*",
+            "Referer": referer_url,
+            "Origin": f"{parsed_submit.scheme or 'https'}://{parsed_submit.netloc}",
+        }
+        try:
+            resp = session.post(
+                submit_url,
+                data={"y": result_hex},
+                headers=headers,
+                proxies=proxies,
+                timeout=max(5, int(timeout or 20)),
+            )
+            body_text = str(resp.text or "").strip()
+            logger.debug(f"观影(GYing)PoW 提交响应：status={resp.status_code}，body={body_text[:200]}")
+            if resp.ok:
+                try:
+                    obj = resp.json()
+                    if isinstance(obj, dict) and obj.get("success") is True:
+                        return True
+                    if isinstance(obj, dict) and obj.get("success") is False:
+                        logger.warn(f"观影(GYing)PoW 验证被拒绝：{body_text[:100]}")
+                        return False
+                except Exception:
+                    pass
+                if session.cookies:
+                    return True
+        except Exception as err:
+            logger.debug(f"观影(GYing)PoW 提交异常：{err}")
+        return False
+
     def _handle_pow_in_session(self, session: requests.Session, base_url: str,
                                html_text: str, ua: str,
                                proxies: Optional[Dict[str, str]],
@@ -1408,6 +1513,49 @@ class GyingIndexer(_PluginBase):
         pow_data = self._detect_pow_challenge(html_text)
         if not pow_data:
             return False
+
+        if str(pow_data.get("type") or "") == "res_pow":
+            pow_data = self._fetch_res_pow_challenge(
+                session=session,
+                base_url=base_url,
+                proxies=proxies,
+                timeout=timeout,
+                target_url=target_url or base_url,
+            )
+            if not pow_data:
+                logger.warn("观影(GYing)PoW 挑战获取失败")
+                return False
+
+            modulus_hex = str(pow_data.get("N") or "")
+            seed_hex = str(pow_data.get("x") or "")
+            rounds = int(pow_data.get("t") or 0)
+            if not modulus_hex or not seed_hex or not rounds:
+                return False
+
+            logger.info(f"观影(GYing)检测到人机验证（PoW），轮数={rounds}，正在计算解答...")
+            logger.debug(
+                f"观影(GYing)PoW 挑战参数：N={modulus_hex[:32]}...，x={seed_hex[:32]}...，t={rounds}"
+            )
+            result_hex = self._solve_res_pow(modulus_hex=modulus_hex, seed_hex=seed_hex, rounds=rounds)
+            if not result_hex:
+                logger.warn("观影(GYing)PoW 求解失败：未生成有效结果")
+                return False
+
+            logger.info(f"观影(GYing)PoW 计算完成，结果长度={len(result_hex)}，正在提交...")
+            ok = self._submit_res_pow_solution(
+                session=session,
+                base_url=base_url,
+                result_hex=result_hex,
+                ua=ua,
+                proxies=proxies,
+                timeout=timeout,
+                target_url=target_url or base_url,
+            )
+            if ok:
+                logger.info("观影(GYing)PoW 验证提交成功")
+            else:
+                logger.warn("观影(GYing)PoW 验证提交失败")
+            return ok
 
         challenge_hashes: List[str] = list(pow_data.get("challenge") or [])
         diff: int = int(pow_data.get("diff") or 0)
