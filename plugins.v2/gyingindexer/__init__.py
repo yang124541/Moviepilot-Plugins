@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.7"
+    plugin_version = "2.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1111,7 +1111,7 @@ class GyingIndexer(_PluginBase):
                 session.proxies.update(proxies or {})
                 session.headers.update({"User-Agent": ua or settings.USER_AGENT, "Referer": base_url})
                 if existing_cookie:
-                    session.headers["Cookie"] = existing_cookie
+                    self._load_cookie_header_to_session(session=session, cookie=existing_cookie)
                 resp = session.get(base_url, timeout=max(5, int(timeout or 20)))
                 if not resp.ok or not self._is_pow_page(resp.text):
                     return ""
@@ -1276,6 +1276,22 @@ class GyingIndexer(_PluginBase):
             if name:
                 parts.append(f"{name}={value}")
         return "; ".join(parts)
+
+    @staticmethod
+    def _load_cookie_header_to_session(session: requests.Session, cookie: str) -> None:
+        cookie_text = GyingIndexer._normalize_cookie_header(cookie)
+        if not cookie_text:
+            return
+        session.headers.pop("Cookie", None)
+        for item in cookie_text.split(";"):
+            token = str(item or "").strip()
+            if "=" not in token:
+                continue
+            name, value = token.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if name:
+                session.cookies.set(name, value)
 
     @staticmethod
     def _is_login_shell(html_text: str) -> bool:
@@ -1602,7 +1618,7 @@ class GyingIndexer(_PluginBase):
                 session.proxies.update(proxies or {})
                 session.headers.update({"User-Agent": ua or settings.USER_AGENT, "Referer": base_url})
                 if cookie:
-                    session.headers["Cookie"] = cookie
+                    self._load_cookie_header_to_session(session=session, cookie=cookie)
 
                 resp = session.get(url=url, timeout=max(5, int(timeout or 20)))
                 if not resp.ok:
@@ -1650,7 +1666,7 @@ class GyingIndexer(_PluginBase):
                         "Referer": root,
                     })
                     if existing_cookie:
-                        session.headers["Cookie"] = existing_cookie
+                        self._load_cookie_header_to_session(session=session, cookie=existing_cookie)
                     current_root = self._normalize_base_url(root) or root
                     login_url = urljoin(current_root, "/user/login")
                     payload = {
@@ -1990,7 +2006,7 @@ class GyingIndexer(_PluginBase):
                     "Referer": base_url,
                 })
                 if existing_cookie:
-                    session.headers["Cookie"] = existing_cookie
+                    self._load_cookie_header_to_session(session=session, cookie=existing_cookie)
 
                 # 用同一 session 请求 target_url，让服务端在该 session 里建立挑战绑定
                 resp = session.get(target_url, timeout=max(5, int(timeout or 20)))
