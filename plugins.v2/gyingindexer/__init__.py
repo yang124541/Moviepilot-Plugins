@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.9"
+    plugin_version = "2.0.10"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -2120,11 +2120,12 @@ class GyingIndexer(_PluginBase):
     def _build_search_url(base_url: str, keyword: str,
                           mode: str = "precise", page_no: int = 1,
                           quality_code: Optional[str] = None) -> str:
-        if mode == "fuzzy":
-            # 模糊匹配只请求一次
-            return urljoin(base_url, f"s/1---1/{quote(keyword)}")
-        # 默认精准匹配只请求一次
-        return urljoin(base_url, f"s/2-0--1/{quote(keyword)}")
+        mode_value = "1" if mode == "fuzzy" else "3"
+        page_value = max(1, int(page_no or 1))
+        query = f"search?q={quote(keyword)}&type=&mode={mode_value}"
+        if page_value > 1:
+            query += f"&page={page_value}"
+        return urljoin(base_url, query)
 
     def _collect_search_entries(self, client: RequestUtils, base_url: str, keyword: str,
                                 fetcher: Optional[Callable[[str], str]] = None) -> List[Dict[str, Any]]:

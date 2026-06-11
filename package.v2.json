@@ -134,11 +134,12 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 站点磁力搜索支持，并仅保留中字1080P/中字4K结果。",
     "labels": "站点,索引",
-    "version": "2.0.9",
+    "version": "2.0.10",
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
     "history": {
+      "v2.0.10": "修复 GYing 2026-06 新版搜索入口：站点已从旧 /s/... 路由切到 /search?q=...&mode=...&page=...，插件现改为按前端实际入口构造搜索 URL，并对齐 mode=1 模糊、mode=3 精准，修复登录成功后仍始终 0 条的问题。",
       "v2.0.9": "继续修复 GYing 自动登录间歇失败：现有 cookie 模式失败后，自动回退到全新 session 从根页重新过 /res/pow 再登录，避免半失效 cookie 把站点带进“还能访问但无法再登录”的状态。",
       "v2.0.8": "修复 GYing 新版 /res/pow 登录链路中的 cookie 传递：session 内不再手工覆盖 Cookie 请求头，改为写入 requests cookie jar，避免 browser_pow/browser_verified 无法随自动登录请求带上，修复仍然提示“自动登录失败”的问题。",
       "v2.0.7": "兼容 GYing 2026-06 新版 /res/pow 浏览器计算验证：不再只依赖旧版页面内嵌 challenge JSON，新增获取 /res/pow 挑战、执行模平方计算并提交 y 结果，修复自动登录失败后搜索始终 0 条的问题。",
