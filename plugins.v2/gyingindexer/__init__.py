@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.8"
+    plugin_version = "2.0.9"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1657,103 +1657,119 @@ class GyingIndexer(_PluginBase):
                               proxies: Optional[Dict[str, str]], timeout: int,
                               existing_cookie: str = "") -> str:
         root_candidates = self._build_login_roots(base_url=base_url)
-        for root in root_candidates:
-            try:
-                with requests.Session() as session:
-                    session.proxies.update(proxies or {})
-                    session.headers.update({
-                        "User-Agent": ua or settings.USER_AGENT,
-                        "Referer": root,
-                    })
-                    if existing_cookie:
-                        self._load_cookie_header_to_session(session=session, cookie=existing_cookie)
-                    current_root = self._normalize_base_url(root) or root
-                    login_url = urljoin(current_root, "/user/login")
-                    payload = {
-                        "username": username,
-                        "password": password,
-                        "cookietime": "10506240",
-                        "siteid": "1",
-                        "dosubmit": "1",
-                        "code": "",
-                    }
-                    ajax_headers = {
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Accept": "application/json, text/javascript, */*; q=0.01",
-                        "Origin": f"{urlparse(current_root).scheme}://{urlparse(current_root).netloc}",
-                        "Referer": login_url,
-                    }
+        login_cookie_candidates: List[str] = []
+        seen_cookie_candidates: Set[str] = set()
+        for candidate in (existing_cookie, ""):
+            normalized = self._normalize_cookie_header(candidate)
+            if normalized in seen_cookie_candidates:
+                continue
+            seen_cookie_candidates.add(normalized)
+            login_cookie_candidates.append(normalized)
 
-                    if existing_cookie:
+        for candidate_index, login_cookie in enumerate(login_cookie_candidates):
+            candidate_label = "现有cookie" if login_cookie else "全新session"
+            if candidate_index > 0:
+                logger.info(f"观影(GYing)自动登录回退到{candidate_label}模式重试。")
+
+            for root in root_candidates:
+                try:
+                    with requests.Session() as session:
+                        session.proxies.update(proxies or {})
+                        session.headers.update({
+                            "User-Agent": ua or settings.USER_AGENT,
+                            "Referer": root,
+                        })
+                        if login_cookie:
+                            self._load_cookie_header_to_session(session=session, cookie=login_cookie)
+                        current_root = self._normalize_base_url(root) or root
+                        login_url = urljoin(current_root, "/user/login")
+                        payload = {
+                            "username": username,
+                            "password": password,
+                            "cookietime": "10506240",
+                            "siteid": "1",
+                            "dosubmit": "1",
+                            "code": "",
+                        }
+                        ajax_headers = {
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Accept": "application/json, text/javascript, */*; q=0.01",
+                            "Origin": f"{urlparse(current_root).scheme}://{urlparse(current_root).netloc}",
+                            "Referer": login_url,
+                        }
+
+                        if login_cookie:
+                            resp = session.post(
+                                login_url,
+                                data=payload,
+                                headers=ajax_headers,
+                                timeout=max(5, int(timeout or 20)),
+                            )
+                            if resp.ok:
+                                ok = False
+                                try:
+                                    obj = resp.json()
+                                    ok = int(obj.get("code") or 0) == 200
+                                except Exception:
+                                    text = str(resp.text or "")
+                                    ok = ("登录成功" in text) or ("\"code\":200" in text) or ("{'code':200}" in text)
+                                if ok:
+                                    cookie_text = self._merge_cookie_str(
+                                        login_cookie,
+                                        self._cookie_jar_to_header(session.cookies),
+                                    )
+                                    if cookie_text:
+                                        return cookie_text
+
+                        resp = session.get(root, timeout=max(5, int(timeout or 20)))
+                        current_root = self._normalize_base_url(resp.url or root) or root
+
+                        # 处理 PoW 人机验证
+                        if resp.ok and self._is_pow_page(resp.text):
+                            pow_ok = self._handle_pow_in_session(
+                                session=session,
+                                base_url=current_root,
+                                html_text=resp.text,
+                                ua=ua or settings.USER_AGENT,
+                                proxies=proxies,
+                                timeout=timeout,
+                                target_url=resp.url or current_root,
+                            )
+                            if not pow_ok:
+                                continue
+
+                        login_url = urljoin(current_root, "/user/login")
+                        ajax_headers = {
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Accept": "application/json, text/javascript, */*; q=0.01",
+                            "Origin": f"{urlparse(current_root).scheme}://{urlparse(current_root).netloc}",
+                            "Referer": login_url,
+                        }
                         resp = session.post(
                             login_url,
                             data=payload,
                             headers=ajax_headers,
                             timeout=max(5, int(timeout or 20)),
                         )
-                        if resp.ok:
-                            ok = False
-                            try:
-                                obj = resp.json()
-                                ok = int(obj.get("code") or 0) == 200
-                            except Exception:
-                                text = str(resp.text or "")
-                                ok = ("登录成功" in text) or ("\"code\":200" in text) or ("{'code':200}" in text)
-                            if ok:
-                                cookie_text = self._merge_cookie_str(
-                                    existing_cookie,
-                                    self._cookie_jar_to_header(session.cookies),
-                                )
-                                if cookie_text:
-                                    return cookie_text
-
-                    resp = session.get(root, timeout=max(5, int(timeout or 20)))
-                    current_root = self._normalize_base_url(resp.url or root) or root
-
-                    # 处理 PoW 人机验证
-                    if resp.ok and self._is_pow_page(resp.text):
-                        pow_ok = self._handle_pow_in_session(
-                            session=session,
-                            base_url=current_root,
-                            html_text=resp.text,
-                            ua=ua or settings.USER_AGENT,
-                            proxies=proxies,
-                            timeout=timeout,
-                            target_url=resp.url or current_root,
-                        )
-                        if not pow_ok:
+                        if not resp.ok:
                             continue
-
-                    login_url = urljoin(current_root, "/user/login")
-                    ajax_headers = {
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Accept": "application/json, text/javascript, */*; q=0.01",
-                        "Origin": f"{urlparse(current_root).scheme}://{urlparse(current_root).netloc}",
-                        "Referer": login_url,
-                    }
-                    resp = session.post(
-                        login_url,
-                        data=payload,
-                        headers=ajax_headers,
-                        timeout=max(5, int(timeout or 20)),
-                    )
-                    if not resp.ok:
-                        continue
-                    ok = False
-                    try:
-                        obj = resp.json()
-                        ok = int(obj.get("code") or 0) == 200
-                    except Exception:
-                        text = str(resp.text or "")
-                        ok = ("登录成功" in text) or ("\"code\":200" in text) or ("{'code':200}" in text)
-                    if not ok:
-                        continue
-                    cookie_text = self._merge_cookie_str(existing_cookie, self._cookie_jar_to_header(session.cookies))
-                    if cookie_text:
-                        return cookie_text
-            except Exception as err:
-                logger.warn(f"观影(GYing)自动登录异常：{err}")
-                continue
+                        ok = False
+                        try:
+                            obj = resp.json()
+                            ok = int(obj.get("code") or 0) == 200
+                        except Exception:
+                            text = str(resp.text or "")
+                            ok = ("登录成功" in text) or ("\"code\":200" in text) or ("{'code':200}" in text)
+                        if not ok:
+                            continue
+                        cookie_text = self._cookie_jar_to_header(session.cookies)
+                        if login_cookie:
+                            cookie_text = self._merge_cookie_str(login_cookie, cookie_text)
+                        if cookie_text:
+                            return cookie_text
+                except Exception as err:
+                    logger.warn(f"观影(GYing)自动登录异常：{err}")
+                    continue
         return ""
 
     @staticmethod
