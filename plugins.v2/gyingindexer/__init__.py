@@ -1397,6 +1397,9 @@ class GyingIndexer(_PluginBase):
     def _detect_pow_challenge(html_text: str) -> Optional[Dict[str, Any]]:
         """从人机验证页面解析 PoW 挑战参数。"""
         text = str(html_text or "")
+        if GyingIndexer._is_res_pow_page(text):
+            return {"type": "res_pow"}
+
         payload = ""
         for pattern in (
             r'const\s+json\s*=\s*(\{.*?\})\s*;\s*const\s+jss\s*=',
@@ -1415,8 +1418,6 @@ class GyingIndexer(_PluginBase):
                 return obj
         except Exception:
             pass
-        if GyingIndexer._is_res_pow_page(text):
-            return {"type": "res_pow"}
         return None
 
     @staticmethod
