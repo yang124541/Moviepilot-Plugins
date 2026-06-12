@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.1.1"
+    plugin_version = "2.1.2"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1108,10 +1108,13 @@ class GyingIndexer(_PluginBase):
         """
         try:
             with requests.Session() as session:
-                session.proxies.update(proxies or {})
-                session.headers.update({"User-Agent": ua or settings.USER_AGENT, "Referer": base_url})
-                if existing_cookie:
-                    self._load_cookie_header_to_session(session=session, cookie=existing_cookie)
+                self._prepare_session(
+                    session=session,
+                    proxies=proxies,
+                    ua=ua,
+                    referer=base_url,
+                    cookie=existing_cookie,
+                )
                 resp = session.get(base_url, timeout=max(5, int(timeout or 20)))
                 if not resp.ok or not self._is_pow_page(resp.text):
                     return ""
@@ -1615,10 +1618,13 @@ class GyingIndexer(_PluginBase):
         try:
             url = self._build_search_url(base_url=base_url, keyword=keyword or "测试", mode="precise")
             with requests.Session() as session:
-                session.proxies.update(proxies or {})
-                session.headers.update({"User-Agent": ua or settings.USER_AGENT, "Referer": base_url})
-                if cookie:
-                    self._load_cookie_header_to_session(session=session, cookie=cookie)
+                self._prepare_session(
+                    session=session,
+                    proxies=proxies,
+                    ua=ua,
+                    referer=base_url,
+                    cookie=cookie,
+                )
 
                 resp = session.get(url=url, timeout=max(5, int(timeout or 20)))
                 if not resp.ok:
@@ -1674,13 +1680,13 @@ class GyingIndexer(_PluginBase):
             for root in root_candidates:
                 try:
                     with requests.Session() as session:
-                        session.proxies.update(proxies or {})
-                        session.headers.update({
-                            "User-Agent": ua or settings.USER_AGENT,
-                            "Referer": root,
-                        })
-                        if login_cookie:
-                            self._load_cookie_header_to_session(session=session, cookie=login_cookie)
+                        self._prepare_session(
+                            session=session,
+                            proxies=proxies,
+                            ua=ua,
+                            referer=root,
+                            cookie=login_cookie,
+                        )
                         current_root = self._normalize_base_url(root) or root
                         login_url = urljoin(current_root, "/user/login")
                         payload = {
@@ -1766,11 +1772,48 @@ class GyingIndexer(_PluginBase):
                         if login_cookie:
                             cookie_text = self._merge_cookie_str(login_cookie, cookie_text)
                         if cookie_text:
+                            logger.info(
+                                "观影(GYing)自动登录成功，已获取会话字段："
+                                f"{', '.join(sorted([item.name for item in session.cookies]))}"
+                            )
                             return cookie_text
                 except Exception as err:
                     logger.warn(f"观影(GYing)自动登录异常：{err}")
                     continue
         return ""
+
+    @staticmethod
+    def _prepare_session(session: requests.Session,
+                         proxies: Optional[Dict[str, str]] = None,
+                         ua: str = "",
+                         referer: str = "",
+                         cookie: str = "") -> requests.Session:
+        session.trust_env = False
+        session.proxies.clear()
+        if proxies:
+            session.proxies.update(proxies)
+        if ua or settings.USER_AGENT:
+            session.headers.update({"User-Agent": ua or settings.USER_AGENT})
+        if referer:
+            session.headers.update({"Referer": referer})
+        if cookie:
+            GyingIndexer._load_cookie_header_to_session(session=session, cookie=cookie)
+        return session
+
+    def _session_request(self, method: str, url: str,
+                         headers: Optional[Dict[str, str]] = None,
+                         proxies: Optional[Dict[str, str]] = None,
+                         timeout: int = 20,
+                         **kwargs) -> requests.Response:
+        with requests.Session() as session:
+            self._prepare_session(session=session, proxies=proxies)
+            return session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                timeout=max(5, int(timeout or 20)),
+                **kwargs,
+            )
 
     @staticmethod
     def _build_login_roots(base_url: str) -> List[str]:
@@ -1901,11 +1944,12 @@ class GyingIndexer(_PluginBase):
                         }
                         if current_cookie:
                             headers["Cookie"] = current_cookie
-                        resp = requests.get(
-                            target,
+                        resp = self._session_request(
+                            method="GET",
+                            url=target,
                             headers=headers,
                             proxies=proxies,
-                            timeout=max(5, int(timeout or 20)),
+                            timeout=timeout,
                         )
                         text = resp.text if resp.ok else ""
                         _record_http_timing(
@@ -1935,15 +1979,16 @@ class GyingIndexer(_PluginBase):
                         if latest_cookie:
                             retry_started_at = perf_counter()
                             try:
-                                resp = requests.get(
-                                    target,
+                                resp = self._session_request(
+                                    method="GET",
+                                    url=target,
                                     headers={
                                         "User-Agent": ua or settings.USER_AGENT,
                                         "Referer": base_url,
                                         "Cookie": latest_cookie,
                                     },
                                     proxies=proxies,
-                                    timeout=max(5, int(timeout or 20)),
+                                    timeout=timeout,
                                 )
                                 text = resp.text if resp.ok else ""
                                 _record_http_timing(
@@ -1989,15 +2034,16 @@ class GyingIndexer(_PluginBase):
                                 # 用新 cookie 重试当前 URL
                                 retry_started_at = perf_counter()
                                 try:
-                                    resp = requests.get(
-                                        target,
+                                    resp = self._session_request(
+                                        method="GET",
+                                        url=target,
                                         headers={
                                             "User-Agent": ua or settings.USER_AGENT,
                                             "Referer": base_url,
                                             "Cookie": merged,
                                         },
                                         proxies=proxies,
-                                        timeout=max(5, int(timeout or 20)),
+                                        timeout=timeout,
                                     )
                                     text = resp.text if resp.ok else ""
                                     _record_http_timing(
@@ -2429,14 +2475,15 @@ class GyingIndexer(_PluginBase):
                             timeout: int) -> List[str]:
         discover_url = urljoin(base_url, "urlop/")
         try:
-            resp = requests.get(
-                discover_url,
+            resp = self._session_request(
+                method="GET",
+                url=discover_url,
                 headers={
                     "User-Agent": ua or settings.USER_AGENT,
                     "Referer": base_url,
                 },
                 proxies=proxies,
-                timeout=max(5, int(timeout or 20)),
+                timeout=timeout,
             )
             if not resp.ok:
                 return []
@@ -2460,17 +2507,18 @@ class GyingIndexer(_PluginBase):
         return hosts
 
     def _probe_base_url(self, target: str, ua: str,
-                        proxies: Optional[Dict[str, str]],
+                        proxies: Optional[Dict[str, str]], 
                         timeout: int) -> Tuple[bool, bool, str]:
         try:
-            resp = requests.get(
-                target,
+            resp = self._session_request(
+                method="GET",
+                url=target,
                 headers={
                     "User-Agent": ua or settings.USER_AGENT,
                     "Referer": target,
                 },
                 proxies=proxies,
-                timeout=max(5, int(timeout or 20)),
+                timeout=timeout,
             )
             if not resp.ok:
                 return False, False, ""
@@ -2552,14 +2600,15 @@ class GyingIndexer(_PluginBase):
         for host in latest_hosts:
             candidate = f"{scheme}://www.{host}/"
             try:
-                resp = requests.get(
-                    candidate,
+                resp = self._session_request(
+                    method="GET",
+                    url=candidate,
                     headers={
                         "User-Agent": ua or settings.USER_AGENT,
                         "Referer": candidate,
                     },
                     proxies=proxies,
-                    timeout=max(5, int(timeout or 20)),
+                    timeout=timeout,
                 )
                 if resp.ok and not self._is_retired_host_page(resp.text):
                     return candidate
