@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.0.10"
+    plugin_version = "2.1.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1893,14 +1893,38 @@ class GyingIndexer(_PluginBase):
                         text = ""
                 else:
                     req_started_at = perf_counter()
-                    text = client.get(target) or ""
-                    _record_http_timing(
-                        phase="client",
-                        target=target,
-                        started_at=req_started_at,
-                        status="OK",
-                        extra=f"body={'有' if text else '空'}"
-                    )
+                    current_cookie = self._normalize_cookie_header(cookie)
+                    try:
+                        headers = {
+                            "User-Agent": ua or settings.USER_AGENT,
+                            "Referer": base_url,
+                        }
+                        if current_cookie:
+                            headers["Cookie"] = current_cookie
+                        resp = requests.get(
+                            target,
+                            headers=headers,
+                            proxies=proxies,
+                            timeout=max(5, int(timeout or 20)),
+                        )
+                        text = resp.text if resp.ok else ""
+                        _record_http_timing(
+                            phase="direct",
+                            target=target,
+                            started_at=req_started_at,
+                            status=str(resp.status_code),
+                            extra=f"body={'有' if text else '空'}"
+                        )
+                    except Exception as err:
+                        logger.warn(f"观影(GYing)请求异常：{err}")
+                        _record_http_timing(
+                            phase="direct",
+                            target=target,
+                            started_at=req_started_at,
+                            status="EXC",
+                            extra=str(err)
+                        )
+                        text = ""
 
                 # 若响应为 PoW 验证页，自动求解并重试
                 if self._is_pow_page(text) and base_url:
