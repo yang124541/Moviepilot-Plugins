@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.1.2"
+    plugin_version = "2.1.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1281,6 +1281,29 @@ class GyingIndexer(_PluginBase):
         return "; ".join(parts)
 
     @staticmethod
+    def _cookie_debug_summary(cookie: str = "",
+                              jar: Optional[requests.cookies.RequestsCookieJar] = None) -> str:
+        pairs: List[str] = []
+        if jar:
+            for item in jar:
+                name = str(getattr(item, "name", "") or "").strip()
+                value = str(getattr(item, "value", "") or "").strip()
+                if name:
+                    pairs.append(f"{name}={value[:12]}{'...' if len(value) > 12 else ''}")
+        elif cookie:
+            normalized = GyingIndexer._normalize_cookie_header(cookie)
+            for item in normalized.split(";"):
+                token = str(item or "").strip()
+                if "=" not in token:
+                    continue
+                name, value = token.split("=", 1)
+                name = name.strip()
+                value = value.strip()
+                if name:
+                    pairs.append(f"{name}={value[:12]}{'...' if len(value) > 12 else ''}")
+        return "; ".join(pairs) or "(空)"
+
+    @staticmethod
     def _load_cookie_header_to_session(session: requests.Session, cookie: str) -> None:
         cookie_text = GyingIndexer._normalize_cookie_header(cookie)
         if not cookie_text:
@@ -1402,6 +1425,11 @@ class GyingIndexer(_PluginBase):
             )
             body_text = str(resp.text or "").strip()
             logger.debug(f"观影(GYing)PoW 挑战响应：status={resp.status_code}，body={body_text[:200]}")
+            logger.info(
+                "观影(GYing)PoW 挑战会话摘要："
+                f"url={challenge_url}，referer={headers.get('Referer') or '-'}，"
+                f"cookies={self._cookie_debug_summary(jar=session.cookies)}"
+            )
             if not resp.ok:
                 return None
             obj = resp.json()
@@ -1505,6 +1533,11 @@ class GyingIndexer(_PluginBase):
             )
             body_text = str(resp.text or "").strip()
             logger.debug(f"观影(GYing)PoW 提交响应：status={resp.status_code}，body={body_text[:200]}")
+            logger.info(
+                "观影(GYing)PoW 提交会话摘要："
+                f"url={submit_url}，cookies={self._cookie_debug_summary(jar=session.cookies)}，"
+                f"body={body_text[:120]}"
+            )
             if resp.ok:
                 try:
                     obj = resp.json()
@@ -1724,6 +1757,10 @@ class GyingIndexer(_PluginBase):
                                         login_cookie,
                                         self._cookie_jar_to_header(session.cookies),
                                     )
+                                    logger.info(
+                                        "观影(GYing)自动登录直登摘要："
+                                        f"root={current_root}，cookies={self._cookie_debug_summary(jar=session.cookies)}"
+                                    )
                                     if cookie_text:
                                         return cookie_text
 
@@ -1775,6 +1812,10 @@ class GyingIndexer(_PluginBase):
                             logger.info(
                                 "观影(GYing)自动登录成功，已获取会话字段："
                                 f"{', '.join(sorted([item.name for item in session.cookies]))}"
+                            )
+                            logger.info(
+                                "观影(GYing)自动登录成功摘要："
+                                f"root={current_root}，cookies={self._cookie_debug_summary(jar=session.cookies)}"
                             )
                             return cookie_text
                 except Exception as err:
@@ -1906,15 +1947,20 @@ class GyingIndexer(_PluginBase):
                 if resolved_cookie:
                     req_started_at = perf_counter()
                     try:
-                        resp = requests.get(
-                            target,
+                        logger.info(
+                            "观影(GYing)使用已解 PoW cookie 请求："
+                            f"url={target}，cookies={self._cookie_debug_summary(cookie=resolved_cookie)}"
+                        )
+                        resp = self._session_request(
+                            method="GET",
+                            url=target,
                             headers={
                                 "User-Agent": ua or settings.USER_AGENT,
                                 "Referer": base_url,
                                 "Cookie": resolved_cookie,
                             },
                             proxies=proxies,
-                            timeout=max(5, int(timeout or 20)),
+                            timeout=timeout,
                         )
                         text = resp.text if resp.ok else ""
                         _record_http_timing(
@@ -1944,6 +1990,10 @@ class GyingIndexer(_PluginBase):
                         }
                         if current_cookie:
                             headers["Cookie"] = current_cookie
+                        logger.info(
+                            "观影(GYing)搜索请求摘要："
+                            f"url={target}，cookies={self._cookie_debug_summary(cookie=current_cookie)}"
+                        )
                         resp = self._session_request(
                             method="GET",
                             url=target,
@@ -1990,6 +2040,10 @@ class GyingIndexer(_PluginBase):
                                     proxies=proxies,
                                     timeout=timeout,
                                 )
+                                logger.info(
+                                    "观影(GYing)PoW 复用重试摘要："
+                                    f"url={target}，cookies={self._cookie_debug_summary(cookie=latest_cookie)}"
+                                )
                                 text = resp.text if resp.ok else ""
                                 _record_http_timing(
                                     phase="pow-reuse-retry",
@@ -2025,6 +2079,10 @@ class GyingIndexer(_PluginBase):
                                 with cache_lock:
                                     pow_resolved_cookie[0] = merged
                                 logger.info("观影(GYing)搜索中途 PoW 求解成功，正在重试请求...")
+                                logger.info(
+                                    "观影(GYing)PoW 新 cookie 摘要："
+                                    f"url={target}，cookies={self._cookie_debug_summary(cookie=merged)}"
+                                )
                                 # 回写 cookie，后续搜索直接使用新 cookie
                                 if site is not None:
                                     site["cookie"] = merged
