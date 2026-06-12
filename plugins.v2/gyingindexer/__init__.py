@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.1.6"
+    plugin_version = "2.1.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1515,7 +1515,6 @@ class GyingIndexer(_PluginBase):
             "Referer": referer_url,
             "Origin": f"{parsed_submit.scheme or 'https'}://{parsed_submit.netloc}",
         }
-        before_verified = str(session.cookies.get("browser_verified") or "").strip()
         try:
             resp = session.post(
                 submit_url,
@@ -1536,9 +1535,8 @@ class GyingIndexer(_PluginBase):
                         return False
                 except Exception:
                     pass
-                after_verified = str(session.cookies.get("browser_verified") or "").strip()
-                if after_verified and after_verified != before_verified:
-                    return True
+                logger.info("观影(GYing)PoW 提交未返回明确成功结果，交由后续同 session 请求确认是否已放行。")
+                return True
         except Exception as e:
             logger.debug(f"观影(GYing)PoW 提交异常：{e}")
         return False
@@ -1556,7 +1554,6 @@ class GyingIndexer(_PluginBase):
             "Referer": referer_url,
             "Origin": f"{parsed_submit.scheme or 'https'}://{parsed_submit.netloc}",
         }
-        before_verified = str(session.cookies.get("browser_verified") or "").strip()
         try:
             resp = session.post(
                 submit_url,
@@ -1582,9 +1579,8 @@ class GyingIndexer(_PluginBase):
                         return False
                 except Exception:
                     pass
-                after_verified = str(session.cookies.get("browser_verified") or "").strip()
-                if after_verified and after_verified != before_verified:
-                    return True
+                logger.info("观影(GYing)PoW 提交未返回明确成功结果，交由后续同 session 请求确认是否已放行。")
+                return True
         except Exception as err:
             logger.debug(f"观影(GYing)PoW 提交异常：{err}")
         return False
@@ -1804,7 +1800,19 @@ class GyingIndexer(_PluginBase):
                                         f"root={current_root}，cookies={self._cookie_debug_summary(jar=session.cookies)}"
                                     )
                                     if cookie_text:
-                                        return self._sanitize_cookie_str(cookie_text)
+                                        direct_cookie = self._sanitize_cookie_str(cookie_text)
+                                        ready, effective_cookie, _, _ = self._is_search_response_ready(
+                                            base_url=current_root,
+                                            keyword="测试",
+                                            ua=ua,
+                                            proxies=proxies,
+                                            timeout=timeout,
+                                            cookie=direct_cookie,
+                                        )
+                                        if ready:
+                                            logger.info("观影(GYing)自动登录直登后搜索页已放行，直接复用当前会话。")
+                                            return effective_cookie or direct_cookie
+                                        logger.info("观影(GYing)自动登录直登后搜索页仍未放行，继续执行预热/PoW 链路。")
 
                         try:
                             resp = session.get(root, timeout=max(5, int(timeout or 20)))
@@ -1868,7 +1876,18 @@ class GyingIndexer(_PluginBase):
                                 "观影(GYing)自动登录成功摘要："
                                 f"root={current_root}，cookies={self._cookie_debug_summary(jar=session.cookies)}"
                             )
-                            return self._sanitize_cookie_str(cookie_text)
+                            final_cookie = self._sanitize_cookie_str(cookie_text)
+                            ready, effective_cookie, _, _ = self._is_search_response_ready(
+                                base_url=current_root,
+                                keyword="测试",
+                                ua=ua,
+                                proxies=proxies,
+                                timeout=timeout,
+                                cookie=final_cookie,
+                            )
+                            if ready:
+                                return effective_cookie or final_cookie
+                            logger.warn("观影(GYing)自动登录成功但搜索页仍未放行，继续尝试下一个根域。")
                 except Exception as err:
                     logger.warn(f"观影(GYing)自动登录异常：{err}")
                     continue
