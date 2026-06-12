@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.1.5"
+    plugin_version = "2.1.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1515,6 +1515,7 @@ class GyingIndexer(_PluginBase):
             "Referer": referer_url,
             "Origin": f"{parsed_submit.scheme or 'https'}://{parsed_submit.netloc}",
         }
+        before_verified = str(session.cookies.get("browser_verified") or "").strip()
         try:
             resp = session.post(
                 submit_url,
@@ -1535,8 +1536,8 @@ class GyingIndexer(_PluginBase):
                         return False
                 except Exception:
                     pass
-                # 无法解析 JSON，但有 cookie 也视为成功
-                if session.cookies:
+                after_verified = str(session.cookies.get("browser_verified") or "").strip()
+                if after_verified and after_verified != before_verified:
                     return True
         except Exception as e:
             logger.debug(f"观影(GYing)PoW 提交异常：{e}")
@@ -1555,6 +1556,7 @@ class GyingIndexer(_PluginBase):
             "Referer": referer_url,
             "Origin": f"{parsed_submit.scheme or 'https'}://{parsed_submit.netloc}",
         }
+        before_verified = str(session.cookies.get("browser_verified") or "").strip()
         try:
             resp = session.post(
                 submit_url,
@@ -1580,7 +1582,8 @@ class GyingIndexer(_PluginBase):
                         return False
                 except Exception:
                     pass
-                if session.cookies:
+                after_verified = str(session.cookies.get("browser_verified") or "").strip()
+                if after_verified and after_verified != before_verified:
                     return True
         except Exception as err:
             logger.debug(f"观影(GYing)PoW 提交异常：{err}")
@@ -2223,18 +2226,12 @@ class GyingIndexer(_PluginBase):
                     logger.warn("观影(GYing)PoW 验证提交失败")
                     return ""
 
-                cookie_text = self._cookie_jar_to_header(session.cookies)
-                if cookie_text:
-                    logger.info("观影(GYing)PoW 验证完成，已获取 session cookie")
-                    return self._sanitize_cookie_str(cookie_text)
-
-                # 提交成功但 session 无 cookie：用同一 session 再请求一次 target_url
-                # 服务端可能通过 session 状态（而非 Set-Cookie）授权后续请求
-                logger.info("观影(GYing)PoW 提交后 session 无 cookie，尝试用同一 session 重试...")
+                # 无论 session 当前是否已有登录 cookie，都必须在同一 session 内确认目标页已经脱离 PoW。
+                logger.info("观影(GYing)PoW 提交后，正在同一 session 内确认目标页是否已放行...")
                 try:
                     resp2 = session.get(final_target_url, timeout=max(5, int(timeout or 20)))
                     if resp2.ok and not self._is_pow_page(resp2.text):
-                        # session 已通过验证，把 session cookies 返回（可能在这次请求才设置）
+                        # session 已通过验证，把当前 session cookies 返回（可能在这次请求才补齐 browser_verified）
                         cookie_text = self._cookie_jar_to_header(session.cookies)
                         logger.info(f"观影(GYing)PoW session 重试成功，cookie={cookie_text[:60] or '(空)'}")
                         sanitized = self._sanitize_cookie_str(cookie_text)
@@ -2242,7 +2239,7 @@ class GyingIndexer(_PluginBase):
                 except Exception:
                     pass
 
-                logger.warn("观影(GYing)PoW 验证后 session 仍无 cookie，重试可能无效")
+                logger.warn("观影(GYing)PoW 提交后目标页仍未放行，当前 session 内确认失败")
                 return ""
         except Exception as err:
             logger.warn(f"观影(GYing)PoW 求解异常：{err}")
