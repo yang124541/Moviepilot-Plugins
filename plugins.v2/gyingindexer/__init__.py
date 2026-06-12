@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.1.3"
+    plugin_version = "2.1.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1138,9 +1138,9 @@ class GyingIndexer(_PluginBase):
     def _merge_cookie_str(base: str, extra: str) -> str:
         """合并两个 cookie 字符串，extra 中同名字段覆盖 base。"""
         if not extra:
-            return base
+            return GyingIndexer._sanitize_cookie_str(base)
         if not base:
-            return extra
+            return GyingIndexer._sanitize_cookie_str(extra)
         parts: Dict[str, str] = {}
         for raw in (base, extra):
             for item in str(raw or "").split(";"):
@@ -1150,6 +1150,38 @@ class GyingIndexer(_PluginBase):
                     k = k.strip()
                     if k:
                         parts[k] = v.strip()
+        merged = "; ".join(f"{k}={v}" for k, v in parts.items())
+        return GyingIndexer._sanitize_cookie_str(merged)
+
+    @staticmethod
+    def _sanitize_cookie_str(cookie: str) -> str:
+        """
+        清理会污染新登录态的旧 cookie。
+        当已存在 PHPSESSID/app_auth 这类新会话字段时，丢弃旧版 BT_* 登录字段；
+        同时在已拿到 browser_verified 后丢弃一次性 browser_pow。
+        """
+        normalized = GyingIndexer._normalize_cookie_header(cookie)
+        if not normalized:
+            return ""
+
+        parts: Dict[str, str] = {}
+        for item in normalized.split(";"):
+            token = str(item or "").strip()
+            if "=" not in token:
+                continue
+            name, value = token.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if name:
+                parts[name] = value
+
+        has_new_auth = bool(parts.get("PHPSESSID") or parts.get("app_auth"))
+        if has_new_auth:
+            parts.pop("BT_auth", None)
+            parts.pop("BT_cookietime", None)
+        if parts.get("browser_verified"):
+            parts.pop("browser_pow", None)
+
         return "; ".join(f"{k}={v}" for k, v in parts.items())
 
     def _persist_site_cookie(self, site: dict, cookie: str) -> bool:
@@ -1682,8 +1714,10 @@ class GyingIndexer(_PluginBase):
                         body = str(resp2.text or "") if resp2.ok else ""
                     except Exception:
                         return False, cookie, url, ""
-                    # 合并原有 cookie + 新 cookie（browser_verified 等），避免丢失登录 session
-                    new_cookie = self._merge_cookie_str(cookie, self._cookie_jar_to_header(session.cookies))
+                    # 预检阶段若拿到新会话字段，清理旧 BT_* 登录态，只保留有效 cookie
+                    new_cookie = self._sanitize_cookie_str(
+                        self._merge_cookie_str(cookie, self._cookie_jar_to_header(session.cookies))
+                    )
                     if "_obj.search" in body:
                         return True, new_cookie or cookie, url, body
                     return False, new_cookie or cookie, url, body
@@ -1762,7 +1796,7 @@ class GyingIndexer(_PluginBase):
                                         f"root={current_root}，cookies={self._cookie_debug_summary(jar=session.cookies)}"
                                     )
                                     if cookie_text:
-                                        return cookie_text
+                                        return self._sanitize_cookie_str(cookie_text)
 
                         resp = session.get(root, timeout=max(5, int(timeout or 20)))
                         current_root = self._normalize_base_url(resp.url or root) or root
@@ -1817,7 +1851,7 @@ class GyingIndexer(_PluginBase):
                                 "观影(GYing)自动登录成功摘要："
                                 f"root={current_root}，cookies={self._cookie_debug_summary(jar=session.cookies)}"
                             )
-                            return cookie_text
+                            return self._sanitize_cookie_str(cookie_text)
                 except Exception as err:
                     logger.warn(f"观影(GYing)自动登录异常：{err}")
                     continue
@@ -2144,13 +2178,13 @@ class GyingIndexer(_PluginBase):
         """
         try:
             with requests.Session() as session:
-                session.proxies.update(proxies or {})
-                session.headers.update({
-                    "User-Agent": ua or settings.USER_AGENT,
-                    "Referer": base_url,
-                })
-                if existing_cookie:
-                    self._load_cookie_header_to_session(session=session, cookie=existing_cookie)
+                self._prepare_session(
+                    session=session,
+                    proxies=proxies,
+                    ua=ua,
+                    referer=base_url,
+                    cookie=existing_cookie,
+                )
 
                 # 用同一 session 请求 target_url，让服务端在该 session 里建立挑战绑定
                 resp = session.get(target_url, timeout=max(5, int(timeout or 20)))
@@ -2178,7 +2212,7 @@ class GyingIndexer(_PluginBase):
                 cookie_text = self._cookie_jar_to_header(session.cookies)
                 if cookie_text:
                     logger.info("观影(GYing)PoW 验证完成，已获取 session cookie")
-                    return cookie_text
+                    return self._sanitize_cookie_str(cookie_text)
 
                 # 提交成功但 session 无 cookie：用同一 session 再请求一次 target_url
                 # 服务端可能通过 session 状态（而非 Set-Cookie）授权后续请求
@@ -2189,7 +2223,8 @@ class GyingIndexer(_PluginBase):
                         # session 已通过验证，把 session cookies 返回（可能在这次请求才设置）
                         cookie_text = self._cookie_jar_to_header(session.cookies)
                         logger.info(f"观影(GYing)PoW session 重试成功，cookie={cookie_text[:60] or '(空)'}")
-                        return cookie_text or "pow_verified=1"  # 兜底标志，防止空字符串被误判为失败
+                        sanitized = self._sanitize_cookie_str(cookie_text)
+                        return sanitized or "pow_verified=1"  # 兜底标志，防止空字符串被误判为失败
                 except Exception:
                     pass
 
