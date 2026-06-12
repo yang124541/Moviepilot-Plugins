@@ -28,7 +28,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png"
-    plugin_version = "2.1.4"
+    plugin_version = "2.1.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -1730,6 +1730,11 @@ class GyingIndexer(_PluginBase):
                               proxies: Optional[Dict[str, str]], timeout: int,
                               existing_cookie: str = "") -> str:
         root_candidates = self._build_login_roots(base_url=base_url)
+        warmup_target = self._build_search_url(
+            base_url=base_url,
+            keyword="测试",
+            mode="precise",
+        )
         login_cookie_candidates: List[str] = []
         seen_cookie_candidates: Set[str] = set()
         for candidate in (existing_cookie, ""):
@@ -1798,8 +1803,17 @@ class GyingIndexer(_PluginBase):
                                     if cookie_text:
                                         return self._sanitize_cookie_str(cookie_text)
 
-                        resp = session.get(root, timeout=max(5, int(timeout or 20)))
-                        current_root = self._normalize_base_url(resp.url or root) or root
+                        try:
+                            resp = session.get(root, timeout=max(5, int(timeout or 20)))
+                            current_root = self._normalize_base_url(resp.url or root) or root
+                        except Exception as err:
+                            logger.warn(f"观影(GYing)登录预热根页失败，改用搜索页预热：root={root}，err={err}")
+                            try:
+                                resp = session.get(warmup_target, timeout=max(5, int(timeout or 20)))
+                                current_root = self._normalize_base_url(resp.url or base_url) or base_url
+                            except Exception as warm_err:
+                                logger.warn(f"观影(GYing)登录预热搜索页也失败：url={warmup_target}，err={warm_err}")
+                                continue
 
                         # 处理 PoW 人机验证
                         if resp.ok and self._is_pow_page(resp.text):
