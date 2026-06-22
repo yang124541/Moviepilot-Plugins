@@ -23,7 +23,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -216,14 +216,24 @@ class BtbtlaIndexer(_PluginBase):
         })
 
         try:
-            search_items = self._search_videos(
-                session=session,
-                base_url=base_url,
+            search_items: List[Dict[str, Any]] = []
+            used_search_keyword = str(keyword or "").strip()
+            search_keywords = self._build_search_keywords(
                 keyword=keyword,
-                timeout=timeout,
-                proxies=proxies,
-                client_ip=self._rand_ip(),
+                media_profile=media_profile,
             )
+            for candidate_keyword in search_keywords:
+                search_items = self._search_videos(
+                    session=session,
+                    base_url=base_url,
+                    keyword=candidate_keyword,
+                    timeout=timeout,
+                    proxies=proxies,
+                    client_ip=self._rand_ip(),
+                )
+                if search_items:
+                    used_search_keyword = candidate_keyword
+                    break
             search_video_count = len(search_items)
             if not search_items:
                 cost = (datetime.now() - start_at).seconds
@@ -268,6 +278,7 @@ class BtbtlaIndexer(_PluginBase):
             cost = (datetime.now() - start_at).seconds
             logger.info(
                 f"BT影视(btbtla)搜索完成：关键词='{keyword}'，"
+                f"实际搜索词='{used_search_keyword}'，"
                 f"找到视频={search_video_count}，返回磁力={len(results)}，耗时={cost}s"
             )
             return results
@@ -593,6 +604,15 @@ class BtbtlaIndexer(_PluginBase):
                 pass
 
         return profile
+
+    @staticmethod
+    def _build_search_keywords(keyword: str,
+                               media_profile: Optional[Dict[str, Any]] = None) -> List[str]:
+        candidates: List[Any] = [keyword]
+        if media_profile:
+            candidates.extend(media_profile.get("names") or [])
+            candidates.append(media_profile.get("title"))
+        return BtbtlaIndexer._unique_nonempty(candidates)
 
     def _select_best_detail_pages(
             self,
@@ -1491,9 +1511,9 @@ class BtbtlaIndexer(_PluginBase):
             return candidates
 
         for raw in (
+            self._default_base_url,
             site.get("url") if isinstance(site, dict) else "",
             site.get("domain") if isinstance(site, dict) else "",
-            self._default_base_url,
         ):
             base_url = self._normalize_base_url(raw)
             if base_url and base_url not in seen:
