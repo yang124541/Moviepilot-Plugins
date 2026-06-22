@@ -23,7 +23,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png"
-    plugin_version = "1.1.7"
+    plugin_version = "1.1.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -215,6 +215,13 @@ class BtbtlaIndexer(_PluginBase):
             "Accept-Language": "zh-CN,zh;q=0.9",
         })
 
+        logger.info(
+            f"BT影视(btbtla)搜索上下文：base_url='{base_url}'，"
+            f"proxy={'on' if proxies else 'off'}，"
+            f"cookie={'on' if cookie_from_site else 'off'}，"
+            f"ua='{str(ua)[:80]}'"
+        )
+
         try:
             search_items = self._search_videos(
                 session=session,
@@ -224,6 +231,16 @@ class BtbtlaIndexer(_PluginBase):
                 proxies=proxies,
                 client_ip=self._rand_ip(),
             )
+            if not search_items and proxies:
+                logger.info("BT影视(btbtla)搜索首轮无结果，开始重试直连无代理")
+                search_items = self._search_videos(
+                    session=session,
+                    base_url=base_url,
+                    keyword=keyword,
+                    timeout=timeout,
+                    proxies=None,
+                    client_ip=self._rand_ip(),
+                )
             search_video_count = len(search_items)
             if not search_items:
                 cost = (datetime.now() - start_at).seconds
@@ -1095,10 +1112,16 @@ class BtbtlaIndexer(_PluginBase):
                     headers=headers,
                 )
             except Exception as err:
-                logger.debug(f"BT影视(btbtla)搜索页请求异常：page={page_no}，错误={err}")
+                logger.info(
+                    f"BT影视(btbtla)搜索页请求异常：page={page_no}，"
+                    f"url='{search_url}'，错误={err}"
+                )
                 break
             if not resp.ok:
-                logger.debug(f"BT影视(btbtla)搜索页请求失败：page={page_no}，status={resp.status_code}")
+                logger.info(
+                    f"BT影视(btbtla)搜索页请求失败：page={page_no}，"
+                    f"status={resp.status_code}，url='{search_url}'"
+                )
                 break
 
             page_items = self._parse_search_results(resp.text)
