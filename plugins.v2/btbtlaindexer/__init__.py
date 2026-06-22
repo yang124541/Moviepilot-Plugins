@@ -216,24 +216,14 @@ class BtbtlaIndexer(_PluginBase):
         })
 
         try:
-            search_items: List[Dict[str, Any]] = []
-            used_search_keyword = str(keyword or "").strip()
-            search_keywords = self._build_search_keywords(
+            search_items = self._search_videos(
+                session=session,
+                base_url=base_url,
                 keyword=keyword,
-                media_profile=media_profile,
+                timeout=timeout,
+                proxies=proxies,
+                client_ip=self._rand_ip(),
             )
-            for candidate_keyword in search_keywords:
-                search_items = self._search_videos(
-                    session=session,
-                    base_url=base_url,
-                    keyword=candidate_keyword,
-                    timeout=timeout,
-                    proxies=proxies,
-                    client_ip=self._rand_ip(),
-                )
-                if search_items:
-                    used_search_keyword = candidate_keyword
-                    break
             search_video_count = len(search_items)
             if not search_items:
                 cost = (datetime.now() - start_at).seconds
@@ -278,7 +268,6 @@ class BtbtlaIndexer(_PluginBase):
             cost = (datetime.now() - start_at).seconds
             logger.info(
                 f"BT影视(btbtla)搜索完成：关键词='{keyword}'，"
-                f"实际搜索词='{used_search_keyword}'，"
                 f"找到视频={search_video_count}，返回磁力={len(results)}，耗时={cost}s"
             )
             return results
@@ -604,15 +593,6 @@ class BtbtlaIndexer(_PluginBase):
                 pass
 
         return profile
-
-    @staticmethod
-    def _build_search_keywords(keyword: str,
-                               media_profile: Optional[Dict[str, Any]] = None) -> List[str]:
-        candidates: List[Any] = [keyword]
-        if media_profile:
-            candidates.extend(media_profile.get("names") or [])
-            candidates.append(media_profile.get("title"))
-        return BtbtlaIndexer._unique_nonempty(candidates)
 
     def _select_best_detail_pages(
             self,

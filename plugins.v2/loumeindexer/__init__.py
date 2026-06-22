@@ -193,10 +193,6 @@ class LoumeIndexer(_PluginBase):
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
         logger.info(f"BT之家(1lou)开始搜索：关键词='{keyword}'")
-        media_profile = self._resolve_moviepilot_title_candidates(
-            keyword=keyword,
-            mtype=mtype,
-        )
 
         try:
             # 构建带 cookie 的 session
@@ -212,34 +208,20 @@ class LoumeIndexer(_PluginBase):
                 "Accept-Language": "zh-CN,zh;q=0.9",
             })
 
-            thread_items: List[Dict[str, Any]] = []
-            blocked_by_cf = False
-            used_search_keyword = str(keyword or "").strip()
-            search_keywords = self._build_search_keywords(
+            search_client_ip = self._rand_ip() if use_spoof_ip else ""
+            thread_items, blocked_by_cf = self._search_threads(
+                session=session,
+                base_url=base_url,
                 keyword=keyword,
-                media_profile=media_profile,
+                timeout=timeout,
+                proxies=proxies,
+                client_ip=search_client_ip,
             )
-            for candidate_keyword in search_keywords:
-                search_client_ip = self._rand_ip() if use_spoof_ip else ""
-                thread_items, blocked_by_cf = self._search_threads(
-                    session=session,
-                    base_url=base_url,
-                    keyword=candidate_keyword,
-                    timeout=timeout,
-                    proxies=proxies,
-                    client_ip=search_client_ip,
-                )
-                if blocked_by_cf or thread_items:
-                    used_search_keyword = candidate_keyword
-                    break
 
             if not thread_items:
                 if blocked_by_cf:
                     return []
-                logger.info(
-                    f"BT之家(1lou)搜索无结果：关键词='{keyword}'，"
-                    f"已尝试搜索词={search_keywords}"
-                )
+                logger.info(f"BT之家(1lou)搜索无结果：关键词='{keyword}'")
                 return []
 
             filtered_thread_items = [
@@ -326,7 +308,6 @@ class LoumeIndexer(_PluginBase):
             cost = (datetime.now() - start_at).seconds
             logger.info(
                 f"BT之家(1lou)搜索完成：关键词='{keyword}'，"
-                f"实际搜索词='{used_search_keyword}'，"
                 f"找到帖子={len(thread_items)}，分类过滤后帖子={len(filtered_thread_items)}，返回种子={len(results)}，耗时={cost}s"
             )
             return results
@@ -405,115 +386,6 @@ class LoumeIndexer(_PluginBase):
                         )
                         attach_map[tid] = []
         return attach_map
-
-    def _resolve_moviepilot_title_candidates(
-            self,
-            keyword: str,
-            mtype: MediaType = None) -> Dict[str, Any]:
-        profile: Dict[str, Any] = {
-            "title": str(keyword or "").strip(),
-            "names": [],
-            "source": "none",
-        }
-        keyword_text = str(keyword or "").strip()
-        if not keyword_text:
-            return profile
-
-        try:
-            from app.core.metainfo import MetaInfo
-        except Exception:
-            return profile
-
-        meta = MetaInfo(title=keyword_text)
-        meta_name = str(getattr(meta, "name", "") or "").strip()
-        meta_cn_name = str(getattr(meta, "cn_name", "") or "").strip()
-        if meta_name or meta_cn_name:
-            profile["names"] = self._unique_nonempty([meta_cn_name, meta_name, keyword_text])
-
-        try:
-            from app.modules.themoviedb.tmdb_cache import TmdbCache
-            cached = TmdbCache().get(meta) or {}
-            cached_title = str(cached.get("title") or "").strip()
-            if cached_title:
-                profile["title"] = cached_title
-                profile["names"] = self._unique_nonempty(
-                    [cached_title]
-                    + list(cached.get("names") or [])
-                    + profile["names"]
-                )
-                profile["source"] = "cache"
-        except Exception:
-            pass
-
-        try:
-            from app.modules.themoviedb.tmdbapi import TmdbApi
-        except Exception:
-            return profile
-
-        api = None
-        try:
-            api = TmdbApi(language=settings.TMDB_LOCALE)
-        except Exception:
-            try:
-                api = TmdbApi()
-            except Exception:
-                return profile
-
-        try:
-            normalized_mtype = self._normalize_profile_mtype(meta.type or mtype)
-            matched = api.match(
-                name=str(meta.name or keyword_text).strip(),
-                mtype=normalized_mtype,
-                year=str(getattr(meta, "year", "") or "").strip() or None,
-            ) or {}
-            matched_tmdbid = self._to_int(matched.get("id"))
-            tmdb_info = matched
-            if matched_tmdbid > 0 and hasattr(api, "get_info"):
-                detailed = api.get_info(
-                    mtype=self._normalize_profile_mtype(
-                        matched.get("media_type") or matched.get("type") or normalized_mtype
-                    ),
-                    tmdbid=matched_tmdbid,
-                ) or {}
-                if detailed:
-                    tmdb_info = detailed
-            if tmdb_info:
-                resolved_title = str(
-                    tmdb_info.get("title")
-                    or tmdb_info.get("name")
-                    or profile["title"]
-                ).strip()
-                if resolved_title:
-                    profile["title"] = resolved_title
-                profile["names"] = self._unique_nonempty(
-                    [profile["title"]]
-                    + list(tmdb_info.get("names") or [])
-                    + [
-                        tmdb_info.get("original_title"),
-                        tmdb_info.get("original_name"),
-                    ]
-                    + profile["names"]
-                )
-                if matched_tmdbid > 0:
-                    profile["source"] = "match"
-        except Exception:
-            pass
-        finally:
-            try:
-                if api and hasattr(api, "close"):
-                    api.close()
-            except Exception:
-                pass
-        return profile
-
-    @staticmethod
-    def _build_search_keywords(keyword: str,
-                               media_profile: Optional[Dict[str, Any]] = None) -> List[str]:
-        candidates: List[Any] = [keyword]
-        if media_profile:
-            candidates.extend(media_profile.get("names") or [])
-            candidates.append(media_profile.get("title"))
-        return LoumeIndexer._unique_nonempty(candidates)
 
     def _fetch_single_thread_attachments(
             self,
@@ -1105,43 +977,6 @@ class LoumeIndexer(_PluginBase):
         except Exception:
             concurrency = 5
         return max(1, min(concurrency, 100))
-
-    @staticmethod
-    def _normalize_profile_mtype(mtype: MediaType = None):
-        if mtype is None:
-            return None
-        value = getattr(mtype, "value", mtype)
-        text = str(value or "").strip()
-        if not text:
-            return None
-        normalized = text.lower()
-        if normalized in ("movie", "movies", "film"):
-            return MediaType.MOVIE
-        if normalized in ("tv", "television", "series"):
-            return MediaType.TV
-        return mtype
-
-    @staticmethod
-    def _unique_nonempty(items: List[Any]) -> List[str]:
-        ret: List[str] = []
-        seen = set()
-        for item in items or []:
-            text = str(item or "").strip()
-            if not text:
-                continue
-            lowered = text.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            ret.append(text)
-        return ret
-
-    @staticmethod
-    def _to_int(value: Any) -> int:
-        try:
-            return int(str(value or "").strip())
-        except Exception:
-            return 0
 
     def _match_target_site(self, site: dict) -> bool:
         site_id = str(site.get("id") or "").strip().lower()
