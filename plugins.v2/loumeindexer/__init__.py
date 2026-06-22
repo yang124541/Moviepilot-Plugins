@@ -23,7 +23,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png"
-    plugin_version = "1.1.9"
+    plugin_version = "1.2.1"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -35,7 +35,7 @@ class LoumeIndexer(_PluginBase):
     _detail_concurrency = 5
 
     _default_host = "1lou.me"
-    _default_base_url = "http://www.1lou.me/"
+    _default_base_url = "https://www.1lou.me/"
     _allowed_forum_ids = {1, 2, 3, 4}
 
     # 搜索最大分页
@@ -199,6 +199,8 @@ class LoumeIndexer(_PluginBase):
             session = _requests.Session()
             cookie_from_site = str(site.get("cookie") or "").strip()
             use_spoof_ip = not self._has_cloudflare_clearance(cookie_from_site)
+            search_client_ip = self._rand_ip() if use_spoof_ip else ""
+
             if cookie_from_site:
                 session.headers.update({"Cookie": cookie_from_site})
 
@@ -208,14 +210,7 @@ class LoumeIndexer(_PluginBase):
                 "Accept-Language": "zh-CN,zh;q=0.9",
             })
 
-            logger.info(
-                f"BT之家(1lou)搜索上下文：base_url='{base_url}'，"
-                f"proxy={'on' if proxies else 'off'}，"
-                f"cookie={'on' if cookie_from_site else 'off'}，"
-                f"ua='{str(ua)[:80]}'"
-            )
-
-            search_client_ip = self._rand_ip() if use_spoof_ip else ""
+            # 搜索帖子列表
             thread_items, blocked_by_cf = self._search_threads(
                 session=session,
                 base_url=base_url,
@@ -224,17 +219,6 @@ class LoumeIndexer(_PluginBase):
                 proxies=proxies,
                 client_ip=search_client_ip,
             )
-
-            if not thread_items and not blocked_by_cf and proxies:
-                logger.info("BT之家(1lou)搜索首轮无结果，开始重试直连无代理")
-                thread_items, blocked_by_cf = self._search_threads(
-                    session=session,
-                    base_url=base_url,
-                    keyword=keyword,
-                    timeout=timeout,
-                    proxies=None,
-                    client_ip=search_client_ip,
-                )
 
             if not thread_items:
                 if blocked_by_cf:
@@ -500,17 +484,11 @@ class LoumeIndexer(_PluginBase):
                     blocked_by_cf = True
                     break
                 if not resp.ok:
-                    logger.info(
-                        f"BT之家(1lou)搜索请求失败：page={page_num}，"
-                        f"status={resp.status_code}，url='{url}'"
-                    )
+                    logger.debug(f"BT之家(1lou)搜索请求失败：status={resp.status_code}，page={page_num}")
                     break
                 html = resp.text
             except Exception as e:
-                logger.info(
-                    f"BT之家(1lou)搜索请求异常：page={page_num}，"
-                    f"url='{url}'，错误={e}"
-                )
+                logger.debug(f"BT之家(1lou)搜索请求异常：page={page_num}，{e}")
                 break
 
             items = self._parse_thread_list(html)
@@ -1060,9 +1038,9 @@ class LoumeIndexer(_PluginBase):
             return candidates
 
         for raw in (
-            self._default_base_url,
             site.get("url") if isinstance(site, dict) else "",
             site.get("domain") if isinstance(site, dict) else "",
+            self._default_base_url,
         ):
             base_url = self._normalize_base_url(raw)
             if base_url and base_url not in seen:
