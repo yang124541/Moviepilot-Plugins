@@ -3,12 +3,13 @@
     "name": "电影港（dyg55）",
     "description": "为 MoviePilot 增加 dyg55.com 电影港 BT 种子搜索支持，支持可配置域名与并发抓取。",
     "labels": "站点,索引",
-    "version": "2.0.1",
-    "icon": "Dyg55Indexer.png",
+    "version": "2.0.2",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/Dyg55Indexer.png",
     "author": "yang124541",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
+      "v2.0.2": "使用完整 Raw 图标 URL，兼容 MoviePilot V3 市场和已安装插件的图标加载。",
       "v2.0.1": "图标迁移至仓库 icons 目录，兼容 MoviePilot V3 已安装插件的图标解析。",
       "v2.0.0": "迁移至 MoviePilot V3：使用稳定 SDK 与 V3 插件目录、索引。"
     }
@@ -17,12 +18,13 @@
     "name": "BT之家",
     "description": "为 MoviePilot 增加 1lou.me BT论坛种子搜索支持。",
     "labels": "站点,索引",
-    "version": "2.0.1",
-    "icon": "LoumeIndexer.png",
+    "version": "2.0.2",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png",
     "author": "yang124541",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
+      "v2.0.2": "使用完整 Raw 图标 URL，兼容 MoviePilot V3 市场和已安装插件的图标加载。",
       "v2.0.1": "图标迁移至仓库 icons 目录，兼容 MoviePilot V3 已安装插件的图标解析。",
       "v2.0.0": "迁移至 MoviePilot V3：使用稳定 SDK 与 V3 插件目录、索引。"
     }
@@ -31,12 +33,13 @@
     "name": "BT影视",
     "description": "为 MoviePilot 增加 btbtla.com 磁力搜索支持。",
     "labels": "站点,索引",
-    "version": "2.0.1",
-    "icon": "BtbtlaIndexer.png",
+    "version": "2.0.2",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/BtbtlaIndexer.png",
     "author": "yang124541",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
+      "v2.0.2": "使用完整 Raw 图标 URL，兼容 MoviePilot V3 市场和已安装插件的图标加载。",
       "v2.0.1": "图标迁移至仓库 icons 目录，兼容 MoviePilot V3 已安装插件的图标解析。",
       "v2.0.0": "迁移至 MoviePilot V3：使用稳定 SDK 与 V3 插件目录、索引。"
     }
@@ -45,12 +48,13 @@
     "name": "老电影资源（ldysg）",
     "description": "为 MoviePilot 增加 ldysg 新站老旧电影磁力搜索支持，自动识别验证码。",
     "labels": "站点,索引",
-    "version": "2.0.1",
-    "icon": "LdysgIndexer.png",
+    "version": "2.0.2",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LdysgIndexer.png",
     "author": "yang124541",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
+      "v2.0.2": "使用完整 Raw 图标 URL，兼容 MoviePilot V3 市场和已安装插件的图标加载。",
       "v2.0.1": "图标迁移至仓库 icons 目录，兼容 MoviePilot V3 已安装插件的图标解析。",
       "v2.0.0": "迁移至 MoviePilot V3：使用稳定 SDK，依赖改由 pyproject.toml 声明。"
     }
@@ -59,12 +63,13 @@
     "name": "观影（GYing）",
     "description": "为 MoviePilot 增加 GYing 磁力搜索与清晰度过滤支持。",
     "labels": "站点,索引",
-    "version": "3.0.1",
-    "icon": "GyingIndexer.png",
+    "version": "3.0.2",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/GyingIndexer.png",
     "author": "yang124541",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
+      "v3.0.2": "使用完整 Raw 图标 URL，兼容 MoviePilot V3 市场和已安装插件的图标加载。",
       "v3.0.1": "图标迁移至仓库 icons 目录，兼容 MoviePilot V3 已安装插件的图标解析。",
       "v3.0.0": "迁移至 MoviePilot V3：使用稳定 SDK 与 V3 插件目录、索引。"
     }
@@ -73,12 +78,13 @@
     "name": "迅雷下载接管",
     "description": "接管 MoviePilot 下载到迅雷，并可自动搬运到监控目录。",
     "labels": "下载器",
-    "version": "3.0.1",
-    "icon": "XunleiHijackDownloader.png",
+    "version": "3.0.2",
+    "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/XunleiHijackDownloader.png",
     "author": "yang124541",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
+      "v3.0.2": "使用完整 Raw 图标 URL，兼容 MoviePilot V3 市场和已安装插件的图标加载。",
       "v3.0.1": "图标迁移至仓库 icons 目录，兼容 MoviePilot V3 已安装插件的图标解析。",
       "v3.0.0": "迁移至 MoviePilot V3：使用稳定 SDK 和公开下载历史 Oper。"
     }
