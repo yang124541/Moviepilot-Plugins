@@ -17,7 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.sdk.config import settings
 from app.sdk.logging import logger
 from app.sdk.media import TorrentInfo
-from app.sdk.network import RequestUtils, SitesHelper
+from app.sdk.network import RequestUtils
 from app.plugins import _PluginBase
 from app.schemas.types import MediaType
 from app.sdk.utilities import StringUtils
@@ -27,7 +27,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/GyingIndexer.png"
-    plugin_version = "3.0.2"
+    plugin_version = "3.0.3"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -352,8 +352,9 @@ class GyingIndexer(_PluginBase):
                         page: Optional[int] = 0) -> Optional[List[TorrentInfo]]:
         if not self._enabled:
             return None
-        if not site or not keyword:
+        if not keyword:
             return []
+        site = dict(site or self._plugin_site())
         if not self._match_target_site(site):
             return None
 
@@ -2487,22 +2488,19 @@ class GyingIndexer(_PluginBase):
         return candidates
 
     def _register_builtin_indexer(self) -> None:
-        ordered_extra_hosts = self._ordered_extra_hosts()
-        hosts = self._registered_hosts()
-        if not hosts:
-            return
+        logger.debug("观影(GYing)使用 MoviePilot V3 插件资源源，不再注册 SitesHelper 索引器。")
 
-        primary = ordered_extra_hosts[0] if ordered_extra_hosts else (
-            "xn--kivn76b41nnhi.com" if "xn--kivn76b41nnhi.com" in hosts else hosts[0]
-        )
-        indexer = self._build_indexer_schema(primary_host=primary, all_hosts=hosts)
-
-        for host in hosts:
-            try:
-                SitesHelper().add_indexer(domain=host, indexer=indexer)
-            except Exception as err:
-                logger.warn(f"观影(GYing)索引器注册失败：域名={host}，错误={err}")
-        logger.info(f"观影(GYing)索引器注册完成：域名列表={', '.join(hosts)}")
+    def _plugin_site(self) -> Dict[str, Any]:
+        """为 V3 插件资源源调用构造内部站点配置。"""
+        host = (self._ordered_extra_hosts() or ["xn--kivn76b41nnhi.com"])[0]
+        return {
+            "id": "gying",
+            "name": self.plugin_name,
+            "domain": host,
+            "url": self._preferred_site_base_url(host),
+            "timeout": 20,
+            "proxy": True,
+        }
 
     @staticmethod
     def _build_indexer_schema(primary_host: str, all_hosts: List[str]) -> Dict[str, Any]:
