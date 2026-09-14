@@ -1,0 +1,7 @@
+[project]
+name = "moviepilot-plugin-ldysgindexer"
+dynamic = ["version"]
+requires-python = ">=3.12"
+dependencies = [
+    "ddddocr>=1.5.5",
+]

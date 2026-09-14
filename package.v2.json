@@ -7,6 +7,7 @@
     "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/dyg55.png?v=1.1.3",
     "author": "yang124541",
     "level": 2,
+    "v3": false,
     "history": {
       "v1.1.3": "修复电影港额外域名仅影响实际搜索、不再收窄索引器注册域名：填写 extra_hosts 后仍同时注册内置旧域名，保证站点管理暂时保持旧网址时也能被插件接管，并继续优先使用插件内新域名搜索。",
       "v1.1.2": "版本号提升到 1.1.2，并保持当前 pubdate 置空逻辑，避免 MoviePilot 的 search/last 恢复链路因类型校验导致结果丢失。",
@@ -31,6 +32,7 @@
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/loume.png",
     "author": "yang124541",
     "level": 2,
+    "v3": false,
     "history": {
       "v1.2.1": "恢复到昨天前的稳定搜索逻辑，并统一版本号到 1.2.1。",
       "v1.1.7": "修复 BT之家携带 cf_clearance 时仍被 Cloudflare 拦截：站点 Cookie 中包含 cf_clearance 时不再额外伪造随机 X-Forwarded-For/X-Real-IP，避免与浏览器会话上下文失配导致持续挑战。",
@@ -57,6 +59,7 @@
     "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/btbtla.png",
     "author": "yang124541",
     "level": 2,
+    "v3": false,
     "history": {
       "v1.2.1": "恢复到昨天前的稳定搜索逻辑，并统一版本号到 1.2.1。",
       "v1.1.6": "修复 BT影视额外域名仅影响实际搜索、不再收窄索引器注册域名：填写 extra_hosts 后仍同时注册内置旧域名，保证站点管理暂时保持旧网址时也能被插件接管，并继续优先使用插件内新域名搜索。",
@@ -87,6 +90,7 @@
     "icon": "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/ldysg.png?v=1.5.3",
     "author": "yang124541",
     "level": 2,
+    "v3": false,
     "history": {
       "v1.5.3": "修复老电影新站域名链路：页面入口仍走 www.ldysg.win，但详情页预热、验证码图片与资源相关 Referer 统一切到实际生效的 www.ldysg.top，避免接口已迁到 ldysg.top 后继续从 ldysg.win 取详情/验证码导致 404 与后续取资源异常。",
       "v1.5.2": "修复老电影额外域名仅影响实际搜索、不再收窄索引器注册域名：填写 extra_hosts 后仍同时注册内置旧域名与别名展开，保证站点管理暂时保持旧网址时也能被插件接管，并继续优先使用插件内新域名搜索。",
@@ -140,6 +144,7 @@
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/gying.png",
     "author": "yang124541",
     "level": 2,
+    "v3": false,
     "history": {
       "v2.1.8": "修复 GYing 自动登录的直登短路误判：/user/login 返回 code=200 后不再直接视为会话可搜索，现强制在同一会话内确认搜索页是否已放行；若仍命中 PoW，则继续走预热/PoW 链路，避免仅拿到 PHPSESSID/app_auth 就提前返回导致后续搜索继续被浏览器验证拦截。",
       "v2.1.7": "放宽 GYing 搜索阶段 PoW 提交判定：/res/pow POST 只要服务端未明确返回 success=false，就继续进入同一 session 的目标页确认，不再因未立即返回 success=true 或未立刻写入 browser_verified 而过早判失败，兼容站点“提交成功但需下一跳才真正放行”的情况。",
@@ -259,6 +264,7 @@
     "icon": "https://raw.githubusercontent.com/yang124541/moviepilot-plugin/main/xunlei.png",
     "author": "yang124541",
     "level": 2,
+    "v3": false,
     "history": {
       "v2.4.2": "补齐失败重试新任务的已搬移判断链路：列表/状态判断在 task_id 变化后也会继续按任务名回查已改名的电影路径，避免搬移过程中漏判导致未加保护后缀的文件提前暴露到监控目录。",
       "v2.4.1": "修复失败重试后新任务回退到监控根目录的问题：只要能按任务名命中原下载历史，就继续沿用原先的类型/分类路径搬运；同时保留种子控制、搬移开始/结束以及迅雷连接诊断日志。",
