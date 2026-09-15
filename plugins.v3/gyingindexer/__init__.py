@@ -27,7 +27,7 @@ class GyingIndexer(_PluginBase):
     plugin_name = "观影（GYing）"
     plugin_desc = "为 GYing 提供磁力搜索与清晰度过滤支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/GyingIndexer.png"
-    plugin_version = "3.0.3"
+    plugin_version = "3.0.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "gyingindexer_"
@@ -766,7 +766,7 @@ class GyingIndexer(_PluginBase):
             enclosure=enclosure
         )
         return res_id, TorrentInfo(
-            site=site.get("id"),
+            site=self._numeric_site_id(site.get("id")),
             site_name=site.get("name"),
             site_cookie=site.get("cookie"),
             site_ua=site.get("ua"),
@@ -861,7 +861,7 @@ class GyingIndexer(_PluginBase):
         )
 
         return child_id, TorrentInfo(
-            site=site.get("id"),
+            site=self._numeric_site_id(site.get("id")),
             site_name=site.get("name"),
             site_cookie=site.get("cookie"),
             site_ua=site.get("ua"),
@@ -2501,6 +2501,21 @@ class GyingIndexer(_PluginBase):
             "timeout": 20,
             "proxy": True,
         }
+
+    @staticmethod
+    def _numeric_site_id(value: Any) -> Optional[int]:
+        """仅把宿主真实站点 ID 传给 V3 下载接口。
+
+        插件资源源使用的内部标识 ``gying`` 只用于搜索路由，不能作为
+        ``TorrentInfo.site`` 返回。V3 的下载接口要求该字段为整数，保留
+        字符串会让请求在进入下载插件前被参数校验拒绝。
+        """
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _build_indexer_schema(primary_host: str, all_hosts: List[str]) -> Dict[str, Any]:
