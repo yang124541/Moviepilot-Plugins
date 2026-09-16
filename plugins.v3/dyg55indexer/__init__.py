@@ -22,7 +22,7 @@ class Dyg55Indexer(_PluginBase):
     plugin_name = "电影港（dyg55）"
     plugin_desc = "为 dyg55.com 提供电影港 BT 种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/Dyg55Indexer.png"
-    plugin_version = "2.0.3"
+    plugin_version = "2.0.4"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "dyg55indexer_"
