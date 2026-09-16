@@ -22,7 +22,7 @@ class BtbtlaIndexer(_PluginBase):
     plugin_name = "BT影视"
     plugin_desc = "为 btbtla.com 提供磁力搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/BtbtlaIndexer.png"
-    plugin_version = "2.0.4"
+    plugin_version = "2.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "btbtlaindexer_"
@@ -672,8 +672,6 @@ class BtbtlaIndexer(_PluginBase):
         ]
 
         score = 0
-        if not detail_page.get("download_items"):
-            score -= 120
 
         for page_name_norm in page_name_norms:
             for profile_name_norm in profile_name_norms:
@@ -702,6 +700,8 @@ class BtbtlaIndexer(_PluginBase):
 
         if self._looks_like_non_target_entry(detail_page=detail_page, keyword=keyword, mtype=mtype):
             score -= 220
+        if not detail_page.get("download_items"):
+            score -= 1200
         return score
 
     def _score_actor_match(self, detail_actors: List[str], profile_actors: List[str]) -> int:
@@ -986,7 +986,7 @@ class BtbtlaIndexer(_PluginBase):
         magnet = unescape(
             self._extract_first_match(
                 html,
-                r'href="(magnet:\?[^"]+)"',
+                r'''<a\b[^>]*\bhref=["'](magnet:\?[^"']+)["']''',
             )
         ).strip()
         info_hash = self._extract_first_match(

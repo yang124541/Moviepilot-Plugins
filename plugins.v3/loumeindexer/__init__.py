@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.4"
+    plugin_version = "2.0.5"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -790,7 +790,11 @@ class LoumeIndexer(_PluginBase):
         text = str(block or "")
         if not text:
             return None
-        matches = re.findall(r'href="forum-(\d+)-\d+\.htm(?:\?[^"]*)?"', text, re.IGNORECASE)
+        matches = re.findall(
+            r'href="forum-(\d+)(?:-\d+)?\.htm(?:\?[^"]*)?"',
+            text,
+            re.IGNORECASE,
+        )
         for raw in matches:
             try:
                 return int(raw)
