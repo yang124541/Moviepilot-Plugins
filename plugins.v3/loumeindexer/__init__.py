@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.13"
+    plugin_version = "2.0.14"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -195,7 +195,10 @@ class LoumeIndexer(_PluginBase):
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
-        logger.info(f"BT之家(1lou)开始搜索：关键词='{keyword}'")
+        logger.info(
+            f"BT之家(1lou)开始搜索：版本=v{self.plugin_version}，"
+            f"地址={base_url}，关键词='{keyword}'"
+        )
 
         try:
             # 构建带 cookie 的 session
@@ -550,7 +553,8 @@ class LoumeIndexer(_PluginBase):
                 break
             if resp is None:
                 logger.warn(
-                    f"BT之家(1lou)新版搜索接口请求失败：page={page_num}，"
+                    f"BT之家(1lou)新版搜索接口请求失败："
+                    f"版本=v{self.plugin_version}，地址={api_url}，page={page_num}，"
                     f"已尝试代理和直连，最后错误={last_error or '未知错误'}"
                 )
                 return [], True, False
