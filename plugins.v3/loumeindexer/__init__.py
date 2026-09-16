@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.5"
+    plugin_version = "2.0.6"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -459,6 +459,131 @@ class LoumeIndexer(_PluginBase):
                         keyword: str, timeout: int,
                         proxies: Optional[Dict[str, str]],
                         client_ip: str = "") -> Tuple[List[Dict[str, Any]], bool]:
+        """优先使用当前站点的 JSON 搜索接口，旧站点保留 HTML 回退。"""
+        api_items, api_available, blocked_by_cf = self._search_threads_api(
+            session=session,
+            base_url=base_url,
+            keyword=keyword,
+            timeout=timeout,
+            proxies=proxies,
+            client_ip=client_ip,
+        )
+        if api_available or blocked_by_cf:
+            return api_items, blocked_by_cf
+        return self._search_threads_legacy(
+            session=session,
+            base_url=base_url,
+            keyword=keyword,
+            timeout=timeout,
+            proxies=proxies,
+            client_ip=client_ip,
+        )
+
+    def _search_threads_api(self, session: _requests.Session, base_url: str,
+                            keyword: str, timeout: int,
+                            proxies: Optional[Dict[str, str]],
+                            client_ip: str = "") -> Tuple[List[Dict[str, Any]], bool, bool]:
+        """调用新版 /search/api/search.php 接口并转换为帖子列表。"""
+        all_items: List[Dict[str, Any]] = []
+        seen_tids: set = set()
+        api_url = urljoin(base_url, "search/api/search.php")
+        page_size = 0
+        total = 0
+
+        for page_num in range(1, self._max_search_pages + 1):
+            headers = dict(session.headers)
+            headers["Accept"] = "application/json"
+            headers["Referer"] = urljoin(base_url, "search/")
+            if client_ip:
+                headers["X-Forwarded-For"] = client_ip
+                headers["X-Real-IP"] = client_ip
+            try:
+                resp = session.get(
+                    api_url,
+                    params={
+                        "q": keyword,
+                        "fid": "0",
+                        "page": str(page_num),
+                        "sort": "relevance",
+                        "scope": "all",
+                        "type": "全部",
+                        "year": "",
+                        "quality": "",
+                        "source": "",
+                        "track": "0",
+                    },
+                    timeout=timeout,
+                    proxies=proxies,
+                    verify=False,
+                    allow_redirects=True,
+                    headers=headers,
+                )
+            except Exception as err:
+                logger.debug(f"BT之家(1lou)新版搜索接口请求异常：page={page_num}，{err}")
+                return [], False, False
+
+            if self._is_cloudflare_challenge_response(resp):
+                self._log_cloudflare_challenge(cookie_text=headers.get("Cookie") or "")
+                return [], True, True
+            if not resp.ok:
+                logger.debug(
+                    f"BT之家(1lou)新版搜索接口请求失败："
+                    f"status={resp.status_code}，page={page_num}"
+                )
+                return [], False, False
+            try:
+                payload = resp.json()
+            except ValueError:
+                logger.debug(f"BT之家(1lou)新版搜索接口未返回 JSON：page={page_num}")
+                return [], False, False
+            if not isinstance(payload, dict) or not payload.get("ok"):
+                logger.debug(f"BT之家(1lou)新版搜索接口返回异常：page={page_num}")
+                return [], False, False
+
+            data = payload.get("data") or {}
+            hits = data.get("hits") or []
+            if not isinstance(hits, list):
+                break
+            try:
+                page_size = int(data.get("page_size") or len(hits) or page_size)
+            except Exception:
+                page_size = len(hits) or page_size
+            try:
+                total = int(data.get("total") or total)
+            except Exception:
+                pass
+
+            added = 0
+            for hit in hits:
+                if not isinstance(hit, dict):
+                    continue
+                tid = str(hit.get("tid") or "").strip()
+                title = self._clean_html_text(hit.get("subject"))
+                if not tid or not title or tid in seen_tids:
+                    continue
+                seen_tids.add(tid)
+                all_items.append({
+                    "tid": tid,
+                    "title": title,
+                    "forum_id": hit.get("fid"),
+                })
+                added += 1
+
+            if not hits or added == 0:
+                break
+            if total and page_size and page_num * page_size >= total:
+                break
+
+        logger.debug(
+            f"BT之家(1lou)新版搜索接口完成：关键词='{keyword}'，"
+            f"找到帖子={len(all_items)}"
+        )
+        return all_items, True, False
+
+    def _search_threads_legacy(self, session: _requests.Session, base_url: str,
+                               keyword: str, timeout: int,
+                               proxies: Optional[Dict[str, str]],
+                               client_ip: str = "") -> Tuple[List[Dict[str, Any]], bool]:
         """搜索帖子列表，分页合并结果"""
         all_items: List[Dict[str, Any]] = []
         seen_tids: set = set()
