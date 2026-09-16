@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.6"
+    plugin_version = "2.0.7"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -497,40 +497,57 @@ class LoumeIndexer(_PluginBase):
             if client_ip:
                 headers["X-Forwarded-For"] = client_ip
                 headers["X-Real-IP"] = client_ip
-            try:
-                resp = session.get(
-                    api_url,
-                    params={
-                        "q": keyword,
-                        "fid": "0",
-                        "page": str(page_num),
-                        "sort": "relevance",
-                        "scope": "all",
-                        "type": "全部",
-                        "year": "",
-                        "quality": "",
-                        "source": "",
-                        "track": "0",
-                    },
-                    timeout=timeout,
-                    proxies=proxies,
-                    verify=False,
-                    allow_redirects=True,
-                    headers=headers,
+            params = {
+                "q": keyword,
+                "fid": "0",
+                "page": str(page_num),
+                "sort": "relevance",
+                "scope": "all",
+                "type": "全部",
+                "year": "",
+                "quality": "",
+                "source": "",
+                "track": "0",
+            }
+            routes = [("代理", proxies), ("直连", None)] if proxies else [("直连", None)]
+            resp = None
+            last_error = ""
+            for route_name, request_proxies in routes:
+                try:
+                    candidate = session.get(
+                        api_url,
+                        params=params,
+                        timeout=timeout,
+                        proxies=request_proxies,
+                        verify=False,
+                        allow_redirects=True,
+                        headers=headers,
+                    )
+                except Exception as err:
+                    last_error = str(err)
+                    logger.debug(
+                        f"BT之家(1lou)新版搜索接口{route_name}请求异常："
+                        f"page={page_num}，{err}"
+                    )
+                    continue
+                if self._is_cloudflare_challenge_response(candidate):
+                    self._log_cloudflare_challenge(cookie_text=headers.get("Cookie") or "")
+                    return [], True, True
+                if not candidate.ok:
+                    last_error = f"status={candidate.status_code}"
+                    logger.debug(
+                        f"BT之家(1lou)新版搜索接口{route_name}请求失败："
+                        f"status={candidate.status_code}，page={page_num}"
+                    )
+                    continue
+                resp = candidate
+                break
+            if resp is None:
+                logger.warn(
+                    f"BT之家(1lou)新版搜索接口请求失败：page={page_num}，"
+                    f"已尝试代理和直连，最后错误={last_error or '未知错误'}"
                 )
-            except Exception as err:
-                logger.debug(f"BT之家(1lou)新版搜索接口请求异常：page={page_num}，{err}")
-                return [], False, False
-
-            if self._is_cloudflare_challenge_response(resp):
-                self._log_cloudflare_challenge(cookie_text=headers.get("Cookie") or "")
-                return [], True, True
-            if not resp.ok:
-                logger.debug(
-                    f"BT之家(1lou)新版搜索接口请求失败："
-                    f"status={resp.status_code}，page={page_num}"
-                )
-                return [], False, False
+                return [], True, False
             try:
                 payload = resp.json()
             except ValueError:
