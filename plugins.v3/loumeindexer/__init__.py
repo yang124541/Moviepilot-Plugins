@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.12"
+    plugin_version = "2.0.13"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -188,7 +188,10 @@ class LoumeIndexer(_PluginBase):
             return None
 
         start_at = datetime.now()
-        base_url = self._resolve_base_url(site)
+        # 额外域名配置可能被 JSON 或表单转义，发起任何请求前再次规范化。
+        base_url = self._normalize_base_url(self._resolve_base_url(site))
+        if not base_url:
+            base_url = self._default_base_url
         timeout = int(site.get("timeout") or 20)
         ua = site.get("ua") or settings.USER_AGENT
         proxies = settings.PROXY if site.get("proxy") else None
@@ -486,6 +489,8 @@ class LoumeIndexer(_PluginBase):
         """调用新版 /search/api/search.php 接口并转换为帖子列表。"""
         all_items: List[Dict[str, Any]] = []
         seen_tids: set = set()
+        # 请求边界再次使用规范地址，避免转义字符进入 requests 的 host。
+        base_url = self._normalize_base_url(base_url) or self._default_base_url
         api_url = urljoin(base_url, "search/api/search.php")
         api_timeout = min(max(int(timeout or 5), 1), 5)
         page_size = 0
@@ -1281,7 +1286,9 @@ class LoumeIndexer(_PluginBase):
 
     @staticmethod
     def _normalize_base_url(raw: Any) -> str:
-        text = str(raw or "").strip().replace("\\", "")
+        text = str(raw or "").strip()
+        # 兼容字面反斜杠、全角反斜杠及配置被编码后的 %5C。
+        text = re.sub(r"(?:\\+|\uff3c|%5c)+", "", text, flags=re.IGNORECASE)
         if not text:
             return ""
         if "://" not in text:
@@ -1290,10 +1297,16 @@ class LoumeIndexer(_PluginBase):
             parsed = urlparse(text)
         except Exception:
             return ""
-        if not parsed.netloc:
+        host = (parsed.hostname or "").lower()
+        if not host or not re.fullmatch(r"[a-z0-9.-]+", host):
             return ""
         scheme = parsed.scheme or "https"
-        return f"{scheme}://{parsed.netloc}/"
+        try:
+            port = parsed.port
+        except ValueError:
+            return ""
+        authority = f"{host}:{port}" if port else host
+        return f"{scheme}://{authority}/"
 
     @staticmethod
     def _is_host_match(host: str, allowed_hosts: set) -> bool:
