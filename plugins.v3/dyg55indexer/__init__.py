@@ -582,7 +582,7 @@ class Dyg55Indexer(_PluginBase):
             )
 
             return [TorrentInfo(
-                site=site.get("id"),
+                site=self._numeric_site_id(site.get("id")),
                 site_name=site.get("name"),
                 site_cookie=site.get("cookie"),
                 site_ua=site.get("ua"),
@@ -1194,6 +1194,15 @@ class Dyg55Indexer(_PluginBase):
             "timeout": 20,
             "proxy": True,
         }
+
+    @staticmethod
+    def _numeric_site_id(value: Any) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _build_indexer_schema(all_hosts: List[str]) -> Dict[str, Any]:
