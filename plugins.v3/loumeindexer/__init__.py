@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.7"
+    plugin_version = "2.0.8"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -1199,12 +1199,18 @@ class LoumeIndexer(_PluginBase):
 
     def _plugin_site(self) -> Dict[str, Any]:
         """为 V3 插件资源源调用构造内部站点配置。"""
-        host = (self._ordered_extra_hosts() or [self._default_host])[0]
+        extra_hosts = self._ordered_extra_hosts()
+        host = (extra_hosts or [self._default_host])[0]
+        base_url = (
+            self._normalize_base_url(host)
+            if extra_hosts
+            else self._default_base_url
+        )
         return {
             "id": "1lou",
             "name": self.plugin_name,
             "domain": host,
-            "url": self._normalize_base_url(host) or self._default_base_url,
+            "url": base_url,
             "timeout": 20,
             "proxy": True,
         }
