@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.10"
+    plugin_version = "2.0.11"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -866,10 +866,11 @@ class LoumeIndexer(_PluginBase):
             filename: str,
             timeout: int,
             proxies: Optional[Dict[str, str]]) -> str:
+        attachment_timeout = min(max(int(timeout or 5), 1), 5)
         try:
             resp = session.get(
                 download_url,
-                timeout=timeout,
+                timeout=attachment_timeout,
                 proxies=proxies,
                 verify=False,
                 allow_redirects=True,
