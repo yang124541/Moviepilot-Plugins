@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.16"
+    plugin_version = "2.0.17"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -495,7 +495,7 @@ class LoumeIndexer(_PluginBase):
         # 请求边界再次使用规范地址，避免转义字符进入 requests 的 host。
         base_url = self._normalize_base_url(base_url) or self._default_base_url
         api_url = urljoin(base_url, "search/api/search.php")
-        api_timeout = min(max(int(timeout or 20), 1), 20)
+        api_timeout = min(max(int(timeout or 5), 1), 5)
         page_size = 0
         total = 0
 
@@ -769,7 +769,7 @@ class LoumeIndexer(_PluginBase):
                                   proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
         """获取帖子详情页中的种子附件列表"""
         thread_url = urljoin(base_url, f"thread-{tid}.htm")
-        detail_timeout = min(max(int(timeout or 20), 1), 20)
+        detail_timeout = min(max(int(timeout or 5), 1), 5)
         try:
             resp = session.get(
                 thread_url,
@@ -874,7 +874,7 @@ class LoumeIndexer(_PluginBase):
             filename: str,
             timeout: int,
             proxies: Optional[Dict[str, str]]) -> str:
-        attachment_timeout = min(max(int(timeout or 20), 1), 20)
+        attachment_timeout = min(max(int(timeout or 5), 1), 5)
         try:
             resp = session.get(
                 download_url,
@@ -1220,7 +1220,7 @@ class LoumeIndexer(_PluginBase):
             "name": self.plugin_name,
             "domain": host,
             "url": base_url,
-            "timeout": 20,
+            "timeout": 5,
             "proxy": True,
         }
 
@@ -1246,7 +1246,7 @@ class LoumeIndexer(_PluginBase):
             "public": True,
             "proxy": True,
             "result_num": 100,
-            "timeout": 20,
+            "timeout": 5,
             "search": {
                 "paths": [
                     {
