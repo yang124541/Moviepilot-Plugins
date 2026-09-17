@@ -22,7 +22,7 @@ class LoumeIndexer(_PluginBase):
     plugin_name = "BT之家"
     plugin_desc = "为 1lou.me 提供种子搜索支持。"
     plugin_icon = "https://raw.githubusercontent.com/yang124541/Moviepilot-Plugins/main/icons/LoumeIndexer.png"
-    plugin_version = "2.0.15"
+    plugin_version = "2.0.16"
     plugin_author = "yang124541"
     author_url = "https://github.com/yang124541/moviepilot-plugin"
     plugin_config_prefix = "loumeindexer_"
@@ -495,7 +495,7 @@ class LoumeIndexer(_PluginBase):
         # 请求边界再次使用规范地址，避免转义字符进入 requests 的 host。
         base_url = self._normalize_base_url(base_url) or self._default_base_url
         api_url = urljoin(base_url, "search/api/search.php")
-        api_timeout = min(max(int(timeout or 5), 1), 5)
+        api_timeout = min(max(int(timeout or 20), 1), 20)
         page_size = 0
         total = 0
 
@@ -518,57 +518,40 @@ class LoumeIndexer(_PluginBase):
                 "source": "",
                 "track": "0",
             }
-            # 保留原始伪造 IP 的首次请求；超时后改用容器真实出口直连重试。
-            # 1lou 对 X-Forwarded-For 的响应不稳定时，第二次请求可避开该分流。
-            retry_headers = dict(headers)
-            retry_headers.pop("X-Forwarded-For", None)
-            retry_headers.pop("X-Real-IP", None)
-            routes = []
-            if proxies:
-                routes.append(("代理", proxies, headers))
-            routes.extend([
-                ("直连", None, headers),
-                ("直连重试（真实出口 IP）", None, retry_headers),
-            ])
+            route_name = "代理" if proxies else "直连"
             resp = None
             last_error = ""
-            attempted_routes = []
-            for route_name, request_proxies, request_headers in routes:
-                attempted_routes.append(route_name)
-                try:
-                    candidate = session.get(
-                        api_url,
-                        params=params,
-                        timeout=api_timeout,
-                        proxies=request_proxies,
-                        verify=False,
-                        allow_redirects=True,
-                        headers=request_headers,
-                    )
-                except Exception as err:
-                    last_error = str(err)
-                    logger.debug(
-                        f"BT之家(1lou)新版搜索接口{route_name}请求异常："
-                        f"page={page_num}，{err}"
-                    )
-                    continue
-                if self._is_cloudflare_challenge_response(candidate):
-                    self._log_cloudflare_challenge(cookie_text=headers.get("Cookie") or "")
-                    return [], True, True
-                if not candidate.ok:
-                    last_error = f"status={candidate.status_code}"
-                    logger.debug(
-                        f"BT之家(1lou)新版搜索接口{route_name}请求失败："
-                        f"status={candidate.status_code}，page={page_num}"
-                    )
-                    continue
-                resp = candidate
-                break
+            try:
+                resp = session.get(
+                    api_url,
+                    params=params,
+                    timeout=api_timeout,
+                    proxies=proxies,
+                    verify=False,
+                    allow_redirects=True,
+                    headers=headers,
+                )
+            except Exception as err:
+                last_error = str(err)
+                logger.debug(
+                    f"BT之家(1lou)新版搜索接口{route_name}请求异常："
+                    f"page={page_num}，{err}"
+                )
+            if resp is not None and self._is_cloudflare_challenge_response(resp):
+                self._log_cloudflare_challenge(cookie_text=headers.get("Cookie") or "")
+                return [], True, True
+            if resp is not None and not resp.ok:
+                last_error = f"status={resp.status_code}"
+                logger.debug(
+                    f"BT之家(1lou)新版搜索接口{route_name}请求失败："
+                    f"status={resp.status_code}，page={page_num}"
+                )
+                resp = None
             if resp is None:
                 logger.warn(
                     f"BT之家(1lou)新版搜索接口请求失败："
                     f"版本=v{self.plugin_version}，地址={api_url}，page={page_num}，"
-                    f"已尝试{'、'.join(attempted_routes)}，"
+                    f"请求方式={route_name}，"
                     f"最后错误={last_error or '未知错误'}"
                 )
                 return [], True, False
@@ -786,7 +769,7 @@ class LoumeIndexer(_PluginBase):
                                   proxies: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
         """获取帖子详情页中的种子附件列表"""
         thread_url = urljoin(base_url, f"thread-{tid}.htm")
-        detail_timeout = min(max(int(timeout or 5), 1), 5)
+        detail_timeout = min(max(int(timeout or 20), 1), 20)
         try:
             resp = session.get(
                 thread_url,
@@ -891,7 +874,7 @@ class LoumeIndexer(_PluginBase):
             filename: str,
             timeout: int,
             proxies: Optional[Dict[str, str]]) -> str:
-        attachment_timeout = min(max(int(timeout or 5), 1), 5)
+        attachment_timeout = min(max(int(timeout or 20), 1), 20)
         try:
             resp = session.get(
                 download_url,
@@ -1263,7 +1246,7 @@ class LoumeIndexer(_PluginBase):
             "public": True,
             "proxy": True,
             "result_num": 100,
-            "timeout": 30,
+            "timeout": 20,
             "search": {
                 "paths": [
                     {
